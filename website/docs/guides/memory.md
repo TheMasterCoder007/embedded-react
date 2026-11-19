@@ -34,6 +34,7 @@ RAM** on a PSRAM board, because the scanline loops touch them per pixel:
 | `ERUI_VECTOR_PAINTS_MAX`                          | 16      | Shapes per `<Svg>`                                             |
 | `ERUI_VECTOR_MAX_POINTS`, `ERUI_VECTOR_MAX_EDGES` | 2048    | Flattened points, and edges, in one shape                      |
 | `ERUI_VECTOR_MAX_ROW`                             | 1024    | The widest vector node, in pixels                              |
+| `ERUI_VECTOR_MASK_EDGES`                          | 512     | Edges of the clips and masks on one shape; 0 compiles them out |
 | `ERUI_ARC_MAX_RADIUS`, `ERUI_ARC_SPAN_CACHE`      | 255, 8  | The arc widget's shared span cache, about 4 KB at the defaults |
 
 Widths are in the app's frame. On a panel mounted at 90 or 270 (`er_set_display_rotation()`), a

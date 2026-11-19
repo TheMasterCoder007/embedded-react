@@ -293,6 +293,8 @@ has ASCII plus what `assets.config.js` adds. The build warns about any character
   wrapping `<View>`.
 - An `<SvgText>` is baked to outlines at build time: its text, position and font must be constants.
   Its paint may come from state.
+- `<ClipPath>` and `<Mask>` need a static `<Svg>`. A `clipPath` or `mask` that names nothing in its
+  `<Svg>`, or more than 4 of them on one shape, fails the build.
 - A state-driven `<Path d>` is not supported. Use `<Arc>`, `<Circle>`, `<Rect>` and `<Line>` for
   geometry that moves; they take `Math.sin`/`Math.cos` in their props.
 - By default one `<Svg>` node holds at most 16 shapes, and the engine 8 vector nodes at once

@@ -23,15 +23,18 @@ import {check, checkNumber} from './check.mts';
 import {lowerStyle, NODE_TYPES, TRANSFORM_FIELDS} from '../style-map.mts';
 import {
   flattenSvg,
+  maskReference,
   parseColor,
   parsePath,
   KAPPA,
   PAINT_PROPS,
   PAINT_STRIDE,
   scaleVectorArtifact,
+  tapeMaskProblem,
   VOP_ARC,
   VOP_CUBIC,
   VOP_LINE,
+  VOP_MASK,
   VOP_MOVE,
   VOP_QUAD,
   VOP_SHAPE,
@@ -353,6 +356,73 @@ function jsxToSvgElement(
 }
 
 /**
+ * Refuses a tape whose clips and masks the engine would not keep: more on one shape than it holds at once.
+ *
+ * @param ops  The tape.
+ */
+function checkTapeMasks(ops: ArrayLike<number>): void {
+  const problem = tapeMaskProblem(Array.from(ops));
+  if (problem) {
+    throw aotError(
+      `AOT: ${problem}, which is more than the engine keeps`,
+      'nest fewer clips and masks, or draw a clip as one <Path>.',
+    );
+  }
+}
+
+/**
+ * Refuses a `clipPath` or `mask` the drawing cannot apply: one that names no <ClipPath> or <Mask> in its
+ * <Svg>, and one on a shape inside a <ClipPath> or <Mask>.
+ *
+ * @param root  The <Svg>, folded.
+ */
+function checkSvgMasks(root: SvgElement): void {
+  const definitions = new Map<string, string>();
+  const collect = (element: SvgElement): void => {
+    if (
+      (element.type === 'ClipPath' || element.type === 'Mask') &&
+      element.props.id != null
+    ) {
+      definitions.set(String(element.props.id), element.type);
+    }
+    for (const child of (element.props.children as SvgElement[]) ?? []) {
+      collect(child);
+    }
+  };
+  collect(root);
+
+  const visit = (element: SvgElement, inDefinition: boolean): void => {
+    const isDefinition = element.type === 'ClipPath' || element.type === 'Mask';
+    for (const [name, tag] of [
+      ['clipPath', 'ClipPath'],
+      ['mask', 'Mask'],
+    ]) {
+      const value = element.props[name];
+      if (value == null || value === 'none') continue;
+      if (inDefinition) {
+        throw aotError(
+          `AOT: a shape inside a <ClipPath> or <Mask> can't take a ${name} of its own`,
+          `put the ${name} on the <ClipPath> or <Mask> instead.`,
+        );
+      }
+
+      const id = maskReference(value);
+      if (id == null || definitions.get(id) !== tag) {
+        throw aotError(
+          `AOT: ${name}=${JSON.stringify(value)} names no <${tag}> in its <Svg>`,
+          `give a <${tag}> in the same <Svg> an id, and refer to it as ${name}="url(#id)".`,
+        );
+      }
+    }
+
+    for (const child of (element.props.children as SvgElement[]) ?? []) {
+      visit(child, inDefinition || isDefinition);
+    }
+  };
+  visit(root, false);
+}
+
+/**
  * A flattenSvg paint record [fill, stroke, w, miter, cap, join, rule, fill_gradient, stroke_gradient] as a paint.
  * fill_gradient/stroke_gradient (1-based gradient-table indices, 0 = solid) are absent on inline-<Svg> records (7-wide)
  * and set on a baked <Svg source>.
@@ -412,6 +482,7 @@ function checkVectorTables(tables: IrVectorTables, environment: Env): void {
     checkNumber(word);
   }
   checkVectorPaints(tables.paints);
+  checkTapeMasks(tables.ops);
   for (const gradient of tables.gradients) {
     for (const stop of (gradient.stops || []).slice(0, MAX_GRADIENT_STOPS)) {
       checkNumber(stop.offset);
@@ -1545,6 +1616,12 @@ function emitSvgScaled(
     const operation = ops[index++];
     if (operation === VOP_SHAPE) {
       tape.push(tapeOp('ER_VECTOR_OP_SHAPE'), tapeNumber(ops[index++]));
+    } else if (operation === VOP_MASK) {
+      tape.push(
+        tapeOp('ER_VECTOR_OP_MASK'),
+        tapeNumber(ops[index++]),
+        tapeNumber(ops[index++]),
+      );
     } else if (operation === VOP_ARC) {
       tape.push(
         tapeOp(operationNames[operation]),
@@ -1577,6 +1654,7 @@ function emitSvgScaled(
   ]);
   const nodeId = `n${output.allocateNodeId()}`;
   checkTapeSize(tape.length, environment);
+  checkTapeMasks(ops);
   const vector: IrStateDrivenVector = {
     id: output.svgCount++,
     locals: [
@@ -1642,6 +1720,7 @@ function emitSvgStatic(
 ): IrNode {
   // Flatten the subtree and bake its ops and paints into const tables.
   const svgElement = jsxToSvgElement(element, scope)!;
+  checkSvgMasks(svgElement);
   const scaled = emitSvgScaled(element, svgElement, scope, output, environment);
   if (scaled) return scaled;
   const {ops, paints, gradients} = flattenSvg({
@@ -1871,6 +1950,17 @@ function emitSvgDynamic(
     }
 
     const attributes = svgAttrs(child.openingElement, scope, environment);
+    if (attributes.clipPath != null || attributes.mask != null) {
+      throw at(
+        aotError(
+          'AOT: a clipPath or mask in a state-driven <Svg> is not yet supported',
+          'draw the clipped shapes in an <Svg> of their own, with constant attributes, and layer the ' +
+            'state-driven one over or under it.',
+        ),
+        child,
+      );
+    }
+
     // The builder is this <Svg>'s own function, so the shape index alone keeps a local's name unique.
     const shape = lowerShape(attributes, `s${shapePaints.length}`);
     if (!shape.entries.length) continue;

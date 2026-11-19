@@ -197,6 +197,14 @@ extern "C"
      *   ER_VECTOR_OP_CUBIC  c1x c1y c2x c2y x y     cubic bezier
      *   ER_VECTOR_OP_ARC    cx cy r a0 a1 ccw       circular arc (radians, clockwise-from-+X; ccw!=0 reverses)
      *   ER_VECTOR_OP_CLOSE                          close the current subpath
+     *   ER_VECTOR_OP_MASK   kind count              put a clip or mask over the shapes after it
+     *
+     * ER_VECTOR_OP_MASK takes the next `count` shapes out of the drawing and makes a mask of them. It adds to
+     * the masks already in force, and a shape after it is drawn only where every one of them lets it through.
+     * ER_VECTOR_MASK_NONE (with a count of 0) lifts them all.
+     *   ER_VECTOR_MASK_CLIP       inside any of its shapes' fills, by each paint's fill rule
+     *   ER_VECTOR_MASK_LUMINANCE  its shapes painted in order; the luminance of the result, times its alpha
+     *   ER_VECTOR_MASK_ALPHA      its shapes painted in order; the alpha of the result
      */
 #define ER_VECTOR_OP_SHAPE 0.0f
 #define ER_VECTOR_OP_MOVE 1.0f
@@ -205,6 +213,14 @@ extern "C"
 #define ER_VECTOR_OP_CUBIC 4.0f
 #define ER_VECTOR_OP_ARC 5.0f
 #define ER_VECTOR_OP_CLOSE 6.0f
+#define ER_VECTOR_OP_MASK 7.0f
+
+#define ER_VECTOR_MASK_NONE 0
+#define ER_VECTOR_MASK_CLIP 1
+#define ER_VECTOR_MASK_LUMINANCE 2
+#define ER_VECTOR_MASK_ALPHA 3
+#define ER_VECTOR_MASK_GROUPS_MAX 4  /**< Masks in force at once. */
+#define ER_VECTOR_MASK_SHAPES_MAX 16 /**< Shapes across the masks in force. */
 
 #define ER_VECTOR_CAP_BUTT 0
 #define ER_VECTOR_CAP_ROUND 1

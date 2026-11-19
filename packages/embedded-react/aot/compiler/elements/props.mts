@@ -196,6 +196,9 @@ const SVG_PAINT = [
   'strokeGradient',
 ];
 
+/** What a shape is clipped or masked by, and how it counts as a clip's shape. */
+const SVG_MASKED = ['clipPath', 'mask', 'clipRule'];
+
 /** The events every host node takes; only a ScrollView scrolls. */
 const HOST_EVENTS = Object.keys(EVENT_TYPES).filter(
   name => name !== 'onScroll',
@@ -461,6 +464,32 @@ const SVG_SHAPES: Record<string, ElementSpec> = {
   },
 };
 
+/** What other shapes are shown through, by tag: each holds shapes and draws nothing where it sits. */
+const SVG_DEFINITIONS: Record<string, ElementSpec> = {
+  ClipPath: {
+    ...shape('ClipPath', []),
+    props: new Set(['id', 'clipPathUnits', ...SVG_MASKED]),
+    children: 'shapes',
+  },
+  Mask: {
+    ...shape('Mask', []),
+    props: new Set([
+      'id',
+      'maskType',
+      'x',
+      'y',
+      'width',
+      'height',
+      'maskUnits',
+      'maskContentUnits',
+      'clipPath',
+      'mask',
+      ...SVG_PAINT,
+    ]),
+    children: 'shapes',
+  },
+};
+
 /** A <Text> nested in a <Text>: one inline span of the outer one. */
 export const TEXT_SPAN: ElementSpec = element(
   'Text',
@@ -517,7 +546,7 @@ function element(
 function shape(tag: string, geometry: string[]): ElementSpec {
   return {
     tag,
-    props: new Set([...geometry, ...SVG_PAINT]),
+    props: new Set([...geometry, ...SVG_PAINT, ...SVG_MASKED]),
     refused: {},
     takesPlatformProps: false,
     styleKeys: null,
@@ -532,6 +561,9 @@ export const ELEMENT_TAGS = Object.keys(ELEMENTS);
 /** Every shape's tag. */
 export const SVG_SHAPE_TAGS = Object.keys(SVG_SHAPES);
 
+/** The tags of a clip and a mask. */
+export const SVG_DEFINITION_TAGS = Object.keys(SVG_DEFINITIONS);
+
 /**
  * The declaration of a built-in element.
  *
@@ -543,14 +575,18 @@ export const elementSpec = (tag: string): ElementSpec | undefined =>
   Object.hasOwn(ELEMENTS, tag) ? ELEMENTS[tag] : undefined;
 
 /**
- * The declaration of a shape inside an <Svg>.
+ * The declaration of a shape, a clip or a mask inside an <Svg>.
  *
  * @param tag  The tag.
  *
  * @returns The declaration, or undefined when `tag` is not a shape.
  */
 export const svgShapeSpec = (tag: string): ElementSpec | undefined =>
-  Object.hasOwn(SVG_SHAPES, tag) ? SVG_SHAPES[tag] : undefined;
+  Object.hasOwn(SVG_SHAPES, tag)
+    ? SVG_SHAPES[tag]
+    : Object.hasOwn(SVG_DEFINITIONS, tag)
+      ? SVG_DEFINITIONS[tag]
+      : undefined;
 
 /**
  * An attribute's name as written, a namespaced one (`xlink:href`) included.

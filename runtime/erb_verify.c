@@ -1629,12 +1629,14 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
             return fail(error, ERB_ERROR_TAPE, "tape floats, paints or gradients out of range");
         }
         /* The ops parse with their argument counts. */
-        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u};
+        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u, 2u};
         uint32_t float_index = 0;
+        /* The masks in force, the shapes across them, and the shapes the last mask op still takes. */
+        uint32_t mask_groups = 0, mask_shapes = 0, mask_owed = 0;
         while (float_index < float_count)
         {
             const float opcode_value = erb_f32(table + floats + float_index * sizeof(float));
-            if (!(opcode_value >= ER_VECTOR_OP_SHAPE && opcode_value <= ER_VECTOR_OP_CLOSE)
+            if (!(opcode_value >= ER_VECTOR_OP_SHAPE && opcode_value <= ER_VECTOR_OP_MASK)
                 || (float)(int)opcode_value != opcode_value
                 || float_index + 1u + operand_counts[(int)opcode_value] > float_count)
             {
@@ -1648,8 +1650,42 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
                 {
                     return fail(error, ERB_ERROR_TAPE, "shape names no paint");
                 }
+                if (mask_owed > 0u)
+                {
+                    mask_owed--;
+                }
+            }
+            else if (opcode == (int)ER_VECTOR_OP_MASK)
+            {
+                const float kind = erb_f32(table + floats + (float_index + 1u) * sizeof(float));
+                const float shapes = erb_f32(table + floats + (float_index + 2u) * sizeof(float));
+                if (mask_owed > 0u || !(kind >= (float)ER_VECTOR_MASK_NONE && kind <= (float)ER_VECTOR_MASK_ALPHA)
+                    || (float)(int)kind != kind || !(shapes >= 0.0f && shapes <= (float)ER_VECTOR_MASK_SHAPES_MAX)
+                    || (float)(int)shapes != shapes || ((int)kind == ER_VECTOR_MASK_NONE) != ((int)shapes == 0))
+                {
+                    return fail(error, ERB_ERROR_TAPE, "mask");
+                }
+                if ((int)kind == ER_VECTOR_MASK_NONE)
+                {
+                    mask_groups = 0;
+                    mask_shapes = 0;
+                }
+                else
+                {
+                    mask_groups++;
+                    mask_shapes += (uint32_t)shapes;
+                    mask_owed = (uint32_t)shapes;
+                    if (mask_groups > ER_VECTOR_MASK_GROUPS_MAX || mask_shapes > ER_VECTOR_MASK_SHAPES_MAX)
+                    {
+                        return fail(error, ERB_ERROR_TAPE, "too many masks at once");
+                    }
+                }
             }
             float_index += 1u + operand_counts[opcode];
+        }
+        if (mask_owed > 0u)
+        {
+            return fail(error, ERB_ERROR_TAPE, "mask without its shapes");
         }
         for (uint32_t paint_index = 0; paint_index < paint_count; paint_index++)
         {

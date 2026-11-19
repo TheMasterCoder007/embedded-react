@@ -26,9 +26,11 @@ import {NAMED_COLORS} from './named-colors.mts';
 import type {
   ArcProps,
   CircleProps,
+  ClipPathProps,
   EllipseProps,
   GProps,
   LineProps,
+  MaskProps,
   PathProps,
   RectProps,
   SvgPaintProps,
@@ -110,7 +112,33 @@ type ShapeProps = GProps &
   EllipseProps &
   RectProps &
   LineProps &
-  ArcProps;
+  ArcProps &
+  ClipPathProps &
+  MaskProps;
+
+/** A clip or mask as tape values: its op, then the shapes it takes. */
+export interface MaskGroup {
+  ops: number[];
+  shapes: number;
+}
+
+/** A box in the tape's coordinates. */
+export interface TapeBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Where a walk of an <Svg> subtree writes, and what it writes its shapes as. */
+interface FlattenTarget {
+  ops: number[];
+  paints: number[];
+  gradients: PackedGradient[];
+  /** `draw` paints shapes, `clip` and `mask` collect a definition's, `bounds` only measures. */
+  mode: 'draw' | 'clip' | 'mask' | 'bounds';
+  writer: MaskWriter | null;
+}
 
 /** A component function, as a React element's type. */
 type ComponentType = ((...parameters: never[]) => unknown) & {
@@ -132,6 +160,18 @@ export const VOP_QUAD = 3;
 export const VOP_CUBIC = 4;
 export const VOP_ARC = 5;
 export const VOP_CLOSE = 6;
+export const VOP_MASK = 7;
+
+// Mask kinds and limits — MUST match the engine's ER_VECTOR_MASK_* (er_scene.h).
+export const MASK_NONE = 0;
+export const MASK_CLIP = 1;
+export const MASK_LUMINANCE = 2;
+export const MASK_ALPHA = 3;
+export const MASK_GROUPS_MAX = 4;
+export const MASK_SHAPES_MAX = 16;
+
+/** How many values follow each opcode. */
+const OP_OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2];
 
 // Control-point ratio for approximating a quarter (circular or elliptical) arc with one cubic:
 // 4/3 * (sqrt(2) - 1). Used by rounded-rect corners.
@@ -1020,6 +1060,122 @@ function pushGrad(
   return gradients.length;
 }
 
+// --- Clips and masks -------------------------------------------------------------------------------
+
+/**
+ * Writes the mask ops that bring the masks in force to what the next shape is drawn under. A mask only
+ * adds to those before it, so going back to fewer lifts them all and starts again.
+ */
+export class MaskWriter {
+  private inForce: readonly MaskGroup[] = [];
+  private readonly ops: number[];
+
+  constructor(ops: number[]) {
+    this.ops = ops;
+  }
+
+  use(wanted: readonly MaskGroup[]): void {
+    let shared = 0;
+    while (
+      shared < this.inForce.length &&
+      shared < wanted.length &&
+      this.inForce[shared] === wanted[shared]
+    )
+      shared++;
+    if (shared < this.inForce.length) {
+      this.ops.push(VOP_MASK, MASK_NONE, 0);
+      shared = 0;
+    }
+    for (let index = shared; index < wanted.length; index++) {
+      const groupOps = wanted[index].ops;
+      for (let value = 0; value < groupOps.length; value++)
+        this.ops.push(groupOps[value]);
+    }
+    this.inForce = wanted;
+  }
+}
+
+/** A mask group from its kind and its shapes' tape (SHAPE headers included). */
+export function maskGroup(
+  kind: number,
+  shapeOps: readonly number[],
+  shapes: number,
+): MaskGroup {
+  return {ops: [VOP_MASK, kind, shapes, ...shapeOps], shapes};
+}
+
+/**
+ * What a tape's masks ask of the engine that it does not keep, or null: more at once than
+ * MASK_GROUPS_MAX, or more shapes across them than MASK_SHAPES_MAX.
+ */
+export function tapeMaskProblem(ops: readonly number[]): string | null {
+  let groups = 0;
+  let shapes = 0;
+  for (let index = 0; index < ops.length;) {
+    const opcode = ops[index];
+    if (opcode === VOP_MASK) {
+      if (ops[index + 1] === MASK_NONE) groups = shapes = 0;
+      else {
+        groups++;
+        shapes += ops[index + 2];
+      }
+      if (groups > MASK_GROUPS_MAX)
+        return `more than ${MASK_GROUPS_MAX} clips and masks apply to one shape`;
+      if (shapes > MASK_SHAPES_MAX)
+        return `the clips and masks on one shape hold more than ${MASK_SHAPES_MAX} shapes`;
+    }
+    index += 1 + (OP_OPERANDS[opcode] ?? 0);
+  }
+  return null;
+}
+
+/** How many shapes a tape holds. */
+export function tapeShapeCount(ops: readonly number[]): number {
+  let shapes = 0;
+  for (let index = 0; index < ops.length;) {
+    if (ops[index] === VOP_SHAPE) shapes++;
+    index += 1 + (OP_OPERANDS[ops[index]] ?? 0);
+  }
+  return shapes;
+}
+
+/** The box around a tape's points (SHAPE and MASK headers skipped), or null for a tape with none. */
+export function tapeBounds(ops: readonly number[]): TapeBounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const add = (x: number, y: number): void => {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  };
+  for (let index = 0; index < ops.length;) {
+    const opcode = ops[index];
+    const operands = OP_OPERANDS[opcode] ?? 0;
+    if (opcode === VOP_ARC) {
+      const radius = Math.abs(ops[index + 3]);
+      add(ops[index + 1] - radius, ops[index + 2] - radius);
+      add(ops[index + 1] + radius, ops[index + 2] + radius);
+    } else if (opcode !== VOP_SHAPE && opcode !== VOP_MASK) {
+      for (let operand = 1; operand < operands; operand += 2)
+        add(ops[index + operand], ops[index + operand + 1]);
+    }
+    index += 1 + operands;
+  }
+  if (!Number.isFinite(minX)) return null;
+  return {x: minX, y: minY, width: maxX - minX, height: maxY - minY};
+}
+
+/** `url(#id)` as its id, or null. */
+export function maskReference(value: unknown): string | null {
+  const match =
+    typeof value === 'string' &&
+    value.trim().match(/^url\(\s*#([^)\s]+)\s*\)$/);
+  return match ? match[1] : null;
+}
+
 // --- Flatten an <Svg> subtree --------------------------------------------------------------------
 
 const PAINT_DEFAULT: ResolvedPaint = {
@@ -1175,7 +1331,24 @@ const SVG_TAGS = [
   'Arc',
   'SvgText',
   'G',
+  'ClipPath',
+  'Mask',
 ];
+
+/** The paint a clip's shapes share: only the fill rule is read. */
+const CLIP_PAINT: ResolvedPaint = {...PAINT_DEFAULT};
+
+/** A <Mask>'s box when it gives none: a tenth past its element's on every side. */
+const MASK_REGION_DEFAULT = {x: -0.1, y: -0.1, width: 1.2, height: 1.2};
+
+let _warnedSvgMask = false;
+
+/** Warns once about a clip or mask an <Svg> cannot apply as written. */
+function warnSvgMask(message: string): void {
+  if (_warnedSvgMask) return;
+  _warnedSvgMask = true;
+  console.warn(`embedded-react: ${message}`);
+}
 
 let _warnedSvgChild = false;
 
@@ -1239,6 +1412,212 @@ export function flattenSvg(props: SvgProps): VectorTape {
     }
   }
 
+  // <ClipPath> and <Mask> elements by id, wherever they sit; found on the first reference to one.
+  let definitions: Map<string, SvgElement> | null = null;
+  const definition = (id: string): SvgElement | undefined => {
+    if (!definitions) {
+      const found = new Map<string, SvgElement>();
+      const collect = (child: unknown): void => {
+        if (Array.isArray(child)) return child.forEach(collect);
+        if (!isElement(child)) return;
+        if (
+          (child.type === 'ClipPath' || child.type === 'Mask') &&
+          child.props.id != null
+        )
+          found.set(String(child.props.id), child);
+        collect(child.props.children);
+      };
+      collect(props.children);
+      definitions = found;
+    }
+    return definitions.get(id);
+  };
+
+  // A clip's shapes share a paint per fill rule, added to the table on first use.
+  const clipPaints: Record<string, number> = {};
+  const clipPaint = (rule: unknown): number => {
+    const key = rule === 'evenodd' ? 'evenodd' : 'nonzero';
+    if (clipPaints[key] == null) {
+      clipPaints[key] = paints.length / PAINT_STRIDE;
+      paints.push(...paintRecord({...CLIP_PAINT, fillRule: key}, 1, gradients));
+    }
+    return clipPaints[key];
+  };
+
+  // A definition's groups under one transform and box, kept so every shape under it shares them.
+  const groupCache = new Map<string, MaskGroup[]>();
+  const applying = new Set<SvgElement>();
+
+  /** The masks a `clipPath` or `mask` prop puts on an element. */
+  const groupsFor = (
+    elementProps: ShapeProps,
+    transform: Transform,
+    bounds: () => TapeBounds | null,
+  ): MaskGroup[] => {
+    const groups: MaskGroup[] = [];
+    for (const [prop, tag] of [
+      ['clipPath', 'ClipPath'],
+      ['mask', 'Mask'],
+    ] as const) {
+      const value = elementProps[prop];
+      if (value == null || value === 'none') continue;
+      const id = maskReference(value);
+      const found = id == null ? undefined : definition(id);
+      if (!found || found.type !== tag) {
+        warnSvgMask(
+          `${prop}=${JSON.stringify(value)} names no <${tag}> in its <Svg>, and was left off. ` +
+            `Give the <${tag}> an id and refer to it as url(#id).`,
+        );
+        continue;
+      }
+      groups.push(...definitionGroups(found, transform, bounds));
+    }
+    return groups;
+  };
+
+  /** A <ClipPath> or <Mask> as mask groups, in the space of the element it is applied to. */
+  const definitionGroups = (
+    element: SvgElement,
+    transform: Transform,
+    bounds: () => TapeBounds | null,
+  ): MaskGroup[] => {
+    const elementProps = element.props;
+    const isClip = element.type === 'ClipPath';
+    const boxUnits =
+      (isClip ? elementProps.clipPathUnits : elementProps.maskContentUnits) ===
+      'objectBoundingBox';
+    const boxRegion = !isClip && elementProps.maskUnits !== 'userSpaceOnUse';
+    const box = boxUnits || boxRegion ? bounds() : null;
+    const key =
+      `${String(elementProps.id)}|${transform.scaleX},${transform.scaleY},${transform.translateX},` +
+      `${transform.translateY}|${box ? `${box.x},${box.y},${box.width},${box.height}` : ''}`;
+    const cached = groupCache.get(key);
+    if (cached) return cached;
+    if (applying.has(element)) {
+      warnSvgMask(
+        `<${String(element.type)} id="${String(elementProps.id)}"> applies itself, and was left off.`,
+      );
+      return [];
+    }
+    applying.add(element);
+
+    // A definition's own clip or mask narrows it.
+    const groups = groupsFor(elementProps, transform, bounds);
+    // Its shapes sit in the element's space, or across its box.
+    const content: Transform =
+      boxUnits && box
+        ? {
+            scaleX: box.width,
+            scaleY: box.height,
+            translateX: box.x,
+            translateY: box.y,
+          }
+        : transform;
+    const firstPaint = paints.length / PAINT_STRIDE;
+    const target: FlattenTarget = {
+      ops: [],
+      paints,
+      gradients,
+      mode: isClip ? 'clip' : 'mask',
+      writer: null,
+    };
+    walk(
+      elementProps.children,
+      mergePaint(PAINT_DEFAULT, elementProps),
+      content,
+      [],
+      target,
+      elementProps.clipRule,
+    );
+
+    if (!isClip) {
+      // A mask stops at its box. The box is only needed as a clip when the element reaches past it and the
+      // mask paints past it too.
+      let region: TapeBounds | null = null;
+      if (boxRegion && box) {
+        region = {
+          x: box.x + num(elementProps.x, MASK_REGION_DEFAULT.x) * box.width,
+          y: box.y + num(elementProps.y, MASK_REGION_DEFAULT.y) * box.height,
+          width: num(elementProps.width, MASK_REGION_DEFAULT.width) * box.width,
+          height:
+            num(elementProps.height, MASK_REGION_DEFAULT.height) * box.height,
+        };
+      } else if (
+        !boxRegion &&
+        elementProps.width != null &&
+        elementProps.height != null
+      ) {
+        region = {
+          x: num(elementProps.x, 0) * transform.scaleX + transform.translateX,
+          y: num(elementProps.y, 0) * transform.scaleY + transform.translateY,
+          width: num(elementProps.width, 0) * transform.scaleX,
+          height: num(elementProps.height, 0) * transform.scaleY,
+        };
+      }
+      const within = (inner: TapeBounds | null, reach: number): boolean =>
+        region != null &&
+        inner != null &&
+        inner.x - reach >= region.x &&
+        inner.y - reach >= region.y &&
+        inner.x + inner.width + reach <= region.x + region.width &&
+        inner.y + inner.height + reach <= region.y + region.height;
+      // Half the widest stroke the mask's shapes carry.
+      let reach = 0;
+      for (
+        let index = firstPaint * PAINT_STRIDE + PAINT_STROKE_WIDTH_SLOT;
+        index < paints.length;
+        index += PAINT_STRIDE
+      )
+        reach = Math.max(reach, paints[index] / 2);
+      if (
+        region &&
+        target.ops.length &&
+        !within(box ?? bounds(), 0) &&
+        !within(tapeBounds(target.ops), reach)
+      ) {
+        const right = region.x + region.width;
+        const bottom = region.y + region.height;
+        groups.push(
+          maskGroup(
+            MASK_CLIP,
+            [
+              VOP_SHAPE,
+              clipPaint('nonzero'),
+              VOP_MOVE,
+              region.x,
+              region.y,
+              VOP_LINE,
+              right,
+              region.y,
+              VOP_LINE,
+              right,
+              bottom,
+              VOP_LINE,
+              region.x,
+              bottom,
+              VOP_CLOSE,
+            ],
+            1,
+          ),
+        );
+      }
+    }
+    groups.push(
+      maskGroup(
+        isClip
+          ? MASK_CLIP
+          : elementProps.maskType === 'alpha'
+            ? MASK_ALPHA
+            : MASK_LUMINANCE,
+        target.ops,
+        tapeShapeCount(target.ops),
+      ),
+    );
+    applying.delete(element);
+    groupCache.set(key, groups);
+    return groups;
+  };
+
   // One child at a time, recursing through the wrappers, JSX inserts around shapes: an array (every
   // `{shapes.map(...)}`, and arrays of arrays when those nest) and a fragment, either of which can
   // sit anywhere a shape can. Both are transparent — they carry no paint and no transform.
@@ -1246,31 +1625,85 @@ export function flattenSvg(props: SvgProps): VectorTape {
     child: unknown,
     paint: ResolvedPaint,
     transform: Transform,
+    masks: readonly MaskGroup[],
+    target: FlattenTarget,
+    clipRule?: unknown,
   ): void => {
     if (isEmptyChild(child)) return;
     if (Array.isArray(child)) {
-      for (const item of child) walk(item, paint, transform);
+      for (const item of child)
+        walk(item, paint, transform, masks, target, clipRule);
       return;
     }
     if (!isElement(child)) return warnSvgChild(child);
     const childProps = child.props || {};
     if (child.type === REACT_FRAGMENT)
-      return walk(childProps.children, paint, transform);
+      return walk(
+        childProps.children,
+        paint,
+        transform,
+        masks,
+        target,
+        clipRule,
+      );
+    // A definition draws nothing where it sits.
+    if (child.type === 'ClipPath' || child.type === 'Mask') return;
     const merged = mergePaint(paint, childProps);
+    const childRule = childProps.clipRule ?? clipRule;
+    let childTransform = transform;
     if (child.type === 'G') {
-      // Compose a translate/scale for the group, then recurse.
+      // Compose a translate/scale for the group.
       const groupScale = num(childProps.scale, 1);
       const groupX = num(childProps.x ?? childProps.translateX, 0);
       const groupY = num(childProps.y ?? childProps.translateY, 0);
-      const childTransform = {
+      childTransform = {
         scaleX: transform.scaleX * groupScale,
         scaleY: transform.scaleY * groupScale,
         translateX: groupX * transform.scaleX + transform.translateX,
         translateY: groupY * transform.scaleY + transform.translateY,
       };
-      return walk(childProps.children, merged, childTransform);
+    } else if (!SVG_TAGS.includes(child.type as string))
+      return warnSvgChild(child);
+
+    let childMasks = masks;
+    if (childProps.clipPath != null || childProps.mask != null) {
+      if (target.mode === 'draw') {
+        // The element's box, for a definition measured against it: its own shapes, drawn nowhere.
+        let box: TapeBounds | null | undefined;
+        const bounds = (): TapeBounds | null => {
+          if (box === undefined) {
+            const scratch: FlattenTarget = {
+              ops: [],
+              paints: [],
+              gradients: [],
+              mode: 'bounds',
+              writer: null,
+            };
+            walk(child, paint, transform, [], scratch);
+            box = tapeBounds(scratch.ops);
+          }
+          return box;
+        };
+        childMasks = [
+          ...masks,
+          ...groupsFor(childProps, childTransform, bounds),
+        ];
+      } else if (target.mode !== 'bounds') {
+        warnSvgMask(
+          'a shape inside a <ClipPath> or <Mask> has a clipPath or mask of its own, which was left off. ' +
+            'Put it on the <ClipPath> or <Mask> instead.',
+        );
+      }
     }
-    if (!SVG_TAGS.includes(child.type as string)) return warnSvgChild(child);
+    if (child.type === 'G')
+      return walk(
+        childProps.children,
+        merged,
+        childTransform,
+        childMasks,
+        target,
+        childRule,
+      );
 
     // Path/Ellipse geometry comes from a `d` string and is cached (parse + transform) by that string;
     // the primitives build a fixed handful of numbers, which is cheaper than any cache lookup.
@@ -1298,18 +1731,31 @@ export function flattenSvg(props: SvgProps): VectorTape {
     const shapeTape = entry
       ? transformCached(entry, transform)
       : transformOps(baseOps, transform);
-    const paintIndex = paints.length / PAINT_STRIDE;
-    const scale = (transform.scaleX + transform.scaleY) / 2; // stroke-width scale (uniform assumed)
-    paints.push(...paintRecord(merged, scale, gradients));
+    let paintIndex = 0;
+    if (target.mode === 'clip') paintIndex = clipPaint(childRule);
+    else if (target.mode !== 'bounds') {
+      paintIndex = target.paints.length / PAINT_STRIDE;
+      const scale = (transform.scaleX + transform.scaleY) / 2; // stroke-width scale (uniform assumed)
+      target.paints.push(...paintRecord(merged, scale, target.gradients));
+    }
+    target.writer?.use(childMasks);
     // Appended one at a time: `shapeTape` can be a long cached tape, and spreading it into push() both
     // copies it into an argument list and risks the call-argument limit.
-    ops.push(VOP_SHAPE, paintIndex);
+    target.ops.push(VOP_SHAPE, paintIndex);
     for (let index = 0; index < shapeTape.length; index++)
-      ops.push(shapeTape[index]);
+      target.ops.push(shapeTape[index]);
   };
 
   // The <Svg>'s own paint cascades to every shape, like a <G> wrapping them all.
-  walk(props.children, mergePaint(PAINT_DEFAULT, props), root);
+  walk(props.children, mergePaint(PAINT_DEFAULT, props), root, [], {
+    ops,
+    paints,
+    gradients,
+    mode: 'draw',
+    writer: new MaskWriter(ops),
+  });
+  const problem = tapeMaskProblem(ops);
+  if (problem) warnSvgMask(`an <Svg> is drawn unmasked: ${problem}.`);
   return {ops, paints, gradients};
 }
 
@@ -1328,6 +1774,8 @@ function scaleTape(
     scaled.push(opcode);
     if (opcode === VOP_SHAPE)
       scaled.push(ops[index++]); // paint index — copy, do not scale
+    else if (opcode === VOP_MASK)
+      scaled.push(ops[index++], ops[index++]); // kind and shape count
     else if (opcode === VOP_MOVE || opcode === VOP_LINE)
       scaled.push(ops[index++] * scaleX, ops[index++] * scaleY);
     else if (opcode === VOP_QUAD)

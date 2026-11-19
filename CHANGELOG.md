@@ -24,6 +24,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Text in an `.svg` file is baked to vector outlines, so a file with text stays a vector.
 - `<SvgText>` draws constant text as vector outlines inside an `<Svg>`, in both flows.
 - Flow B: a drawing too long for one `<Svg>` fails the build. `ER_AOT_VECTOR_TAPE_MAX` sets the limit.
+- `clip-path` and `mask` in an `.svg` file are drawn by the vector rasteriser, so a file that uses them
+  stays a vector.
+- `<ClipPath>` and `<Mask>` clip and mask shapes inside an `<Svg>`, in both flows.
 
 ### Changed
 
@@ -32,6 +35,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `ErAssetsStorage` holds fonts only.
 - Flow B: the font-size check reports against the family a text uses.
 - Flow B: a package with more fonts than the firmware reserves reports both counts.
+- Flow B packages are now format minor 18. Firmware built before this version does not load them.
 
 ### Fixed
 

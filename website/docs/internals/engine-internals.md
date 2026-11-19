@@ -214,6 +214,7 @@ plus about 36 KB of per-node storage and 170 KB of edge cache.
 | `ERUI_VECTOR_MAX_EDGES`    | 2048    | Edges in one rasterise pass (about 32 bytes each)                |
 | `ERUI_VECTOR_MAX_SUBPATHS` | 256     | Contours or holes in one shape                                   |
 | `ERUI_VECTOR_MAX_ROW`      | 1024    | The widest vector node, in pixels                                |
+| `ERUI_VECTOR_MASK_EDGES`   | 512     | Edges of the clips and masks on one shape; 0 compiles them out   |
 | `ERUI_VECTOR_GRAD_LUT`     | 256     | Gradient colour-ramp entries; 64 to 128 is fine on a tight board |
 | `ERUI_VECTOR_EDGE_CACHE`   | 1       | The edge cache; 0 compiles it out                                |
 | `ERUI_VECTOR_CACHE_NODES`  | 2       | Nodes with cached geometry at once                               |
@@ -228,6 +229,10 @@ pays for it; a node whose geometry does not fit (a gauge face with 60 round-capp
 A transformed `<Svg>` is cached untransformed, and each replay applies the current matrix. A drawing
 that turns every frame is flattened and stroked once. Its entry also keeps the horizontal edges an
 unturned drawing drops, so it can hold more edges than the same drawing at rest.
+
+A **clip or mask** is a tape op that takes the shapes after it out of the drawing and keeps their edges.
+Each row a later shape covers, the mask's value is worked out for the pixels that shape touched and scales
+their coverage, so nothing is drawn to a buffer first. A node with one is not cached.
 
 On a PSRAM target, the per-node storage (`vector_store.c`) and the edge cache (`vector_cache.c`) can
 live in external RAM, since only the hot scratch in `vector.c` is touched per pixel; the ESP32-S3

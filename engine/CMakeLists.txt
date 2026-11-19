@@ -126,6 +126,7 @@ set(ERUI_VECTOR_MAX_POINTS "2048" CACHE STRING "Vector: flattened vertices per s
 set(ERUI_VECTOR_MAX_SUBPATHS "256" CACHE STRING "Vector: subpaths (contours/holes) per shape")
 set(ERUI_VECTOR_MAX_EDGES "2048" CACHE STRING "Vector: edges submitted to one rasterize pass")
 set(ERUI_VECTOR_MAX_ROW "1024" CACHE STRING "Vector: max vector-node width in px (coverage row)")
+set(ERUI_VECTOR_MASK_EDGES "512" CACHE STRING "Vector: edges of the clips and masks in force at once (0 compiles them out)")
 set(ERUI_MAX_VECTOR_NODES "8" CACHE STRING "Vector: concurrent vector nodes holding geometry")
 set(ERUI_VECTOR_TAPE_MAX "1024" CACHE STRING "Vector: op-tape floats stored per node")
 set(ERUI_VECTOR_PAINTS_MAX "16" CACHE STRING "Vector: paint entries stored per node")
@@ -204,6 +205,7 @@ target_compile_definitions(embedded-react PRIVATE
         ERUI_VECTOR_MAX_SUBPATHS=${ERUI_VECTOR_MAX_SUBPATHS}
         ERUI_VECTOR_MAX_EDGES=${ERUI_VECTOR_MAX_EDGES}
         ERUI_VECTOR_MAX_ROW=${ERUI_VECTOR_MAX_ROW}
+        ERUI_VECTOR_MASK_EDGES=${ERUI_VECTOR_MASK_EDGES}
         ERUI_MAX_VECTOR_NODES=${ERUI_MAX_VECTOR_NODES}
         ERUI_VECTOR_GRAD_LUT=${ERUI_VECTOR_GRAD_LUT}
         ERUI_VECTOR_CACHE_NODES=${ERUI_VECTOR_CACHE_NODES}

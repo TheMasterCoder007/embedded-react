@@ -22,9 +22,9 @@
 //
 // Supports <path> + <rect>/<circle>/<ellipse>/<line>/<polygon>/<polyline> + <g> nesting + viewBox + solid
 // AND gradient fill/stroke (linear/radial/conic via url() refs; presentation attrs + inline style +
-// inheritance). <text> and <tspan> bake to glyph outlines from a font file (svg-text.mts). Features the
-// op-tape can't represent (<mask>, <filter>, <use>, …) are recorded in `dropped` so the caller can rasterize
-// the whole SVG as a fallback image instead. Primitives are emitted as line/cubic paths (no native arc op)
+// inheritance). <text> and <tspan> bake to glyph outlines from a font file (svg-text.mts). `clip-path` and
+// `mask` bake to mask ops over the shapes they apply to. Features the op-tape can't represent (<filter>,
+// <use>, …) are recorded in `dropped` so the caller can rasterize the whole SVG as a fallback image instead. Primitives are emitted as line/cubic paths (no native arc op)
 // so an arbitrary matrix bakes cleanly.
 import {parse} from 'svgson';
 import type {INode} from 'svgson';
@@ -41,14 +41,25 @@ import {
   VOP_LINE,
   VOP_QUAD,
   VOP_CUBIC,
+  VOP_CLOSE,
   CAP,
   JOIN,
   PAINT_STRIDE,
   GRAD_LINEAR,
   GRAD_RADIAL,
   GRAD_CONIC,
+  MASK_ALPHA,
+  MASK_CLIP,
+  MASK_LUMINANCE,
+  MaskWriter,
+  maskGroup,
+  maskReference,
+  tapeBounds,
+  tapeMaskProblem,
+  tapeShapeCount,
 } from '../src/embedded-react/svg-ops.mts';
 import type {
+  MaskGroup,
   PackedGradient,
   PackedStop,
   VectorArtifact,
@@ -94,6 +105,14 @@ interface BBox {
   height: number;
 }
 
+/** Where a walk writes its shapes, and what it writes them as. */
+interface Target {
+  ops: number[];
+  /** `draw` paints shapes, `clip` and `mask` collect a definition's, `bounds` only measures. */
+  mode: 'draw' | 'clip' | 'mask' | 'bounds';
+  writer: MaskWriter | null;
+}
+
 /** A baked .svg file. */
 export interface BakedSvg extends VectorArtifact {
   gradients: PackedGradient[];
@@ -121,6 +140,8 @@ const GRADIENT_CENTER = 0.5; // objectBoundingBox defaults
 const GRADIENT_RADIUS = 0.5;
 const MIN_GRADIENT_STOPS = 2;
 const RASTER_HASH_LENGTH = 8;
+/** A <mask>'s box when it gives none: a tenth past its element's on every side. */
+const MASK_REGION_DEFAULT = {x: -0.1, y: -0.1, width: 1.2, height: 1.2};
 
 // --- 2D affine matrix [a, b, c, d, e, f]:  x' = a*x + c*y + e ;  y' = b*x + d*y + f ------------------
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
@@ -320,6 +341,7 @@ const PAINT_KEYS = [
   'fill-opacity',
   'stroke-opacity',
   'stroke-dasharray',
+  'clip-rule',
   'font-family',
   'font-size',
   'font-weight',
@@ -452,6 +474,34 @@ function urlRef(value: string | undefined): string | null {
   const match =
     typeof value === 'string' && value.trim().match(/^url\(\s*#([^)\s]+)\s*\)/);
   return match ? match[1] : null;
+}
+
+/** An attribute a style declaration may also give, such as `clip-path`. */
+function styled(attributes: Attributes, name: string): string | undefined {
+  return parseStyle(attributes.style)[name] ?? attributes[name];
+}
+
+/** Collects every <clipPath> and <mask> by id. */
+function collectMasks(root: INode): Map<string, INode> {
+  const definitions = new Map<string, INode>();
+  const visit = (node: INode): void => {
+    for (const child of node.children || []) {
+      if (child.type !== 'element') continue;
+      if (
+        (child.name === 'clipPath' || child.name === 'mask') &&
+        child.attributes?.id
+      )
+        definitions.set(child.attributes.id, child);
+      visit(child);
+    }
+  };
+  visit(root);
+  return definitions;
+}
+
+/** A length that may be a percentage: "50%" -> 0.5. */
+function fraction(value: string | undefined, fallback: number): number {
+  return gradCoord(value, fallback);
 }
 
 /** A gradient coordinate: "50%" -> 0.5; a plain number passes through; NaN or infinite returns `fallback`. */
@@ -630,9 +680,33 @@ export async function svgToVector(
     'linearGradient',
     'radialGradient',
     'conicGradient',
+    'clipPath',
+    'mask',
   ]);
   const dropped = new Set<string>();
   const usedFonts = new Set<opentype.Font>();
+  const maskDefinitions = collectMasks(root);
+
+  // A clip's shapes share a paint per fill rule, added to the table on first use.
+  const clipPaints: Record<string, number> = {};
+  const clipPaint = (rule: string | undefined): number => {
+    const key = rule === 'evenodd' ? 'evenodd' : 'nonzero';
+    if (clipPaints[key] == null) {
+      clipPaints[key] = paints.length / PAINT_STRIDE;
+      paints.push(
+        parseColor('black'),
+        0,
+        0,
+        DEFAULT_MITER_LIMIT,
+        0,
+        0,
+        key === 'evenodd' ? FILL_RULE_EVEN_ODD : FILL_RULE_NONZERO,
+        0,
+        0,
+      );
+    }
+    return clipPaints[key];
+  };
 
   /** Appends one shape: its paint record and its ops, moved by @p matrix. */
   const emitShape = (
@@ -640,11 +714,23 @@ export async function svgToVector(
     matrix: Matrix,
     paint: Paint,
     attributes: Attributes,
+    masks: readonly MaskGroup[],
+    target: Target,
   ): void => {
-    // A filter/mask/clip applied to an otherwise-bakeable shape still loses fidelity as a vector → flag it.
-    for (const feature of ['filter', 'mask', 'clip-path']) {
-      if (attributes[feature] && attributes[feature] !== 'none')
-        dropped.add(feature);
+    if (target.mode === 'bounds') {
+      target.ops.push(VOP_SHAPE, 0, ...transformOps(shapeOps, matrix));
+      return;
+    }
+    // A filter applied to an otherwise-bakeable shape still loses fidelity as a vector → flag it.
+    const filter = styled(attributes, 'filter');
+    if (filter && filter !== 'none') dropped.add('filter');
+    if (target.mode === 'clip') {
+      target.ops.push(
+        VOP_SHAPE,
+        clipPaint(paint['clip-rule']),
+        ...transformOps(shapeOps, matrix),
+      );
+      return;
     }
     // A dashed stroke can't be represented in the op-tape (the stroke is baked solid). Flag it so the SVG
     // falls back to raster (resvg renders the dashes) — but only when a visible stroke is actually dashed
@@ -672,7 +758,8 @@ export async function svgToVector(
     };
     const fillGradient = gradientIndex(urlRef(paint.fill));
     const strokeGradient = gradientIndex(urlRef(paint.stroke));
-    ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, matrix));
+    target.writer?.use(masks);
+    target.ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, matrix));
     paints.push(
       applyAlpha(
         colorOf(paint.fill ?? 'black'),
@@ -722,7 +809,13 @@ export async function svgToVector(
   };
 
   /** Bakes a <text> to glyph outlines: one shape per stretch of runs that share a paint. */
-  const bakeText = (node: INode, matrix: Matrix, paint: Paint): void => {
+  const bakeText = (
+    node: INode,
+    matrix: Matrix,
+    paint: Paint,
+    masks: readonly MaskGroup[],
+    target: Target,
+  ): void => {
     const items: TextItem[] = [];
     const droppedBefore = dropped.size;
     textItems(node, paint, items);
@@ -823,11 +916,195 @@ export async function svgToVector(
 
     for (const shape of shapes) {
       if (shape.ops.length)
-        emitShape(shape.ops, matrix, shape.paint, node.attributes || {});
+        emitShape(
+          shape.ops,
+          matrix,
+          shape.paint,
+          node.attributes || {},
+          masks,
+          target,
+        );
     }
   };
 
-  const walk = (node: INode, matrix: Matrix, paint: Paint): void => {
+  // A definition's groups under one matrix and box, kept so every shape under it shares them.
+  const groupCache = new Map<string, MaskGroup[]>();
+  const applying = new Set<INode>();
+
+  /** The masks an element's `clip-path` and `mask` put on it. */
+  const groupsFor = (
+    attributes: Attributes,
+    matrix: Matrix,
+    bounds: () => BBox,
+  ): MaskGroup[] => {
+    const groups: MaskGroup[] = [];
+    for (const [name, tag] of [
+      ['clip-path', 'clipPath'],
+      ['mask', 'mask'],
+    ]) {
+      const value = styled(attributes, name);
+      if (!value || value === 'none') continue;
+      const id = maskReference(value);
+      const definition = id == null ? undefined : maskDefinitions.get(id);
+      if (!definition || definition.name !== tag) {
+        dropped.add(name); // a shape function, or a reference to nothing
+        continue;
+      }
+      groups.push(...definitionGroups(definition, matrix, bounds));
+    }
+    return groups;
+  };
+
+  /** A <clipPath> or <mask> as mask groups, in the space of the element it is applied to. */
+  const definitionGroups = (
+    definition: INode,
+    matrix: Matrix,
+    bounds: () => BBox,
+  ): MaskGroup[] => {
+    const attributes = definition.attributes || {};
+    const isClip = definition.name === 'clipPath';
+    const boxUnits =
+      (isClip ? attributes.clipPathUnits : attributes.maskContentUnits) ===
+      'objectBoundingBox';
+    const boxRegion = !isClip && attributes.maskUnits !== 'userSpaceOnUse';
+    const box = boxUnits || boxRegion ? bounds() : null;
+    const key = `${attributes.id}|${matrix.join(',')}|${box ? `${box.x},${box.y},${box.width},${box.height}` : ''}`;
+    const cached = groupCache.get(key);
+    if (cached) return cached;
+    if (applying.has(definition)) {
+      dropped.add(`${definition.name} that applies itself`);
+      return [];
+    }
+    applying.add(definition);
+
+    // A definition's own clip or mask narrows it.
+    const groups = groupsFor(attributes, matrix, bounds);
+    // Its shapes sit in the element's space, or across its box; a <clipPath> may be transformed too.
+    let content = matrix;
+    if (boxUnits && box)
+      content = mul(content, [box.width, 0, 0, box.height, box.x, box.y]);
+    if (isClip) content = mul(content, parseTransform(attributes.transform));
+    const firstPaint = paints.length / PAINT_STRIDE;
+    const target: Target = {
+      ops: [],
+      mode: isClip ? 'clip' : 'mask',
+      writer: null,
+    };
+    walk(
+      definition,
+      content,
+      resolvePaint(attributes, DEFAULT_PAINT),
+      [],
+      target,
+    );
+
+    if (!isClip) {
+      // A mask stops at its box. The box is only needed as a clip when the element reaches past it and the
+      // mask paints past it too.
+      let region: BBox | null = null;
+      if (boxRegion && box) {
+        region = {
+          x: box.x + fraction(attributes.x, MASK_REGION_DEFAULT.x) * box.width,
+          y: box.y + fraction(attributes.y, MASK_REGION_DEFAULT.y) * box.height,
+          width:
+            fraction(attributes.width, MASK_REGION_DEFAULT.width) * box.width,
+          height:
+            fraction(attributes.height, MASK_REGION_DEFAULT.height) *
+            box.height,
+        };
+      } else if (
+        !boxRegion &&
+        attributes.width != null &&
+        attributes.height != null &&
+        !/%/.test(
+          `${attributes.x}${attributes.y}${attributes.width}${attributes.height}`,
+        )
+      ) {
+        region = {
+          x: num(attributes.x),
+          y: num(attributes.y),
+          width: num(attributes.width),
+          height: num(attributes.height),
+        };
+      }
+      const element = region ? (box ?? bounds()) : null;
+      const covered =
+        region &&
+        element &&
+        region.x <= element.x &&
+        region.y <= element.y &&
+        region.x + region.width >= element.x + element.width &&
+        region.y + region.height >= element.y + element.height;
+      if (region && !covered) {
+        const corners = [
+          pt(matrix, region.x, region.y),
+          pt(matrix, region.x + region.width, region.y),
+          pt(matrix, region.x + region.width, region.y + region.height),
+          pt(matrix, region.x, region.y + region.height),
+        ];
+        const painted = tapeBounds(target.ops);
+        let reach = 0;
+        for (
+          let index = firstPaint * PAINT_STRIDE + 2;
+          index < paints.length;
+          index += PAINT_STRIDE
+        )
+          reach = Math.max(reach, paints[index] / 2);
+        // Compared as boxes when the element's space is upright; a turned box is always kept.
+        const upright = matrix[1] === 0 && matrix[2] === 0;
+        const left = Math.min(corners[0][0], corners[2][0]);
+        const right = Math.max(corners[0][0], corners[2][0]);
+        const top = Math.min(corners[0][1], corners[2][1]);
+        const bottom = Math.max(corners[0][1], corners[2][1]);
+        const inside =
+          upright &&
+          painted &&
+          painted.x - reach >= left &&
+          painted.y - reach >= top &&
+          painted.x + painted.width + reach <= right &&
+          painted.y + painted.height + reach <= bottom;
+        if (painted && !inside) {
+          const rect = [VOP_SHAPE, clipPaint('nonzero')];
+          corners.forEach(([x, y], corner) =>
+            rect.push(corner === 0 ? VOP_MOVE : VOP_LINE, x, y),
+          );
+          rect.push(VOP_CLOSE);
+          groups.push(maskGroup(MASK_CLIP, rect, 1));
+        }
+      }
+    }
+    const maskType = styled(attributes, 'mask-type');
+    groups.push(
+      maskGroup(
+        isClip ? MASK_CLIP : maskType === 'alpha' ? MASK_ALPHA : MASK_LUMINANCE,
+        target.ops,
+        tapeShapeCount(target.ops),
+      ),
+    );
+    applying.delete(definition);
+    groupCache.set(key, groups);
+    return groups;
+  };
+
+  /** An element's box in its own space: its shapes' points, strokes left out. */
+  const localBounds = (node: INode, paint: Paint): BBox => {
+    const scratch: Target = {ops: [], mode: 'bounds', writer: null};
+    // Its own `transform` is part of the space the box is measured in, so it is left off here.
+    const unplaced = {
+      ...node,
+      attributes: {...(node.attributes || {}), transform: ''},
+    };
+    walk({...node, children: [unplaced]}, IDENTITY, paint, [], scratch);
+    return tapeBounds(scratch.ops) ?? {x: 0, y: 0, width: 0, height: 0};
+  };
+
+  const walk = (
+    node: INode,
+    matrix: Matrix,
+    paint: Paint,
+    masks: readonly MaskGroup[],
+    target: Target,
+  ): void => {
     for (const child of node.children || []) {
       if (child.type !== 'element') continue;
       const childAttributes = child.attributes || {};
@@ -837,12 +1114,36 @@ export async function svgToVector(
       );
       const childPaint = resolvePaint(childAttributes, paint);
 
+      let childMasks = masks;
+      const applied = [
+        styled(childAttributes, 'clip-path'),
+        styled(childAttributes, 'mask'),
+      ].some(value => value && value !== 'none');
+      if (applied && !SVG_IGNORABLE.has(child.name)) {
+        if (target.mode === 'draw') {
+          let box: BBox | undefined;
+          childMasks = [
+            ...masks,
+            ...groupsFor(
+              childAttributes,
+              childMatrix,
+              () => (box ??= localBounds(child, paint)),
+            ),
+          ];
+        } else if (target.mode !== 'bounds') {
+          // A clip or mask on a shape inside one would have to be worked out shape by shape.
+          dropped.add(`${node.name} child with a clip-path or mask`);
+        }
+      }
+
       if (child.name === 'g' || child.name === 'svg') {
-        walk(child, childMatrix, childPaint);
+        const filter = styled(childAttributes, 'filter');
+        if (filter && filter !== 'none') dropped.add('filter');
+        walk(child, childMatrix, childPaint, childMasks, target);
         continue;
       }
       if (child.name === 'text') {
-        bakeText(child, childMatrix, childPaint);
+        bakeText(child, childMatrix, childPaint, childMasks, target);
         continue;
       }
 
@@ -862,11 +1163,24 @@ export async function svgToVector(
 
       const shapeOps = parsePath(d);
       if (shapeOps.length)
-        emitShape(shapeOps, childMatrix, childPaint, childAttributes);
+        emitShape(
+          shapeOps,
+          childMatrix,
+          childPaint,
+          childAttributes,
+          childMasks,
+          target,
+        );
     }
   };
 
-  walk(root, rootMatrix, resolvePaint(attributes, DEFAULT_PAINT));
+  walk(root, rootMatrix, resolvePaint(attributes, DEFAULT_PAINT), [], {
+    ops,
+    mode: 'draw',
+    writer: new MaskWriter(ops),
+  });
+  // More clips and masks on one shape than the engine keeps: the file is left to the raster fallback.
+  if (tapeMaskProblem(ops)) dropped.add('clip-path and mask nesting');
   return {
     ops,
     paints,

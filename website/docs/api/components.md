@@ -445,7 +445,7 @@ import gauge from './gauge.svg';
 
 | Prop              | Type              | Notes                                                                                                                                                                           |
 | ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`          | imported `.svg`   | Baked at build time to a vector tape, [text](#text) included (or a raster, if the file uses masks or filters). Scaled to the render box; shape children are ignored             |
+| `source`          | imported `.svg`   | Baked at build time to a vector tape, [text](#text), clips and masks included (or a raster, if the file uses filters). Scaled to the render box; shape children are ignored     |
 | `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source` |
 | `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then         |
 | paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                              |
@@ -458,16 +458,17 @@ stops. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` a
 [named colours](./styles.md#colours).
 **An unfilled shape defaults to black**: set `fill="none"` on anything meant to be stroke-only.
 
-| Shape       | Props                                                                                                                                                                                                  |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `<Path>`    | `d` (M/L/H/V/C/S/Q/T/A/Z, absolute and relative). Parsing `d` costs more than the primitives; prefer them for anything rebuilt per frame                                                               |
-| `<Circle>`  | `cx`, `cy`, `r`                                                                                                                                                                                        |
-| `<Ellipse>` | `cx`, `cy`, `rx`, `ry`                                                                                                                                                                                 |
-| `<Rect>`    | `x`, `y`, `width`, `height`, `rx`, `ry` (a negative radius is `auto`, as in SVG; each is clamped to half its side)                                                                                     |
-| `<Line>`    | `x1`, `y1`, `x2`, `y2`                                                                                                                                                                                 |
-| `<Arc>`     | `cx`, `cy`, `r`, `startAngle`, `endAngle`: degrees clockwise from 12 o'clock. Not a standard SVG element; it emits a native arc op with no bezier conversion, cheap enough to rebuild every drag frame |
-| `<G>`       | Groups shapes under one paint and an optional `x`/`y`/`translateX`/`translateY`/`scale`, composed with enclosing groups                                                                                |
-| `<SvgText>` | Constant text as glyph outlines: `x`, `y`, `fontFamily`, `fontSize`, `fontWeight`, `letterSpacing`, `textAnchor`, `dominantBaseline`, `transform`. See [Text](#text)                                   |
+| Shape                  | Props                                                                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `<Path>`               | `d` (M/L/H/V/C/S/Q/T/A/Z, absolute and relative). Parsing `d` costs more than the primitives; prefer them for anything rebuilt per frame                                                               |
+| `<Circle>`             | `cx`, `cy`, `r`                                                                                                                                                                                        |
+| `<Ellipse>`            | `cx`, `cy`, `rx`, `ry`                                                                                                                                                                                 |
+| `<Rect>`               | `x`, `y`, `width`, `height`, `rx`, `ry` (a negative radius is `auto`, as in SVG; each is clamped to half its side)                                                                                     |
+| `<Line>`               | `x1`, `y1`, `x2`, `y2`                                                                                                                                                                                 |
+| `<Arc>`                | `cx`, `cy`, `r`, `startAngle`, `endAngle`: degrees clockwise from 12 o'clock. Not a standard SVG element; it emits a native arc op with no bezier conversion, cheap enough to rebuild every drag frame |
+| `<G>`                  | Groups shapes under one paint and an optional `x`/`y`/`translateX`/`translateY`/`scale`, composed with enclosing groups                                                                                |
+| `<SvgText>`            | Constant text as glyph outlines: `x`, `y`, `fontFamily`, `fontSize`, `fontWeight`, `letterSpacing`, `textAnchor`, `dominantBaseline`, `transform`. See [Text](#text)                                   |
+| `<ClipPath>`, `<Mask>` | Shapes another shape or `<G>` is shown through. See [Clips and masks](#clips-and-masks)                                                                                                                |
 
 Limits: 16 shapes per `<Svg>` and 8 vector nodes at once, by default (`ERUI_VECTOR_PAINTS_MAX`,
 `ERUI_MAX_VECTOR_NODES`). Combine many tick marks into one `<Path>` with several subpaths.
@@ -475,6 +476,63 @@ Limits: 16 shapes per `<Svg>` and 8 vector nodes at once, by default (`ERUI_VECT
 **Flow B:** a state-driven `<Svg>` uses absolute pixels (no `viewBox`, no `<G>`) and literal shape
 children; a state-driven `<Path d>` is not supported, and `visible` or an event on an `<Svg>` is
 rejected (wrap it in a `View` or `Pressable`).
+
+### Clips and masks
+
+A `<ClipPath>` or `<Mask>` holds shapes and draws nothing where it sits. A shape or `<G>` names one with
+`clipPath="url(#id)"` or `mask="url(#id)"`, and is then drawn only through it. The rasteriser applies
+both as it draws, anti-aliased, with no buffer, so they work under a transformed `<Svg>` and with banding.
+
+```tsx
+const WHITE_TO_BLACK = {
+  type: 1,
+  stops: [
+    {color: '#ffffff', offset: 0},
+    {color: '#000000', offset: 1},
+  ],
+  ax: 0,
+  ay: 0,
+  bx: 100,
+  by: 0,
+};
+
+<Svg width={120} height={120} viewBox="0 0 100 100">
+  <ClipPath id="disc">
+    <Circle cx={50} cy={50} r={40} />
+  </ClipPath>
+  <Mask id="fade">
+    <Rect x={0} y={0} width={100} height={100} fillGradient={WHITE_TO_BLACK} />
+  </Mask>
+  <G clipPath="url(#disc)" mask="url(#fade)">
+    <Rect x={0} y={0} width={100} height={50} fill="#e04030" />
+    <Rect x={0} y={50} width={100} height={50} fill="#3060d0" />
+  </G>
+</Svg>;
+```
+
+| Element      | Props                                                                                                                        |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `<ClipPath>` | `id`, `clipPathUnits`, `clipRule`. The clipped element shows inside any of its shapes; their colours are not read            |
+| `<Mask>`     | `id`, `maskType` (`luminance` or `alpha`), `x`, `y`, `width`, `height`, `maskUnits`, `maskContentUnits`, and the paint props |
+
+A mask's shapes are painted in order, strokes and gradients included, and the masked element shows as
+far as the result is light (`luminance`, the default) or opaque (`alpha`). A shape inside a `<ClipPath>`
+takes `clipRule` where a drawn one takes `fillRule`. With `clipPathUnits` or `maskContentUnits` set to
+`objectBoundingBox`, the shapes are placed across the element's own box, 0 to 1 each way. A `<ClipPath>`
+or `<Mask>` may name another on itself, which narrows it, and a clipped shape may sit in a clipped `<G>`.
+
+Limits: 4 clips and masks on one shape, holding 16 shapes between them. A mask's shapes count toward the
+`<Svg>`'s shapes, a clip's count as one, and all of them toward its tape. A mask on a `<G>` is applied to each of its shapes, so shapes that overlap
+inside a masked group show through one another where the mask is partly light. A shape inside a
+`<ClipPath>` or `<Mask>` cannot take a `clipPath` or `mask` of its own.
+
+**Flow B:** `<ClipPath>` and `<Mask>` need a static `<Svg>`: one with a state-driven shape refuses them.
+A reference that names nothing fails the build, where Flow A warns once and draws the shape unmasked.
+
+In an `.svg` file, `clip-path` and `mask` bake the same way, with `clip-rule`, `mask-type`, a `transform`
+on a `<clipPath>`, and both kinds of units. A file falls back to a raster when it nests more than the
+limits above, clips a shape inside a `<clipPath>` or `<mask>`, or uses a shape function such as
+`clip-path="circle(40%)"`.
 
 ### Text
 

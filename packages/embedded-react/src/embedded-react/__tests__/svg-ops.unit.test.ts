@@ -30,6 +30,10 @@ import {
   GRAD_MAX_STOPS,
   GRAD_LINEAR,
   PAINT_STRIDE,
+  MaskWriter,
+  maskGroup,
+  tapeBounds,
+  tapeMaskProblem,
 } from '../svg-ops.mts';
 
 // Opcodes mirror er_scene.h.
@@ -890,5 +894,214 @@ describe('Rect corner radii', () => {
       20,
       CLOSE,
     ]);
+  });
+});
+
+describe('clips and masks', () => {
+  const MASK = 7;
+  const CLIP = 1;
+  const LUMINANCE = 2;
+  const ALPHA = 3;
+  const element = (type, props = {}, ...children) => ({
+    type,
+    props: {...props, ...(children.length ? {children} : {})},
+  });
+  const square = (props = {}) =>
+    element('Rect', {x: 0, y: 0, width: 10, height: 10, ...props});
+  /** A tape's mask ops, as [kind, shapes] pairs in order. */
+  const maskOps = ops => {
+    const operands = [1, 2, 2, 4, 6, 6, 0, 2];
+    const found = [];
+    for (let index = 0; index < ops.length; index += 1 + operands[ops[index]])
+      if (ops[index] === MASK) found.push([ops[index + 1], ops[index + 2]]);
+    return found;
+  };
+
+  it('puts a <ClipPath> ahead of the shape that names it, and draws nothing for the element itself', () => {
+    const {ops, paints} = flattenSvg({
+      children: [
+        element('ClipPath', {id: 'c'}, square({fill: 'red'})),
+        square({clipPath: 'url(#c)', fill: 'blue'}),
+      ],
+    });
+    expect(ops.slice(0, 5)).toEqual([MASK, CLIP, 1, SHAPE, 0]);
+    expect(maskOps(ops)).toEqual([[CLIP, 1]]);
+    // The shared clip paint and the square's: the clip's red is never read.
+    expect(paints.length / PAINT_STRIDE).toBe(2);
+    expect(Array.from(paints)).not.toContain(0xffff0000);
+  });
+
+  it('shares one clip across a group, lifts it after, and reads clipRule', () => {
+    const {ops, paints} = flattenSvg({
+      children: [
+        element('ClipPath', {id: 'c', clipRule: 'evenodd'}, square()),
+        element('G', {clipPath: 'url(#c)', x: 5}, square(), square()),
+        square(),
+      ],
+    });
+    expect(maskOps(ops)).toEqual([
+      [CLIP, 1],
+      [0, 0],
+    ]);
+    expect(ops.slice(3, 8)).toEqual([SHAPE, 0, MOVE, 5, 0]); // in the group's space
+    expect(paints[6]).toBe(1);
+  });
+
+  it('places objectBoundingBox units across the element, and paints a <Mask> by its type', () => {
+    const {ops, paints} = flattenSvg({
+      children: [
+        element(
+          'Mask',
+          {id: 'm', maskContentUnits: 'objectBoundingBox', maskType: 'alpha'},
+          element('Rect', {x: 0, y: 0, width: 0.5, height: 1, fill: '#fff8'}),
+        ),
+        element('Rect', {x: 20, y: 40, width: 40, height: 10, mask: 'url(#m)'}),
+      ],
+    });
+    expect(maskOps(ops)).toEqual([[ALPHA, 1]]);
+    expect(ops.slice(3, 11)).toEqual([SHAPE, 0, MOVE, 20, 40, LINE, 40, 40]);
+    expect(paints[0]).toBe(0x88ffffff);
+  });
+
+  it("adds a mask's box as a clip when the mask paints past a box smaller than its element", () => {
+    const tape = maskProps =>
+      flattenSvg({
+        children: [
+          element(
+            'Mask',
+            {id: 'm', ...maskProps},
+            square({width: 100, height: 100, fill: 'white'}),
+          ),
+          square({mask: 'url(#m)'}),
+        ],
+      }).ops;
+    expect(maskOps(tape({}))).toEqual([[LUMINANCE, 1]]);
+    expect(maskOps(tape({width: 0.5}))).toEqual([
+      [CLIP, 1],
+      [LUMINANCE, 1],
+    ]);
+    const userSpace = tape({
+      maskUnits: 'userSpaceOnUse',
+      x: 2,
+      y: 2,
+      width: 3,
+      height: 3,
+    });
+    expect(userSpace.slice(5, 11)).toEqual([MOVE, 2, 2, LINE, 5, 2]);
+  });
+
+  it('narrows a clip by its own clipPath, and warns once about what it leaves off', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const {ops} = flattenSvg({
+      children: [
+        element('ClipPath', {id: 'a'}, square()),
+        element('ClipPath', {id: 'b', clipPath: 'url(#a)'}, square()),
+        square({clipPath: 'url(#b)'}),
+      ],
+    });
+    expect(maskOps(ops)).toEqual([
+      [CLIP, 1],
+      [CLIP, 1],
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+    const unknown = flattenSvg({children: square({clipPath: 'url(#nope)'})});
+    expect(maskOps(unknown.ops)).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/names no <ClipPath>/);
+    warn.mockRestore();
+  });
+
+  it('writes only the masks that change between shapes', () => {
+    const ops = [];
+    const writer = new MaskWriter(ops);
+    const first = maskGroup(CLIP, [SHAPE, 0, MOVE, 0, 0], 1);
+    const second = maskGroup(LUMINANCE, [SHAPE, 1, MOVE, 1, 1], 1);
+    writer.use([first]);
+    writer.use([first]);
+    writer.use([first, second]);
+    writer.use([first]);
+    writer.use([]);
+    expect(maskOps(ops)).toEqual([
+      [CLIP, 1],
+      [LUMINANCE, 1],
+      [0, 0],
+      [CLIP, 1],
+      [0, 0],
+    ]);
+  });
+
+  it('finds a tape that asks for more masks than the engine keeps', () => {
+    const group = maskGroup(CLIP, [SHAPE, 0, MOVE, 0, 0], 1).ops;
+    expect(
+      tapeMaskProblem([...group, ...group, ...group, ...group]),
+    ).toBeNull();
+    expect(
+      tapeMaskProblem([...group, ...group, ...group, ...group, ...group]),
+    ).toMatch(/more than 4 clips and masks/);
+    expect(
+      tapeMaskProblem([
+        ...group,
+        ...group,
+        MASK,
+        0,
+        0,
+        ...group,
+        ...group,
+        ...group,
+      ]),
+    ).toBeNull();
+    expect(tapeMaskProblem([MASK, CLIP, 17])).toMatch(/more than 16 shapes/);
+  });
+
+  it('scales a masked artifact without touching its mask ops, and bounds a tape by its points', () => {
+    const ops = [
+      MASK,
+      CLIP,
+      1,
+      SHAPE,
+      0,
+      MOVE,
+      1,
+      2,
+      LINE,
+      3,
+      4,
+      SHAPE,
+      1,
+      MOVE,
+      5,
+      6,
+      LINE,
+      9,
+      8,
+    ];
+    const scaled = scaleVectorArtifact(
+      {ops, paints: new Array(2 * PAINT_STRIDE).fill(0), width: 10, height: 10},
+      20,
+      30,
+    );
+    expect(scaled.ops).toEqual([
+      MASK,
+      CLIP,
+      1,
+      SHAPE,
+      0,
+      MOVE,
+      2,
+      6,
+      LINE,
+      6,
+      12,
+      SHAPE,
+      1,
+      MOVE,
+      10,
+      18,
+      LINE,
+      18,
+      24,
+    ]);
+    expect(tapeBounds(ops)).toEqual({x: 1, y: 2, width: 8, height: 6});
+    expect(tapeBounds([MASK, 0, 0])).toBeNull();
   });
 });

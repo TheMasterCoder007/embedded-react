@@ -42,6 +42,9 @@ export const Line = 'Line';
 export const G = 'G';
 // Text drawn as glyph outlines. The build bakes it to a path, so it reaches the device with a `d`.
 export const SvgText = 'SvgText';
+// A clip and a mask: shapes another element is shown through. Neither draws anything where it sits.
+export const ClipPath = 'ClipPath';
+export const Mask = 'Mask';
 // Arc convenience primitive (not a standard SVG element): a circular arc given a center, radius, and
 // start/end angles in DEGREES clockwise from 12 o'clock. Flattens to a native arc op — cheap to update.
 export const Arc = 'Arc';
