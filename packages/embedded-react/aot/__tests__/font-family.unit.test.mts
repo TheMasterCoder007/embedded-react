@@ -95,6 +95,22 @@ describe('fontFamily', () => {
     expect(result.fonts[0].sizes).toEqual([16, 24, 32]);
   });
 
+  it('lists the size the engine draws a Text at when its style names none', () => {
+    const result = compile(
+      `<Text style={{fontFamily: Bold}}>a</Text>
+       <Text>plain</Text>`,
+    );
+    expect(result.fonts).toEqual([
+      {
+        family: 'Inter-Bold',
+        importPath: './Inter-Bold.ttf',
+        sizes: [8],
+        openSizes: false,
+      },
+      {family: '', importPath: null, sizes: [], openSizes: false},
+    ]);
+  });
+
   it('bakes every imported font for a family state picks', () => {
     const result = compile(
       `<Text style={{fontFamily: on ? Bold : Regular, fontSize: 24}}>a</Text>`,

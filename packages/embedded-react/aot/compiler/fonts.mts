@@ -52,13 +52,19 @@ export function recordFontUse(node: IrNode, output: Out): void {
     }
   };
 
-  // A size state drives can't be listed here. A <Text> that names no size asks for the smallest there is, so it
-  // adds none.
+  // A size state drives can't be listed here. A <Text> that names no size asks the engine for the smallest there
+  // is: an imported font is baked at it, and the built-in font, which has its own sizes, adds none.
   const open = node.stateProps.some(prop => prop.field === 'font_size');
   if (!open) {
+    const unsized =
+      node.type === 'ER_NODE_TEXT_INPUT'
+        ? INPUT_FONT_SIZE
+        : node.fontFamily
+          ? MIN_FONT_SIZE
+          : 0;
     add(
       node.constantProps.find(prop => prop.field === 'font_size')?.value ||
-        (node.type === 'ER_NODE_TEXT_INPUT' ? INPUT_FONT_SIZE : 0),
+        unsized,
     );
   }
   // A span with no size of its own takes its text's.
