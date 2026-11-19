@@ -66,14 +66,18 @@
 typedef struct ERVecCache ERVecCache;
 
 /**
- * @brief Returns the valid cache entry for (slot, origin_x, origin_y), or NULL on a miss.
+ * @brief Returns the valid cache entry for (slot, origin_x, origin_y, detail), or NULL on a miss.
+ *
+ * @p detail is 0 for an untransformed node, whose entry holds screen-space edges and serves one origin.
+ * A transformed node passes its flattening detail (1 or more): its entry holds layout-space edges and
+ * serves any origin.
  *
  * A hit refreshes the entry's LRU stamp and counts toward er_vector_cache_hits().
  */
-const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y);
+const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y, int detail);
 
 /**
- * @brief Claims an entry to record (slot, origin_x, origin_y) into, or returns NULL when this render should not
+ * @brief Claims an entry to record (slot, origin_x, origin_y, detail) into, or returns NULL when this render should not
  *        record: the cache is compiled out, the slot's geometry overflowed the entry before (blocked
  *        until the slot is re-stored), or this is the FIRST render of the key — the first call arms
  *        the key and declines; only a later call with the key still intact is granted an entry.
@@ -83,7 +87,7 @@ const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y);
  * is static by surviving from one render to the next (any er_vector_store() disarms it). The claimed
  * entry is invalid until er_vector_cache_finish(entry, true).
  */
-ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y);
+ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y, int detail);
 
 /** @brief Ends a recording: success=true publishes the entry, success=false discards it and blocks the slot. */
 void er_vector_cache_finish(ERVecCache* entry, bool success);
@@ -106,6 +110,21 @@ void er_vector_cache_stats_reset(void);
 /*----------------------------------------------------------------------------------------------------------------------
  - Rasterizer
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief A node's affine transform, for an `<Svg>` painted through it.
+ *
+ * The matrix maps layout space (the tape's coordinates plus the node origin) to the screen:
+ *   screen_x = a * x + c * y + translate_x
+ *   screen_y = b * x + d * y + translate_y
+ * The inverse maps the screen back. Ink is clipped to the box, which is in layout space.
+ */
+typedef struct
+{
+    float a, b, c, d, translate_x, translate_y;
+    float inverse_a, inverse_b, inverse_c, inverse_d, inverse_translate_x, inverse_translate_y;
+    float box_x0, box_y0, box_x1, box_y1;
+} ERVectorTransform;
 
 /**
  * @brief Rasterizes a vector op-tape into the active render target at a node's box.
@@ -151,15 +170,27 @@ void er_vector_render(const float* ops,
  * instead of re-flattening and re-stroking the tape. See ERUI_VECTOR_EDGE_CACHE; with the cache
  * compiled out (or on a miss) this renders exactly like er_vector_render().
  *
- * @param[in] slot      Storage slot holding the node's tape (er_vector_store); no-op when empty.
- * @param[in] origin_x  Geometry origin X in framebuffer pixels (node box left).
- * @param[in] origin_y  Geometry origin Y in framebuffer pixels (node box top).
- * @param[in] clip_x0   Clip box left edge — the caller passes node box ∩ damage clip.
- * @param[in] clip_y0   Clip box top edge.
- * @param[in] clip_x1   Clip box right edge (exclusive).
- * @param[in] clip_y1   Clip box bottom edge (exclusive).
+ * With a transform the geometry is built in layout space and its edges take the matrix, so strokes and
+ * gradients turn and scale with the shape, and nothing is captured into a buffer. The cache then keeps
+ * layout-space edges and applies the matrix on replay.
+ *
+ * @param[in] slot       Storage slot holding the node's tape (er_vector_store); no-op when empty.
+ * @param[in] origin_x   Geometry origin X in framebuffer pixels (node box left).
+ * @param[in] origin_y   Geometry origin Y in framebuffer pixels (node box top).
+ * @param[in] transform  The node's transform, or NULL for none.
+ * @param[in] clip_x0    Clip box left edge — the caller passes the node's screen bounds ∩ damage clip.
+ * @param[in] clip_y0    Clip box top edge.
+ * @param[in] clip_x1    Clip box right edge (exclusive).
+ * @param[in] clip_y1    Clip box bottom edge (exclusive).
  */
-void er_vector_render_slot(int slot, int origin_x, int origin_y, int clip_x0, int clip_y0, int clip_x1, int clip_y1);
+void er_vector_render_slot(int slot,
+                           int origin_x,
+                           int origin_y,
+                           const ERVectorTransform* transform,
+                           int clip_x0,
+                           int clip_y0,
+                           int clip_x1,
+                           int clip_y1);
 
 /**
  * @brief Number of shapes er_vector_render() has routed to the shared analytic arc core since the last

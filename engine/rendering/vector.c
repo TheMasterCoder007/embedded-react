@@ -31,6 +31,10 @@
  * All working buffers are static and bounded (no allocation); the engine is single-threaded so reuse
  * across shapes is safe. Coordinates from the tape are node-local; the node's screen origin (origin_x, origin_y) is
  * added during flattening, and all painting is clipped to the node box.
+ *
+ * A transformed node builds the same geometry, in layout space, and each finished edge takes the node's
+ * matrix on its way into the edge list. The stroke outline is built before the matrix, so it scales and
+ * turns with the shape.
  */
 
 #include "vector.h"
@@ -110,6 +114,9 @@
 #define VEC_FULL_TURN_EPSILON 1e-4f     /**< A sweep this close to a turn draws a whole circle. */
 #define VEC_ARC_START_EPSILON 0.01f     /**< How far a MOVE may sit from the arc's start and still lead into it. */
 #define VEC_QUAD_TO_CUBIC (2.0f / 3.0f) /**< Control-point weight when raising a quadratic to a cubic. */
+#define VEC_DETAIL_MAX 8                /**< Finest flattening detail a scaled-up transform asks for. */
+#define VEC_DETAIL_STEP 1.5f            /**< Scale past which the detail doubles. */
+#define VEC_SIMILARITY_EPSILON 1e-4f    /**< How far a matrix may stray from rotate + uniform scale. */
 
 /* Op-tape layout: floats an op occupies, opcode included, and the coordinates each op carries. */
 #define VEC_MOVE_OP_SIZE 3
@@ -154,6 +161,13 @@ static int s_subpath_count;
 static ERVecEdge s_edges[ERUI_VECTOR_MAX_EDGES];
 static int s_edge_count;
 static bool s_edge_truncated; /**< The current build dropped an edge on the pool cap (recording aborts). */
+
+/* The transform of the node being rendered, or NULL. Geometry is then built in layout space and edge_add
+ * maps each edge to the screen. */
+static const ERVectorTransform* s_transform;
+static float s_box_x[4], s_box_y[4]; /**< Screen corners of the transformed node box that ink is clipped to. */
+/* How much finer than one layout pixel curves are flattened: 1 unless a transform scales the node up. */
+static float s_detail = 1.0f;
 static float s_edge_y_top, s_edge_y_bottom; /**< Clip rows for the current pass; edge_add drops edges outside them. */
 
 /* Edge ordering for the active-edge table: a counting sort writes indices into s_order, and s_buckets ends
@@ -190,6 +204,8 @@ static bool s_recording_failed; /**< The recording overflowed/truncated; entry w
 #else
 #define VEC_RECORDING() false
 #endif
+/* A transformed recording keeps its edges in layout space: edge_add leaves them unmapped. */
+#define VEC_EDGES_IN_LAYOUT() (VEC_RECORDING() && s_transform != 0)
 
 /* The per-node op-tape/paint storage pool (er_vector_store/free/reset/slot_ops/slot_paints + s_slots) lives
  * in vector_store.c — a separate translation unit so a target can place that cold pool in PSRAM (via the
@@ -251,7 +267,7 @@ static void flatten_cubic(float x0, float y0, float x1, float y1, float x2, floa
     const float distance1 = fabsf((x1 - x3) * chord_y - (y1 - y3) * chord_x);
     const float distance2 = fabsf((x2 - x3) * chord_y - (y2 - y3) * chord_x);
     if ((distance1 + distance2) * (distance1 + distance2)
-        < VEC_FLATNESS_TOLERANCE * (chord_x * chord_x + chord_y * chord_y))
+        < VEC_FLATNESS_TOLERANCE / (s_detail * s_detail) * (chord_x * chord_x + chord_y * chord_y))
     {
         pt_add(x3, y3);
         return;
@@ -306,7 +322,7 @@ append_arc(float center_x, float center_y, float radius, float start_angle, floa
     if (sweep != sweep)
         return; /* nothing to draw */
     /* Step angle so the chord deviation radius*(1-cos(step/2)) stays under VEC_ARC_TOLERANCE px. */
-    float step = (radius > VEC_ARC_MIN_RADIUS) ? 2.0f * acosf(1.0f - VEC_ARC_TOLERANCE / radius) : ER_PI;
+    float step = (radius > VEC_ARC_MIN_RADIUS) ? 2.0f * acosf(1.0f - VEC_ARC_TOLERANCE / s_detail / radius) : ER_PI;
     if (step <= 0.0f || step != step) /* NaN/0 guard */
         step = VEC_ARC_FALLBACK_STEP;
     int step_count = (int)ceilf(fabsf(sweep) / step);
@@ -336,11 +352,45 @@ static inline int edge_start_row(float y0, int row_min, int row_max)
     return y0 > (float)row_min ? (int)floorf(y0) - row_min : 0;
 }
 
-/** @brief Adds a non-horizontal edge to the rasterizer edge list (normalized so y0 <= y1). */
+/** @brief Maps a layout-space point to the screen through the active transform. */
+static inline void point_to_screen(float* x, float* y)
+{
+    const float layout_x = *x, layout_y = *y;
+    *x = s_transform->a * layout_x + s_transform->c * layout_y + s_transform->translate_x;
+    *y = s_transform->b * layout_x + s_transform->d * layout_y + s_transform->translate_y;
+}
+
+/** @brief Maps a screen point back to layout space through the active transform. */
+static inline void point_to_layout(float* x, float* y)
+{
+    const float screen_x = *x, screen_y = *y;
+    *x = s_transform->inverse_a * screen_x + s_transform->inverse_c * screen_y + s_transform->inverse_translate_x;
+    *y = s_transform->inverse_b * screen_x + s_transform->inverse_d * screen_y + s_transform->inverse_translate_y;
+}
+
+/**
+ * @brief Adds an edge to the rasterizer edge list (normalized so y0 <= y1), through the active transform.
+ *
+ * A horizontal edge is dropped, except in a transformed recording: the matrix it replays through can
+ * turn it.
+ */
 static void edge_add(float x0, float y0, float x1, float y1)
 {
-    if (y0 == y1)
-        return;
+    if (VEC_EDGES_IN_LAYOUT())
+    {
+        if (x0 == x1 && y0 == y1)
+            return;
+    }
+    else
+    {
+        if (s_transform)
+        {
+            point_to_screen(&x0, &y0);
+            point_to_screen(&x1, &y1);
+        }
+        if (y0 == y1)
+            return;
+    }
 
     if ((y0 <= s_edge_y_top && y1 <= s_edge_y_top) || (y0 >= s_edge_y_bottom && y1 >= s_edge_y_bottom))
         return;
@@ -474,7 +524,7 @@ static int vgrad_supported(int type)
 }
 
 /**
- * @brief Gradient parameter t at a framebuffer pixel centre (geometry is already in framebuffer space).
+ * @brief Gradient parameter t at a pixel centre, given in the space the gradient's geometry is in.
  *        Linear: projection onto the axis A->B, normalized. Radial: distance from the centre over r.
  *        Conic: angle of (pixel - centre), clockwise from the top, minus the start angle, wrapped to [0,1).
  *        er_gradient_eval_stops() clamps t to the endpoint colours, so t is left unclamped here.
@@ -581,7 +631,10 @@ static void emit_row(uint32_t color, const ERVectorGradient* gradient, int row_y
             /* position -> LUT index (clamped; eval clamps to the endpoint colours, so an out-of-range position pins to
              * an end). The LUT entry is premultiplied, so scaling all four channels by coverage finishes the pixel — no
              * per-pixel stop interpolation or premultiply. */
-            const float position = vgrad_t(gradient, (float)(clip_x0 + low + offset) + 0.5f, (float)row_y + 0.5f);
+            float sample_x = (float)(clip_x0 + low + offset) + 0.5f, sample_y = (float)row_y + 0.5f;
+            if (s_transform)
+                point_to_layout(&sample_x, &sample_y); /* the gradient's geometry is in layout space */
+            const float position = vgrad_t(gradient, sample_x, sample_y);
             const float scaled = position * (float)ERUI_VECTOR_GRAD_LUT;
             const int lut_index = !(scaled > 0.0f)                        ? 0
                                   : scaled >= (float)ERUI_VECTOR_GRAD_LUT ? ERUI_VECTOR_GRAD_LUT - 1
@@ -694,6 +747,47 @@ static void emit_row(uint32_t color, const ERVectorGradient* gradient, int row_y
 
 /* Indices of edges crossing the current scanline (the active-edge table). */
 static int s_active[ERUI_VECTOR_MAX_EDGES];
+
+/** @brief Works out the screen corners of the active transform's box. */
+static void box_corners_update(void)
+{
+    const float layout_x[4] = {s_transform->box_x0, s_transform->box_x1, s_transform->box_x1, s_transform->box_x0};
+    const float layout_y[4] = {s_transform->box_y0, s_transform->box_y0, s_transform->box_y1, s_transform->box_y1};
+    for (int corner = 0; corner < 4; corner++)
+    {
+        s_box_x[corner] = layout_x[corner];
+        s_box_y[corner] = layout_y[corner];
+        point_to_screen(&s_box_x[corner], &s_box_y[corner]);
+    }
+}
+
+/**
+ * @brief The stretch of a scanline inside the transformed node box.
+ *
+ * The box is convex, so a scanline crosses it in one stretch. Spans are trimmed to it, which clips ink
+ * to the turned box the way the clip rect clips an unturned one.
+ *
+ * @return false when the scanline misses the box.
+ */
+static bool box_span(float sample_y, float* span_start, float* span_end)
+{
+    float low = VEC_UNBOUNDED, high = -VEC_UNBOUNDED;
+    for (int corner = 0; corner < 4; corner++)
+    {
+        const int next = (corner + 1) & 3;
+        const float y0 = s_box_y[corner], y1 = s_box_y[next];
+        if ((sample_y < y0) == (sample_y < y1))
+            continue;
+        const float x = s_box_x[corner] + (s_box_x[next] - s_box_x[corner]) * (sample_y - y0) / (y1 - y0);
+        if (x < low)
+            low = x;
+        if (x > high)
+            high = x;
+    }
+    *span_start = low;
+    *span_end = high;
+    return high > low;
+}
 
 /**
  * @brief Rasterizes an edge list into the clip box with anti-aliasing.
@@ -826,6 +920,9 @@ static void rasterize(const ERVecEdge* edges,
             }
             if (cross_count < 2)
                 continue;
+            float box_start = 0.0f, box_end = 0.0f;
+            if (s_transform && !box_span(sample_y, &box_start, &box_end))
+                continue;
             /* Insertion sort crossings by x (m is small in practice). */
             for (int cross_index = 1; cross_index < cross_count; cross_index++)
             {
@@ -846,8 +943,17 @@ static void rasterize(const ERVecEdge* edges,
             for (int cross_index = 0; cross_index < cross_count - 1; cross_index++)
             {
                 winding += s_cross_direction[cross_index];
-                if (rule_inside(winding, even_odd))
-                    cover_span(s_cross_x[cross_index], s_cross_x[cross_index + 1], subsample_weight, clip_x0, width);
+                if (!rule_inside(winding, even_odd))
+                    continue;
+                float span_start = s_cross_x[cross_index], span_end = s_cross_x[cross_index + 1];
+                if (s_transform)
+                {
+                    if (span_start < box_start)
+                        span_start = box_start;
+                    if (span_end > box_end)
+                        span_end = box_end;
+                }
+                cover_span(span_start, span_end, subsample_weight, clip_x0, width);
             }
         }
         if (s_row_high > s_row_low)
@@ -911,6 +1017,30 @@ static bool record_pass(uint8_t kind, int paint_index)
 }
 #endif /* ERUI_VECTOR_EDGE_CACHE */
 
+#if ERUI_VECTOR_EDGE_CACHE
+/** @brief Maps a just-recorded layout-space edge list (s_edges) to the screen in place, ready to rasterize. */
+static void recorded_edges_to_screen(void)
+{
+    if (!s_transform)
+        return;
+    for (int edge_index = 0; edge_index < s_edge_count; edge_index++)
+    {
+        ERVecEdge* edge = &s_edges[edge_index];
+        point_to_screen(&edge->x0, &edge->y0);
+        point_to_screen(&edge->x1, &edge->y1);
+        if (edge->y0 > edge->y1)
+        {
+            const float swap_x = edge->x0, swap_y = edge->y0;
+            edge->x0 = edge->x1;
+            edge->y0 = edge->y1;
+            edge->x1 = swap_x;
+            edge->y1 = swap_y;
+            edge->direction = -edge->direction;
+        }
+    }
+}
+#endif /* ERUI_VECTOR_EDGE_CACHE */
+
 /** @brief Builds closed fill edges from every subpath (into s_edges, honoring s_edge_y_top/s_edge_y_bottom). */
 static void fill_build(void)
 {
@@ -962,6 +1092,7 @@ static void fill_shape(uint32_t color,
             if (!record_pass(ER_VEC_PASS_FILL, paint_index))
                 s_recording_failed = true;
             /* The built edges are complete either way — rasterize them directly. */
+            recorded_edges_to_screen();
             rasterize(s_edges, s_edge_count, color, gradient, even_odd, clip_x0, clip_y0, clip_x1, clip_y1);
             return;
         }
@@ -997,8 +1128,9 @@ static void add_disc(float center_x, float center_y, float radius)
     if (!(radius > 0.0f))
         return;
     /* Capped before the cast: a stroke width from app geometry can run past the int range. */
-    int segment_count = radius < (float)VEC_DISC_SEGMENTS_MAX / VEC_DISC_SEGMENTS_PER_PX
-                            ? (int)(radius * VEC_DISC_SEGMENTS_PER_PX)
+    const float screen_radius = radius * s_detail;
+    int segment_count = screen_radius < (float)VEC_DISC_SEGMENTS_MAX / VEC_DISC_SEGMENTS_PER_PX
+                            ? (int)(screen_radius * VEC_DISC_SEGMENTS_PER_PX)
                             : VEC_DISC_SEGMENTS_MAX;
     if (segment_count < VEC_DISC_SEGMENTS_MIN)
         segment_count = VEC_DISC_SEGMENTS_MIN;
@@ -1209,7 +1341,7 @@ static void stroke_subpath(const VecSub* subpath, float stroke_width, int cap, i
     /* Merge a corner while the miter it produces stays within VEC_JOIN_TOLERANCE of the half-width:
      * |corner| = half_width / cos(t/2), so the bound is cos(t/2) >= half_width / (half_width + tol), and dot =
      * 2cos²(t/2) - 1. */
-    const float cos_limit = half_width / (half_width + VEC_JOIN_TOLERANCE);
+    const float cos_limit = half_width / (half_width + VEC_JOIN_TOLERANCE / s_detail);
     const float merge_dot = 2.0f * cos_limit * cos_limit - 1.0f;
 
     /* A CLOSE does not have to bring the path back to where it started, and when it does not there is
@@ -1410,6 +1542,7 @@ static void stroke_shape(uint32_t color,
         {
             if (!record_pass(ER_VEC_PASS_STROKE, paint_index))
                 s_recording_failed = true;
+            recorded_edges_to_screen();
             rasterize(s_edges, s_edge_count, color, gradient, 0, clip_x0, clip_y0, clip_x1, clip_y1);
             return;
         }
@@ -1426,6 +1559,43 @@ static void stroke_shape(uint32_t color,
 /*----------------------------------------------------------------------------------------------------------------------
  - Clip rejection
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief A clip box in the space geometry is built in. */
+typedef struct
+{
+    float x0, y0, x1, y1;
+} VecClip;
+
+/**
+ * @brief The clip box as the geometry sees it, for rejecting a shape before it is built.
+ *
+ * Without a transform that is the clip itself. With one it is the layout-space bounds of the clip, grown by a
+ * screen pixel first for the anti-aliasing fringe.
+ */
+static VecClip clip_in_build_space(int clip_x0, int clip_y0, int clip_x1, int clip_y1)
+{
+    VecClip clip = {(float)clip_x0, (float)clip_y0, (float)clip_x1, (float)clip_y1};
+    if (!s_transform)
+        return clip;
+    const float screen_x[4] = {clip.x0 - 1.0f, clip.x1 + 1.0f, clip.x1 + 1.0f, clip.x0 - 1.0f};
+    const float screen_y[4] = {clip.y0 - 1.0f, clip.y0 - 1.0f, clip.y1 + 1.0f, clip.y1 + 1.0f};
+    clip.x0 = clip.y0 = VEC_UNBOUNDED;
+    clip.x1 = clip.y1 = -VEC_UNBOUNDED;
+    for (int corner = 0; corner < 4; corner++)
+    {
+        float x = screen_x[corner], y = screen_y[corner];
+        point_to_layout(&x, &y);
+        if (x < clip.x0)
+            clip.x0 = x;
+        if (y < clip.y0)
+            clip.y0 = y;
+        if (x > clip.x1)
+            clip.x1 = x;
+        if (y > clip.y1)
+            clip.y1 = y;
+    }
+    return clip;
+}
 
 /**
  * @brief How far a paint's ink can reach outside the path itself, in pixels.
@@ -1474,7 +1644,7 @@ static float paint_margin(const ERVectorPaint* paint)
  * @param[in]  op_count  Tape length.
  * @param[in]  origin_x,origin_y  Node origin added to tape coordinates.
  * @param[in]  margin  Margin the paint adds around the path (paint_margin).
- * @param[in]  clip_x0,clip_y0,clip_x1,clip_y1  Clip box.
+ * @param[in]  clip    Clip box, in the space the geometry is built in (clip_in_build_space).
  * @param[out] end  Receives the tape index just past the run (only meaningful when skipping).
  *
  * @return true when the shape cannot touch the clip and may be skipped whole. False is always safe:
@@ -1486,14 +1656,11 @@ static bool shape_clipped_out(const float* ops,
                               int origin_x,
                               int origin_y,
                               float margin,
-                              int clip_x0,
-                              int clip_y0,
-                              int clip_x1,
-                              int clip_y1,
+                              const VecClip* clip,
                               int* end)
 {
-    const float reach_x0 = (float)clip_x0 - margin, reach_y0 = (float)clip_y0 - margin;
-    const float reach_x1 = (float)clip_x1 + margin, reach_y1 = (float)clip_y1 + margin;
+    const float reach_x0 = clip->x0 - margin, reach_y0 = clip->y0 - margin;
+    const float reach_x1 = clip->x1 + margin, reach_y1 = clip->y1 + margin;
     bool found_any = false;
     float bounds_x0 = VEC_UNBOUNDED, bounds_y0 = VEC_UNBOUNDED, bounds_x1 = -VEC_UNBOUNDED, bounds_y1 = -VEC_UNBOUNDED;
 
@@ -1690,9 +1857,44 @@ static bool arc_paint_ok(const ERVectorPaint* paint, const VecArcRun* arc)
     return true;
 }
 
+/**
+ * @brief Maps a matched arc run to the screen through the active transform.
+ *
+ * A circle stays a circle only under a rotation with a uniform scale, and the sector core cannot clip to a
+ * turned box, so the arc's ink has to sit inside the node box.
+ *
+ * @param[in,out] arc    The matched arc, in layout space; mapped in place.
+ * @param[in]     paint  The shape's paint.
+ *
+ * @return false when the sector core cannot draw it and the general path must.
+ */
+static bool arc_run_to_screen(VecArcRun* arc, const ERVectorPaint* paint)
+{
+    const float scale = sqrtf(s_transform->a * s_transform->a + s_transform->b * s_transform->b);
+    const float tolerance = VEC_SIMILARITY_EPSILON * scale;
+    if (!(scale > VEC_DEGENERATE_EPSILON) || !(fabsf(s_transform->a - s_transform->d) <= tolerance)
+        || !(fabsf(s_transform->b + s_transform->c) <= tolerance))
+        return false;
+    float reach = arc->radius;
+    if (((paint->stroke >> 24) & 0xFFU) != 0U && paint->stroke_width > 0.0f)
+        reach += paint->stroke_width * 0.5f;
+    if (arc->center_x - reach < s_transform->box_x0 || arc->center_y - reach < s_transform->box_y0
+        || arc->center_x + reach > s_transform->box_x1 || arc->center_y + reach > s_transform->box_y1)
+        return false;
+    point_to_screen(&arc->center_x, &arc->center_y);
+    arc->radius *= scale;
+    arc->start_deg = fmodf(arc->start_deg + atan2f(s_transform->b, s_transform->a) * ER_RAD2DEG, 360.0f);
+    return true;
+}
+
 /** @brief Paints a matched arc run through the analytic core: fill (disc) then stroke (ring). */
-static void
-arc_run_draw(const VecArcRun* arc, const ERVectorPaint* paint, int clip_x0, int clip_y0, int clip_x1, int clip_y1)
+static void arc_run_draw(const VecArcRun* arc,
+                         const ERVectorPaint* paint,
+                         float stroke_scale,
+                         int clip_x0,
+                         int clip_y0,
+                         int clip_x1,
+                         int clip_y1)
 {
     ERArcSector sector;
     memset(&sector, 0, sizeof(sector));
@@ -1715,7 +1917,7 @@ arc_run_draw(const VecArcRun* arc, const ERVectorPaint* paint, int clip_x0, int 
     }
     if (((paint->stroke >> 24) & 0xFFU) != 0U && paint->stroke_width > 0.0f)
     {
-        const float half_width = paint->stroke_width * 0.5f;
+        const float half_width = paint->stroke_width * 0.5f * stroke_scale;
         sector.outer_radius = arc->radius + half_width;
         sector.inner_radius = arc->radius - half_width;
         sector.cap = (paint->cap == ER_VECTOR_CAP_ROUND) ? ER_ARC_CAP_ROUND : ER_ARC_CAP_BUTT;
@@ -1803,6 +2005,7 @@ static void render_tape(const float* ops,
     /* origin_x, origin_y position the geometry; the clip box bounds the rasterize compute + painting (a sub-region
      * for an interactive update, or the full node box otherwise). */
     const int clip_left = clip_x0, clip_top = clip_y0, clip_right = clip_x1, clip_bottom = clip_y1;
+    const VecClip build_clip = clip_in_build_space(clip_x0, clip_y0, clip_x1, clip_y1);
 
     int op_index = 0;
     while (op_index < op_count)
@@ -1828,17 +2031,8 @@ static void render_tape(const float* ops,
         if (!VEC_RECORDING())
         {
             int run_end = 0;
-            if (shape_clipped_out(ops,
-                                  op_index,
-                                  op_count,
-                                  origin_x,
-                                  origin_y,
-                                  paint_margin(shape_paint),
-                                  clip_left,
-                                  clip_top,
-                                  clip_right,
-                                  clip_bottom,
-                                  &run_end))
+            if (shape_clipped_out(
+                    ops, op_index, op_count, origin_x, origin_y, paint_margin(shape_paint), &build_clip, &run_end))
             {
                 op_index = run_end;
                 continue;
@@ -1852,15 +2046,26 @@ static void render_tape(const float* ops,
          * angle/thickness ramps do not express. */
         if (shape_paint && shape_paint->fill_gradient == 0 && shape_paint->stroke_gradient == 0)
         {
-            VecArcRun arc_run;
-            if (arc_run_match(ops, op_index, op_count, origin_x, origin_y, &arc_run)
-                && arc_paint_ok(shape_paint, &arc_run))
+            VecArcRun arc_run, screen_arc;
+            float stroke_scale = 1.0f;
+            bool analytic = arc_run_match(ops, op_index, op_count, origin_x, origin_y, &arc_run)
+                            && arc_paint_ok(shape_paint, &arc_run);
+            if (analytic)
+            {
+                screen_arc = arc_run;
+                if (s_transform)
+                {
+                    analytic = arc_run_to_screen(&screen_arc, shape_paint);
+                    stroke_scale = screen_arc.radius / arc_run.radius;
+                }
+            }
+            if (analytic)
             {
 #if ERUI_VECTOR_EDGE_CACHE
                 if (VEC_RECORDING() && !record_arc(&arc_run, paint_index, shape_paint))
                     s_recording_failed = true;
 #endif
-                arc_run_draw(&arc_run, shape_paint, clip_left, clip_top, clip_right, clip_bottom);
+                arc_run_draw(&screen_arc, shape_paint, stroke_scale, clip_left, clip_top, clip_right, clip_bottom);
                 s_analytic_arcs++;
                 op_index = arc_run.end;
                 continue;
@@ -2028,8 +2233,14 @@ void er_vector_render(const float* ops,
  * Colors, gradients and fill rules come from the CURRENT paint table, not the recording — the store
  * invalidates the entry on any tape/paint change, so they are the same ones the recording saw; reading
  * them fresh just avoids duplicating paint state into the entry.
+ *
+ * A transformed entry holds layout-space edges at the origin it was recorded at: each pass is shifted to
+ * the current origin and mapped through the matrix into s_edges, then rasterized from there.
+ *
+ * @return false, having painted nothing, when the entry holds an analytic arc the current matrix cannot
+ *         draw as one; the caller renders the tape instead.
  */
-static void replay_cache(const ERVecCache* entry,
+static bool replay_cache(const ERVecCache* entry,
                          const ERVectorPaint* paints,
                          int paint_count,
                          const ERVectorGradient* gradients,
@@ -2044,17 +2255,39 @@ static void replay_cache(const ERVecCache* entry,
 #if !ERUI_GRADIENT
     (void)gradients;
     (void)gradient_count;
-    (void)origin_x;
-    (void)origin_y;
 #endif
-    /* One pixel of slack around the stored bounds: coverage rounds outward to pixel cells. */
-    const float reach_x0 = (float)clip_x0 - 1.0f, reach_y0 = (float)clip_y0 - 1.0f;
-    const float reach_x1 = (float)clip_x1 + 1.0f, reach_y1 = (float)clip_y1 + 1.0f;
+    const bool transformed = s_transform != 0;
+    /* A transformed entry replays at any origin, so its geometry is shifted from the one it was built at. */
+    const float shift_x = transformed ? (float)(origin_x - entry->origin_x) : 0.0f;
+    const float shift_y = transformed ? (float)(origin_y - entry->origin_y) : 0.0f;
+#if ERUI_VECTOR_ANALYTIC_ARC
+    if (transformed)
+    {
+        for (int pass_index = 0; pass_index < entry->pass_count; pass_index++)
+        {
+            const ERVecPass* pass = &entry->passes[pass_index];
+            if (pass->kind != ER_VEC_PASS_ARC || (int)pass->paint >= paint_count)
+                continue;
+            VecArcRun arc = {0};
+            arc.center_x = pass->arc_center_x + shift_x;
+            arc.center_y = pass->arc_center_y + shift_y;
+            arc.radius = pass->arc_radius;
+            if (!arc_run_to_screen(&arc, &paints[pass->paint]))
+                return false;
+        }
+    }
+#endif
+    /* One pixel of slack around the stored bounds: coverage rounds outward to pixel cells. The
+     * layout-space clip of a transformed node already has it. */
+    const VecClip build_clip = clip_in_build_space(clip_x0, clip_y0, clip_x1, clip_y1);
+    const float slack = transformed ? 0.0f : 1.0f;
+    const float reach_x0 = build_clip.x0 - slack, reach_y0 = build_clip.y0 - slack;
+    const float reach_x1 = build_clip.x1 + slack, reach_y1 = build_clip.y1 + slack;
     for (int pass_index = 0; pass_index < entry->pass_count; pass_index++)
     {
         const ERVecPass* pass = &entry->passes[pass_index];
-        if (pass->bounds_x1 <= reach_x0 || pass->bounds_x0 >= reach_x1 || pass->bounds_y1 <= reach_y0
-            || pass->bounds_y0 >= reach_y1)
+        if (pass->bounds_x1 + shift_x <= reach_x0 || pass->bounds_x0 + shift_x >= reach_x1
+            || pass->bounds_y1 + shift_y <= reach_y0 || pass->bounds_y0 + shift_y >= reach_y1)
             continue; /* this pass cannot touch the clip — the cached form of shape_clipped_out */
         if ((int)pass->paint >= paint_count)
             continue; /* unreachable while invalidation is sound; never index past the table */
@@ -2063,14 +2296,17 @@ static void replay_cache(const ERVecCache* entry,
         {
 #if ERUI_VECTOR_ANALYTIC_ARC
             VecArcRun arc;
-            arc.center_x = pass->arc_center_x;
-            arc.center_y = pass->arc_center_y;
+            arc.center_x = pass->arc_center_x + shift_x;
+            arc.center_y = pass->arc_center_y + shift_y;
             arc.radius = pass->arc_radius;
             arc.start_deg = pass->arc_start_deg;
             arc.sweep_deg = pass->arc_sweep_deg;
             arc.full = pass->arc_full;
             arc.end = 0; /* tape position; meaningless on replay */
-            arc_run_draw(&arc, paint, clip_x0, clip_y0, clip_x1, clip_y1);
+            float stroke_scale = 1.0f;
+            if (transformed && arc_run_to_screen(&arc, paint))
+                stroke_scale = arc.radius / pass->arc_radius;
+            arc_run_draw(&arc, paint, stroke_scale, clip_x0, clip_y0, clip_x1, clip_y1);
             s_analytic_arcs++;
 #endif
             continue;
@@ -2085,9 +2321,30 @@ static void replay_cache(const ERVecCache* entry,
                                 origin_y,
                                 &resolved);
 #endif
+        const ERVecEdge* edges = entry->edges + pass->start;
+        int edge_count = pass->count;
+        if (transformed)
+        {
+            s_edge_count = 0;
+            s_edge_truncated = false;
+            s_edge_y_top = (float)clip_y0;
+            s_edge_y_bottom = (float)clip_y1;
+            for (int edge_index = 0; edge_index < pass->count; edge_index++)
+            {
+                const ERVecEdge* edge = &edges[edge_index];
+                const float x0 = edge->x0 + shift_x, y0 = edge->y0 + shift_y;
+                const float x1 = edge->x1 + shift_x, y1 = edge->y1 + shift_y;
+                if (edge->direction > 0)
+                    edge_add(x0, y0, x1, y1);
+                else
+                    edge_add(x1, y1, x0, y0);
+            }
+            edges = s_edges;
+            edge_count = s_edge_count;
+        }
         if (pass->kind == ER_VEC_PASS_FILL)
-            rasterize(entry->edges + pass->start,
-                      pass->count,
+            rasterize(edges,
+                      edge_count,
                       paint->fill,
                       gradient,
                       paint->fill_rule == ER_VECTOR_FILL_EVENODD,
@@ -2096,20 +2353,32 @@ static void replay_cache(const ERVecCache* entry,
                       clip_x1,
                       clip_y1);
         else
-            rasterize(entry->edges + pass->start,
-                      pass->count,
-                      paint->stroke,
-                      gradient,
-                      0,
-                      clip_x0,
-                      clip_y0,
-                      clip_x1,
-                      clip_y1);
+            rasterize(edges, edge_count, paint->stroke, gradient, 0, clip_x0, clip_y0, clip_x1, clip_y1);
     }
+    return true;
 }
 #endif /* ERUI_VECTOR_EDGE_CACHE */
 
-void er_vector_render_slot(int slot, int origin_x, int origin_y, int clip_x0, int clip_y0, int clip_x1, int clip_y1)
+/** @brief How much finer than a layout pixel a transform needs curves flattened: 1, 2, 4 or 8. */
+static int transform_detail(const ERVectorTransform* transform)
+{
+    const float scale_x = sqrtf(transform->a * transform->a + transform->b * transform->b);
+    const float scale_y = sqrtf(transform->c * transform->c + transform->d * transform->d);
+    const float scale = scale_x > scale_y ? scale_x : scale_y;
+    int detail = 1;
+    while (detail < VEC_DETAIL_MAX && scale > (float)detail * VEC_DETAIL_STEP)
+        detail *= 2;
+    return detail;
+}
+
+void er_vector_render_slot(int slot,
+                           int origin_x,
+                           int origin_y,
+                           const ERVectorTransform* transform,
+                           int clip_x0,
+                           int clip_y0,
+                           int clip_x1,
+                           int clip_y1)
 {
     int op_count = 0, paint_count = 0, gradient_count = 0;
     const float* ops = er_vector_slot_ops(slot, &op_count);
@@ -2119,45 +2388,55 @@ void er_vector_render_slot(int slot, int origin_x, int origin_y, int clip_x0, in
         return;
     if (clip_x1 <= clip_x0 || clip_y1 <= clip_y0)
         return;
-#if ERUI_VECTOR_EDGE_CACHE
-    const ERVecCache* hit = er_vector_cache_lookup(slot, origin_x, origin_y);
-    if (hit)
+    /* Cache key: 0 for screen-space edges, the flattening detail for a transformed node's layout-space ones. */
+    int detail = 0;
+    if (transform)
     {
-        replay_cache(hit,
-                     paints,
-                     paint_count,
-                     gradients,
-                     gradient_count,
-                     origin_x,
-                     origin_y,
-                     clip_x0,
-                     clip_y0,
-                     clip_x1,
-                     clip_y1);
-        return;
+        detail = transform_detail(transform);
+        s_transform = transform;
+        s_detail = (float)detail;
+        box_corners_update();
     }
-    /* Miss. Maybe record this render — begin() only grants an entry for a tape that stayed unchanged
-     * since the previous render (two-touch), so an animated node never pays the record-mode build. */
-    s_recording = er_vector_cache_begin(slot, origin_x, origin_y);
-    s_recording_failed = false;
-    render_tape(ops,
-                op_count,
-                paints,
-                paint_count,
-                gradients,
-                gradient_count,
-                origin_x,
-                origin_y,
-                clip_x0,
-                clip_y0,
-                clip_x1,
-                clip_y1);
-    if (s_recording)
+#if ERUI_VECTOR_EDGE_CACHE
+    const ERVecCache* hit = er_vector_cache_lookup(slot, origin_x, origin_y, detail);
+    const bool replayed = hit
+                          && replay_cache(hit,
+                                          paints,
+                                          paint_count,
+                                          gradients,
+                                          gradient_count,
+                                          origin_x,
+                                          origin_y,
+                                          clip_x0,
+                                          clip_y0,
+                                          clip_x1,
+                                          clip_y1);
+    if (!replayed)
     {
-        er_vector_cache_finish(s_recording, !s_recording_failed);
-        s_recording = 0;
+        /* Miss. Maybe record this render — begin() only grants an entry for a tape that stayed unchanged
+         * since the previous render (two-touch), so an animated node never pays the record-mode build. */
+        s_recording = hit ? 0 : er_vector_cache_begin(slot, origin_x, origin_y, detail);
+        s_recording_failed = false;
+        render_tape(ops,
+                    op_count,
+                    paints,
+                    paint_count,
+                    gradients,
+                    gradient_count,
+                    origin_x,
+                    origin_y,
+                    clip_x0,
+                    clip_y0,
+                    clip_x1,
+                    clip_y1);
+        if (s_recording)
+        {
+            er_vector_cache_finish(s_recording, !s_recording_failed);
+            s_recording = 0;
+        }
     }
 #else
+    (void)detail;
     render_tape(ops,
                 op_count,
                 paints,
@@ -2171,4 +2450,6 @@ void er_vector_render_slot(int slot, int origin_x, int origin_y, int clip_x0, in
                 clip_x1,
                 clip_y1);
 #endif
+    s_transform = 0;
+    s_detail = 1.0f;
 }

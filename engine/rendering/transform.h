@@ -485,6 +485,33 @@ static inline bool er_node_has_complex_transform(const ERNode* node)
 }
 
 /**
+ * @brief Whether a node paints its own transform, with no capture and so at any size.
+ *
+ * An `<Svg>` under a 2D transform: its rasteriser takes the matrix. The damage pre-pass, the render pass and
+ * hit-testing all ask this, so they agree on which nodes need the transform source and which never do.
+ * A 3D transform still goes through the capture.
+ *
+ * @param[in] node  Node to inspect.
+ *
+ * @return true when the node's transform reaches the screen without the transform source.
+ */
+static inline bool er_node_transforms_directly(const ERNode* node)
+{
+#if ERUI_TRANSFORMS_FULL
+    if (node->type != ER_NODE_VECTOR || !er_node_has_complex_transform(node))
+        return false;
+#if ERUI_3D_TRANSFORMS
+    if (er_transform_is_3d(node))
+        return false;
+#endif
+    return true;
+#else
+    (void)node;
+    return false;
+#endif
+}
+
+/**
  * @brief Whether a node's translate is a plain pixel offset that moves its whole subtree.
  *
  * @param[in] node  Node to inspect.
@@ -504,9 +531,9 @@ static inline bool er_node_has_offset_translate(const ERNode* node)
  * @brief Whether a node could hold the transform capture — the geometry half of the admission test.
  *
  * er_node_has_complex_transform() plus the source-size limit: the two things about a node ITSELF that decide
- * whether render_tree captures it. The two remaining reasons a capture fails are not properties of the node
- * — a singular matrix (er_transform_is_invertible) and a capture already active for a transformed ancestor —
- * so a caller that needs the exact answer asks those separately.
+ * whether render_tree captures it. A node that transforms directly never captures. The two remaining reasons a capture
+ * fails are not properties of the node — a singular matrix (er_transform_is_invertible) and a capture already active
+ * for a transformed ancestor — so a caller that needs the exact answer asks those separately.
  *
  * @param[in] node  Node to inspect.
  *
@@ -514,7 +541,7 @@ static inline bool er_node_has_offset_translate(const ERNode* node)
  */
 static inline bool er_node_can_capture_transform(const ERNode* node)
 {
-    return er_node_has_complex_transform(node)
+    return er_node_has_complex_transform(node) && !er_node_transforms_directly(node)
            && er_transform_source_fits((int)node->animated.width, (int)node->animated.height);
 }
 

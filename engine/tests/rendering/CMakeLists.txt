@@ -160,6 +160,14 @@ target_include_directories(test_vector_cache PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_vector_cache COMMAND test_vector_cache)
 
+add_executable(test_vector_transform test_vector_transform.c)
+target_link_libraries(test_vector_transform PRIVATE embedded-react)
+# test_vector_transform needs engine/rendering for vector.h (a private engine header), and engine/core for
+# renderer_internal.h (er_force_full_repaint) and the er_diagnostics.h vector.h pulls in.
+target_include_directories(test_vector_transform PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_vector_transform COMMAND test_vector_transform)
+
 add_executable(test_display_none test_display_none.c)
 target_link_libraries(test_display_none PRIVATE embedded-react)
 add_test(NAME rendering_display_none COMMAND test_display_none)

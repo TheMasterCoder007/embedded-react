@@ -62,6 +62,9 @@ rendered in band passes rather than failing. A transformed subtree is the one ca
 banded, because a rotation reads across its whole source, so the transform buffer caps the largest
 node you can rotate or scale.
 
+An `<Svg>` is the exception. Its rasteriser takes the transform and applies it to the shapes, so a
+rotated or scaled `<Svg>` uses no buffer, has no size cap and works with banding.
+
 **Present.** The backend gets the damaged rows. A full-framebuffer backend flushes those
 rectangles to the panel, one transfer window per rectangle on drivers that support it. A banded
 backend never had a full framebuffer: the engine rendered the damage as full-width strips through
@@ -76,7 +79,8 @@ a small band buffer, and the panel's own memory kept the rest of the picture.
   damages only what it moves. The same motion done with `setState` every 16 ms re-renders, re-diffs,
   and re-commits each time.
 - **Keep transformed and translucent subtrees small.** They are the only things that go through
-  scratch memory, and a change inside a transformed subtree repaints the whole subtree.
+  scratch memory, and a change inside a transformed subtree repaints the whole subtree. A large
+  drawing that turns, like a dial face, is best as one `<Svg>`, which transforms without the buffer.
 - **Hide pages, don't unmount them.** `display: 'none'` drops a subtree out of layout, render, and
   hit-testing while keeping its nodes and state. It costs nothing per frame, and switching back is a
   repaint rather than a rebuild.

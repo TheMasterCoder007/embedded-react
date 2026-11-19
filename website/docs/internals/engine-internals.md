@@ -47,7 +47,8 @@ buffer first; a render pass never allocates.
 - **Transform source**: one `ERUI_TRANSFORM_WIDTH × ERUI_TRANSFORM_HEIGHT` buffer holding the untransformed subtree.
   It cannot be banded (a rotation reads across the whole source), so it caps the largest node you
   can rotate or scale. Damage inside a transformed subtree is whole-node: a change to one child
-  repaints the node's entire transformed box.
+  repaints the node's entire transformed box. An `<Svg>` under a 2D transform does not use it: the
+  vector rasteriser applies the matrix to the shapes' edges and clips them to the turned box.
 - **Shadow plane**: `ERUI_SCRATCH_WIDTH × ERUI_SCRATCH_HEIGHT` bytes of coverage (`ERUI_SHADOWS` only).
 - **Fade cache** (optional, `ERUI_FADE_CACHE_WIDTH` and `ERUI_FADE_CACHE_HEIGHT`): keeps the last translucent group's composite so
   a pure opacity animation is one blend per frame instead of a re-render, roughly double the frame
@@ -221,6 +222,10 @@ sibling's damage crossing it, or a multi-buffer replay) skips the tape parse, fl
 outlining. It only records a tape that survived unchanged between renders, so an animated dial never
 pays for it; a node whose geometry does not fit (a gauge face with 60 round-capped ticks is about
 3,000 edges) keeps rendering uncached, and a debug build says which knob to raise.
+
+A transformed `<Svg>` is cached untransformed, and each replay applies the current matrix. A drawing
+that turns every frame is flattened and stroked once. Its entry also keeps the horizontal edges an
+unturned drawing drops, so it can hold more edges than the same drawing at rest.
 
 On a PSRAM target, the per-node storage (`vector_store.c`) and the edge cache (`vector_cache.c`) can
 live in external RAM, since only the hot scratch in `vector.c` is touched per pixel; the ESP32-S3
