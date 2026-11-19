@@ -28,7 +28,7 @@ restarting anything.
 The canvas renders 1:1, with no scaling, and by default fills the browser window. To see your app
 the way a specific display will show it, open the **gear button** in the bottom-left corner:
 
-- **Size** offers common panel resolutions (800×480, 1024×600, 480×320, 320×240, 240×320) or a
+- **Size** offers common panel resolutions (1280×800, 1280×480, 1024×600, 800×480, 320×240) or a
   custom width and height. **Lock** pins the canvas to that size.
 - **Frame** draws a device bezel around a locked canvas. It is cosmetic only.
 - **Rotate** turns the app 90, 180 or 270 degrees on the panel, for a display that scans against the

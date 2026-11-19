@@ -378,7 +378,7 @@ subscription with `remove()`. A value read from `screen` or `Dimensions.get()` o
 not read again, so size a layout that has to follow the turn from the hook.
 
 The browser simulator does the same on a resize for an app that listens to `Dimensions` or reads
-`useWindowDimensions()`. An app that doesn't picked its layout from `screen` as it started, so the
+`useWindowDimensions()`. Any other app picked its layout from `screen` as it started, so the
 simulator starts it again at the new size.
 
 **Flow B:** both are worked out at boot exactly as `screen` is, so a breakpoint written with either

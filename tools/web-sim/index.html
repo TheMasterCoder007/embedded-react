@@ -179,11 +179,11 @@
         // "Fit to window" (the full viewport) is the default — the browser's responsive/device toolbar drives
         // the board directly. Presets lock to a real panel size.
         const PRESETS = [
-          [800, 480],
+          [1280, 800],
+          [1280, 480],
           [1024, 600],
-          [480, 320],
+          [800, 480],
           [320, 240],
-          [240, 320],
         ];
         const fitOption = document.createElement('option');
         fitOption.value = 'fit';
@@ -195,6 +195,15 @@
           option.textContent = `${presetWidth} × ${presetHeight}`;
           presetSelect.appendChild(option);
         }
+        // A locked size that isn't a preset: typed in, or a preset turned a quarter turn.
+        const customOption = document.createElement('option');
+        customOption.value = 'custom';
+        customOption.textContent = 'Custom';
+        presetSelect.appendChild(customOption);
+        const lockedValue = (lockedWidth, lockedHeight) =>
+          PRESETS.some(([presetWidth, presetHeight]) => presetWidth === lockedWidth && presetHeight === lockedHeight)
+            ? `${lockedWidth}x${lockedHeight}`
+            : 'custom';
 
         toggle.addEventListener('click', () => panel.classList.toggle('collapsed'));
 
@@ -243,7 +252,7 @@
             screenHeight = clamp(queryHeight);
           }
         }
-        presetSelect.value = mode === 'fit' ? 'fit' : PRESETS.some(([presetWidth, presetHeight]) => presetWidth === screenWidth && presetHeight === screenHeight) ? `${screenWidth}x${screenHeight}` : 'fit';
+        presetSelect.value = mode === 'fit' ? 'fit' : lockedValue(screenWidth, screenHeight);
 
         // ?rotation=90|180|270 mounts the panel behind the board turned; the board keeps its size.
         const ROTATIONS = [0, 90, 180, 270];
@@ -353,7 +362,7 @@
           }
           if (turned) {
             mode = 'fixed';
-            presetSelect.value = PRESETS.some(([presetWidth, presetHeight]) => presetWidth === newWidth && presetHeight === newHeight) ? `${newWidth}x${newHeight}` : 'fit';
+            presetSelect.value = lockedValue(newWidth, newHeight);
           }
           syncCanvas();
         });
@@ -376,6 +385,10 @@
           if (presetSelect.value === 'fit') {
             mode = 'fit';
             applySize(...stageSize());
+          } else if (presetSelect.value === 'custom') {
+            // Locks the size it has.
+            mode = 'fixed';
+            presetSelect.value = lockedValue(width, height);
           } else {
             mode = 'fixed';
             applySize(...presetSelect.value.split('x').map((part) => parseInt(part, 10)));
@@ -384,10 +397,8 @@
         });
         document.getElementById('apply').addEventListener('click', () => {
           mode = 'fixed';
-          presetSelect.value = PRESETS.some(([presetWidth, presetHeight]) => presetWidth === +widthInput.value && presetHeight === +heightInput.value)
-            ? `${+widthInput.value}x${+heightInput.value}`
-            : 'fit';
           applySize(+widthInput.value, +heightInput.value);
+          presetSelect.value = lockedValue(width, height);
           syncCanvas();
         });
         // Device-frame chrome only makes sense at a locked size, so enabling it locks the current size.
@@ -395,7 +406,7 @@
           framed = frameCheckbox.checked;
           if (framed && mode === 'fit') {
             mode = 'fixed';
-            presetSelect.value = PRESETS.some(([presetWidth, presetHeight]) => presetWidth === width && presetHeight === height) ? `${width}x${height}` : 'fit';
+            presetSelect.value = lockedValue(width, height);
           }
           syncCanvas();
         });
