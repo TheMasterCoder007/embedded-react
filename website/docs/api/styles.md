@@ -110,9 +110,11 @@ transform only as `Animated.Value`s on `scale`, `scaleX`, `scaleY`, `translateX`
 `rotate`/`rotateZ`; a static transform, or a static entry beside an animated one, is rejected.
 
 An `<Svg>` transforms directly: its shapes are drawn through the transform, at any size, and strokes
-and gradients turn and scale with them. Every other transformed subtree renders through the transform
-scratch buffer, whose size caps the largest node that can rotate or scale; see
-[Memory](../guides/memory.md). An `<Svg>` under a 3D transform uses the buffer too.
+and gradients turn and scale with them. An `<Image>` transforms directly too: its asset is sampled
+through the transform, at any size, with its `resizeMode` and `tintColor` applied. Every other
+transformed subtree renders through the transform scratch buffer, whose size caps the largest node
+that can rotate or scale; see [Memory](../guides/memory.md). The buffer is also used by an `<Svg>` or
+`<Image>` under a 3D transform, and by an `<Image>` with `resizeMode: 'repeat'` or rounded corners.
 
 ## Shadow
 

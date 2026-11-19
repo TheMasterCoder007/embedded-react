@@ -29,6 +29,18 @@
 /** @brief The alpha byte of a fully opaque ARGB8888 pixel. */
 #define ARGB_OPAQUE_ALPHA 0xFF000000u
 
+/* The transformed sampler steps through the source in 32.32 fixed point; the top 8 fraction bits are the
+ * bilinear weight. */
+#define SAMPLE_FRACTION_BITS 32
+#define SAMPLE_FIXED_ONE 4294967296.0f
+#define SAMPLE_FIXED_UNIT ((int64_t)1 << SAMPLE_FRACTION_BITS)
+#define SAMPLE_WEIGHT_SHIFT 24
+#define SAMPLE_WEIGHT_ONE 256u
+#define SAMPLE_WEIGHT_HALF ((int64_t)1 << 23)
+/** @brief The largest step per screen pixel the sampler takes. Past it the image is thinner than a pixel, and
+ *         below it every position on a row fits the fixed-point range. */
+#define SAMPLE_STEP_MAX 4096.0f
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -51,6 +63,21 @@ typedef struct
     int radius_bottom_left;  /**< @see radius_top_left */
     bool rounded;            /**< False when every radius is 0 or there is no box: rows blit whole, as before. */
 } ImgMask;
+
+/**
+ * @brief Where a resize mode puts an image: a source crop and the destination rectangle it fills.
+ */
+typedef struct
+{
+    int source_x;           /**< Left edge of the source crop. */
+    int source_y;           /**< Top edge of the source crop. */
+    int source_width;       /**< Width of the source crop. */
+    int source_height;      /**< Height of the source crop. */
+    int destination_x;      /**< Destination left edge. */
+    int destination_y;      /**< Destination top edge. */
+    int destination_width;  /**< Destination width. */
+    int destination_height; /**< Destination height. */
+} ImgPlacement;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
@@ -619,6 +646,351 @@ static void render_region(const ImageEntry* image,
     }
 }
 
+/**
+ * @brief Resolves `stretch`, `cover`, `contain` and `center` into a source crop and a destination rectangle.
+ *
+ * `repeat` is not one placement; it resolves as `stretch` here and the caller tiles it.
+ *
+ * @param[in]  image      Source image entry.
+ * @param[in]  mode       Resize mode.
+ * @param[in]  x          Content box left edge.
+ * @param[in]  y          Content box top edge.
+ * @param[in]  width      Content box width.
+ * @param[in]  height     Content box height.
+ * @param[out] placement  Receives the crop and the destination.
+ */
+static void
+place_image(const ImageEntry* image, ERResizeMode mode, int x, int y, int width, int height, ImgPlacement* placement)
+{
+    placement->source_x = 0;
+    placement->source_y = 0;
+    placement->source_width = image->width;
+    placement->source_height = image->height;
+    placement->destination_x = x;
+    placement->destination_y = y;
+    placement->destination_width = width;
+    placement->destination_height = height;
+
+    switch (mode)
+    {
+        default:
+        case ER_RESIZE_STRETCH:
+            break;
+
+        case ER_RESIZE_COVER:
+        {
+            /* Scale so the image fills the destination, cropping the longer axis. */
+            int crop_width, crop_height;
+            if (width * image->height >= height * image->width)
+            {
+                crop_width = image->width;
+                crop_height = (height * image->width + width / 2) / width;
+            }
+            else
+            {
+                crop_height = image->height;
+                crop_width = (width * image->height + height / 2) / height;
+            }
+            if (crop_width < 1)
+                crop_width = 1;
+            if (crop_height < 1)
+                crop_height = 1;
+            placement->source_x = (image->width - crop_width) / 2;
+            placement->source_y = (image->height - crop_height) / 2;
+            placement->source_width = crop_width;
+            placement->source_height = crop_height;
+            break;
+        }
+
+        case ER_RESIZE_CONTAIN:
+        {
+            /* Scale to fit entirely inside the destination, preserving aspect ratio. */
+            int scaled_width, scaled_height;
+            if (width * image->height <= height * image->width)
+            {
+                scaled_width = width;
+                scaled_height = (width * image->height + image->width / 2) / image->width;
+            }
+            else
+            {
+                scaled_height = height;
+                scaled_width = (height * image->width + image->height / 2) / image->height;
+            }
+            if (scaled_width < 1)
+                scaled_width = 1;
+            if (scaled_height < 1)
+                scaled_height = 1;
+            placement->destination_x = x + (width - scaled_width) / 2;
+            placement->destination_y = y + (height - scaled_height) / 2;
+            placement->destination_width = scaled_width;
+            placement->destination_height = scaled_height;
+            break;
+        }
+
+        case ER_RESIZE_CENTER:
+        {
+            /* Display at original size, centered; clip to node bounds. */
+            const int visible_width = (image->width < width) ? image->width : width;
+            const int visible_height = (image->height < height) ? image->height : height;
+            placement->source_x = (image->width > width) ? (image->width - width) / 2 : 0;
+            placement->source_y = (image->height > height) ? (image->height - height) / 2 : 0;
+            placement->source_width = visible_width;
+            placement->source_height = visible_height;
+            placement->destination_x = x + ((image->width < width) ? (width - image->width) / 2 : 0);
+            placement->destination_y = y + ((image->height < height) ? (height - image->height) / 2 : 0);
+            placement->destination_width = visible_width;
+            placement->destination_height = visible_height;
+            break;
+        }
+    }
+}
+
+#if ERUI_TRANSFORMS_FULL
+
+/**
+ * @brief Blends two premultiplied ARGB8888 pixels. weight is 0 to 255, out of 256, toward @p to.
+ */
+static inline uint32_t mix_pixels(uint32_t from, uint32_t to, uint32_t weight)
+{
+    const uint32_t keep = SAMPLE_WEIGHT_ONE - weight;
+    const uint32_t alpha_green =
+        (((from >> 8) & 0x00FF00FFu) * keep + ((to >> 8) & 0x00FF00FFu) * weight) & 0xFF00FF00u;
+    const uint32_t red_blue = (((from & 0x00FF00FFu) * keep + (to & 0x00FF00FFu) * weight) >> 8) & 0x00FF00FFu;
+    return alpha_green | red_blue;
+}
+
+/**
+ * @brief Samples a source crop bilinearly at a fixed-point position, clamped to the crop.
+ *
+ * @param[in] image     Source image entry.
+ * @param[in] sample_x  Source X, in SAMPLE_FRACTION_BITS fixed point.
+ * @param[in] sample_y  Source Y, in SAMPLE_FRACTION_BITS fixed point.
+ * @param[in] first_x   First column of the crop.
+ * @param[in] first_y   First row of the crop.
+ * @param[in] last_x    Last column of the crop.
+ * @param[in] last_y    Last row of the crop.
+ *
+ * @return The sampled premultiplied ARGB8888 pixel.
+ */
+static inline uint32_t sample_crop(
+    const ImageEntry* image, int64_t sample_x, int64_t sample_y, int first_x, int first_y, int last_x, int last_y)
+{
+    int x0 = (int)(sample_x >> SAMPLE_FRACTION_BITS);
+    int y0 = (int)(sample_y >> SAMPLE_FRACTION_BITS);
+    uint32_t weight_x = (uint32_t)sample_x >> SAMPLE_WEIGHT_SHIFT;
+    uint32_t weight_y = (uint32_t)sample_y >> SAMPLE_WEIGHT_SHIFT;
+    if (x0 < first_x)
+    {
+        x0 = first_x;
+        weight_x = 0u;
+    }
+    else if (x0 >= last_x)
+    {
+        x0 = last_x;
+        weight_x = 0u;
+    }
+    if (y0 < first_y)
+    {
+        y0 = first_y;
+        weight_y = 0u;
+    }
+    else if (y0 >= last_y)
+    {
+        y0 = last_y;
+        weight_y = 0u;
+    }
+
+    uint32_t top = fetch_px(image, x0, y0);
+    if (weight_x != 0u)
+        top = mix_pixels(top, fetch_px(image, x0 + 1, y0), weight_x);
+    if (weight_y == 0u)
+        return top;
+    uint32_t bottom = fetch_px(image, x0, y0 + 1);
+    if (weight_x != 0u)
+        bottom = mix_pixels(bottom, fetch_px(image, x0 + 1, y0 + 1), weight_x);
+    return mix_pixels(top, bottom, weight_y);
+}
+
+/**
+ * @brief How much of a destination pixel an axis of the image covers, 0 to SAMPLE_WEIGHT_ONE.
+ *
+ * The image fades over the pixel outside each edge, as a bilinear read past the edge of a buffer does.
+ *
+ * @param[in] position  Destination-local position, in SAMPLE_FRACTION_BITS fixed point.
+ * @param[in] extent    Destination length along the axis.
+ */
+static inline uint32_t axis_coverage(int64_t position, int extent)
+{
+    const int whole = (int)(position >> SAMPLE_FRACTION_BITS);
+    const uint32_t weight = (uint32_t)position >> SAMPLE_WEIGHT_SHIFT;
+    if (whole < -1 || whole >= extent)
+        return 0u;
+    if (whole == -1)
+        return weight;
+    if (whole == extent - 1)
+        return SAMPLE_WEIGHT_ONE - weight;
+    return SAMPLE_WEIGHT_ONE;
+}
+
+/**
+ * @brief Narrows a row's columns to those where one axis of the inverse map lands on the image.
+ *
+ * Keeps a column either side for rounding; the pixel loop drops what has no coverage.
+ *
+ * @param[in]     origin  Destination-local position at column 0.
+ * @param[in]     step    Change in position per column.
+ * @param[in]     extent  Destination length along the axis.
+ * @param[in,out] start   First column.
+ * @param[in,out] end     One past the last column.
+ *
+ * @return false when no column is left.
+ */
+static bool narrow_columns(float origin, float step, int extent, int* start, int* end)
+{
+    if (step == 0.0f)
+        return origin > -1.0f && origin < (float)extent;
+    float first = (-1.0f - origin) / step;
+    float last = ((float)extent - origin) / step;
+    if (first > last)
+    {
+        const float swap = first;
+        first = last;
+        last = swap;
+    }
+    first -= 1.0f;
+    last += 1.0f;
+    /* Written to fail on NaN. */
+    if (!(first < (float)*end && last >= (float)*start))
+        return false;
+    if (first > (float)*start)
+        *start = (int)floorf(first);
+    if (last < (float)(*end - 1))
+        *end = (int)floorf(last) + 1;
+    return *start < *end;
+}
+
+/** @brief Converts a position to SAMPLE_FRACTION_BITS fixed point, rounded to the nearest bilinear weight. */
+static inline int64_t to_fixed(float position)
+{
+    return (int64_t)(position * SAMPLE_FIXED_ONE) + SAMPLE_WEIGHT_HALF;
+}
+
+/** @brief Divides, rounding up. The divisor is positive. */
+static inline int64_t divide_up(int64_t value, int64_t divisor)
+{
+    return value > 0 ? (value + divisor - 1) / divisor : -((-value) / divisor);
+}
+
+/**
+ * @brief Narrows a row's columns to those where a stepped position stays inside [low, high).
+ *
+ * Exact, so the columns left can be sampled with no bounds checks.
+ *
+ * @param[in]     base   Position at column 0, in fixed point.
+ * @param[in]     step   Change in position per column.
+ * @param[in]     low    Least position allowed.
+ * @param[in]     high   One past the greatest position allowed.
+ * @param[in,out] start  First column.
+ * @param[in,out] end    One past the last column; equal to start when none is left.
+ */
+static void narrow_run(int64_t base, int64_t step, int64_t low, int64_t high, int* start, int* end)
+{
+    if (step < 0)
+    {
+        /* Mirror it, so the position rises with the column. */
+        const int64_t mirrored_low = 1 - high;
+        high = 1 - low;
+        low = mirrored_low;
+        base = -base;
+        step = -step;
+    }
+    if (step == 0)
+    {
+        if (base < low || base >= high)
+            *end = *start;
+        return;
+    }
+    const int64_t first = divide_up(low - base, step);
+    const int64_t past = divide_up(high - base, step);
+    if (first > (int64_t)*start)
+        *start = first > (int64_t)*end ? *end : (int)first;
+    if (past < (int64_t)*end)
+        *end = past < (int64_t)*start ? *start : (int)past;
+}
+
+/**
+ * @brief Samples a run of columns that lie wholly inside the image, where no tap needs a bounds check.
+ *
+ * Gives the pixels sample_crop() would, without the clamps or the edge coverage. Not inlined: on its own the
+ * loop keeps its state in registers.
+ *
+ * @param[in]  image     Source image entry.
+ * @param[in]  source_x  Source X of the first column, in fixed point.
+ * @param[in]  source_y  Source Y of the first column.
+ * @param[in]  step_x    Change in source X per column.
+ * @param[in]  step_y    Change in source Y per column.
+ * @param[out] pixels    Receives the run.
+ * @param[in]  count     Columns in the run.
+ */
+static ER_NOINLINE void sample_inside(const ImageEntry* image,
+                                      int64_t source_x,
+                                      int64_t source_y,
+                                      int64_t step_x,
+                                      int64_t step_y,
+                                      uint32_t* pixels,
+                                      int count)
+{
+    const size_t stride = (size_t)image->width;
+    if (image->format == ER_IMAGE_ARGB8888)
+    {
+        const uint32_t* source = (const uint32_t*)image->pixels;
+        for (int column = 0; column < count; column++)
+        {
+            const uint32_t* tap = source + (size_t)(source_y >> SAMPLE_FRACTION_BITS) * stride
+                                  + (size_t)(source_x >> SAMPLE_FRACTION_BITS);
+            const uint32_t weight_x = (uint32_t)source_x >> SAMPLE_WEIGHT_SHIFT;
+            const uint32_t weight_y = (uint32_t)source_y >> SAMPLE_WEIGHT_SHIFT;
+            uint32_t pixel = tap[0];
+            if (weight_x != 0u)
+                pixel = mix_pixels(pixel, tap[1], weight_x);
+            if (weight_y != 0u)
+            {
+                uint32_t below = tap[stride];
+                if (weight_x != 0u)
+                    below = mix_pixels(below, tap[stride + 1], weight_x);
+                pixel = mix_pixels(pixel, below, weight_y);
+            }
+            pixels[column] = pixel;
+            source_x += step_x;
+            source_y += step_y;
+        }
+        return;
+    }
+    const uint16_t* source = (const uint16_t*)image->pixels;
+    for (int column = 0; column < count; column++)
+    {
+        const uint16_t* tap =
+            source + (size_t)(source_y >> SAMPLE_FRACTION_BITS) * stride + (size_t)(source_x >> SAMPLE_FRACTION_BITS);
+        const uint32_t weight_x = (uint32_t)source_x >> SAMPLE_WEIGHT_SHIFT;
+        const uint32_t weight_y = (uint32_t)source_y >> SAMPLE_WEIGHT_SHIFT;
+        uint32_t pixel = rgb565_to_argb(tap[0]);
+        if (weight_x != 0u)
+            pixel = mix_pixels(pixel, rgb565_to_argb(tap[1]), weight_x);
+        if (weight_y != 0u)
+        {
+            uint32_t below = rgb565_to_argb(tap[stride]);
+            if (weight_x != 0u)
+                below = mix_pixels(below, rgb565_to_argb(tap[stride + 1]), weight_x);
+            pixel = mix_pixels(pixel, below, weight_y);
+        }
+        pixels[column] = pixel;
+        source_x += step_x;
+        source_y += step_y;
+    }
+}
+
+#endif /* ERUI_TRANSFORMS_FULL */
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -671,152 +1043,215 @@ void er_image_render(const ERImageProps* props, int x, int y, int width, int hei
     const uint8_t tint_green = has_tint ? (uint8_t)((tint >> 8) & 0xFFu) : 0u;
     const uint8_t tint_blue = has_tint ? (uint8_t)(tint & 0xFFu) : 0u;
 
-    switch ((ERResizeMode)props->resize_mode)
+    if ((ERResizeMode)props->resize_mode == ER_RESIZE_REPEAT)
     {
-        default:
-        case ER_RESIZE_STRETCH:
-            render_region(image,
-                          &mask,
-                          0,
-                          0,
-                          image->width,
-                          image->height,
-                          x,
-                          y,
-                          width,
-                          height,
-                          has_tint,
-                          tint_red,
-                          tint_green,
-                          tint_blue);
-            break;
-
-        case ER_RESIZE_COVER:
+        /* Tile the image at original size across the destination rect. */
+        for (int tile_y = 0; tile_y < height; tile_y += image->height)
         {
-            /* Scale so the image fills the destination, cropping the longer axis. */
-            int crop_width, crop_height;
-            if (width * image->height >= height * image->width)
+            const int tile_height = (tile_y + image->height <= height) ? image->height : (height - tile_y);
+            for (int tile_x = 0; tile_x < width; tile_x += image->width)
             {
-                crop_width = image->width;
-                crop_height = (height * image->width + width / 2) / width;
+                const int tile_width = (tile_x + image->width <= width) ? image->width : (width - tile_x);
+                render_region(image,
+                              &mask,
+                              0,
+                              0,
+                              tile_width,
+                              tile_height,
+                              x + tile_x,
+                              y + tile_y,
+                              tile_width,
+                              tile_height,
+                              has_tint,
+                              tint_red,
+                              tint_green,
+                              tint_blue);
             }
-            else
-            {
-                crop_height = image->height;
-                crop_width = (width * image->height + height / 2) / height;
-            }
-            if (crop_width < 1)
-                crop_width = 1;
-            if (crop_height < 1)
-                crop_height = 1;
-            const int crop_x = (image->width - crop_width) / 2;
-            const int crop_y = (image->height - crop_height) / 2;
-            render_region(image,
-                          &mask,
-                          crop_x,
-                          crop_y,
-                          crop_width,
-                          crop_height,
-                          x,
-                          y,
-                          width,
-                          height,
-                          has_tint,
-                          tint_red,
-                          tint_green,
-                          tint_blue);
-            break;
         }
+        return;
+    }
 
-        case ER_RESIZE_CONTAIN:
-        {
-            /* Scale to fit entirely inside the destination, preserving aspect ratio. */
-            int scaled_width, scaled_height;
-            if (width * image->height <= height * image->width)
-            {
-                scaled_width = width;
-                scaled_height = (width * image->height + image->width / 2) / image->width;
-            }
-            else
-            {
-                scaled_height = height;
-                scaled_width = (height * image->width + image->height / 2) / image->height;
-            }
-            if (scaled_width < 1)
-                scaled_width = 1;
-            if (scaled_height < 1)
-                scaled_height = 1;
-            const int offset_x = (width - scaled_width) / 2;
-            const int offset_y = (height - scaled_height) / 2;
-            render_region(image,
-                          &mask,
-                          0,
-                          0,
-                          image->width,
-                          image->height,
-                          x + offset_x,
-                          y + offset_y,
-                          scaled_width,
-                          scaled_height,
-                          has_tint,
-                          tint_red,
-                          tint_green,
-                          tint_blue);
-            break;
-        }
+    ImgPlacement placement;
+    place_image(image, (ERResizeMode)props->resize_mode, x, y, width, height, &placement);
+    render_region(image,
+                  &mask,
+                  placement.source_x,
+                  placement.source_y,
+                  placement.source_width,
+                  placement.source_height,
+                  placement.destination_x,
+                  placement.destination_y,
+                  placement.destination_width,
+                  placement.destination_height,
+                  has_tint,
+                  tint_red,
+                  tint_green,
+                  tint_blue);
+}
 
-        case ER_RESIZE_CENTER:
-        {
-            /* Display at original size, centered; clip to node bounds. */
-            const int source_x = (image->width > width) ? (image->width - width) / 2 : 0;
-            const int source_y = (image->height > height) ? (image->height - height) / 2 : 0;
-            const int visible_width = (image->width < width) ? image->width : width;
-            const int visible_height = (image->height < height) ? image->height : height;
-            const int offset_x = (image->width < width) ? (width - image->width) / 2 : 0;
-            const int offset_y = (image->height < height) ? (height - image->height) / 2 : 0;
-            render_region(image,
-                          &mask,
-                          source_x,
-                          source_y,
-                          visible_width,
-                          visible_height,
-                          x + offset_x,
-                          y + offset_y,
-                          visible_width,
-                          visible_height,
-                          has_tint,
-                          tint_red,
-                          tint_green,
-                          tint_blue);
-            break;
-        }
+#if ERUI_TRANSFORMS_FULL
 
-        case ER_RESIZE_REPEAT:
+void er_image_render_transformed(const ERImageProps* props,
+                                 int x,
+                                 int y,
+                                 int width,
+                                 int height,
+                                 float inverse_a,
+                                 float inverse_b,
+                                 float inverse_c,
+                                 float inverse_d,
+                                 float inverse_translate_x,
+                                 float inverse_translate_y,
+                                 int clip_x0,
+                                 int clip_y0,
+                                 int clip_x1,
+                                 int clip_y1)
+{
+    if (!props || width <= 0 || height <= 0)
+        return;
+
+    const ImageEntry* image = image_registry_get(props->image_name);
+    if (!image || image->width <= 0 || image->height <= 0)
+        return;
+
+    ImgPlacement placement;
+    place_image(image, (ERResizeMode)props->resize_mode, x, y, width, height, &placement);
+    if (placement.destination_width <= 0 || placement.destination_height <= 0)
+        return;
+
+    const uint32_t tint = props->tint_color;
+    const bool has_tint = (tint != 0u);
+    const uint8_t tint_red = (uint8_t)((tint >> 16) & 0xFFu);
+    const uint8_t tint_green = (uint8_t)((tint >> 8) & 0xFFu);
+    const uint8_t tint_blue = (uint8_t)(tint & 0xFFu);
+
+    /* Source pixels per destination pixel: the resize mode, folded into the map. */
+    const float ratio_x = (float)placement.source_width / (float)placement.destination_width;
+    const float ratio_y = (float)placement.source_height / (float)placement.destination_height;
+    const float source_step_x = inverse_a * ratio_x;
+    const float source_step_y = inverse_b * ratio_y;
+    if (!(fabsf(inverse_a) < SAMPLE_STEP_MAX && fabsf(inverse_b) < SAMPLE_STEP_MAX
+          && fabsf(source_step_x) < SAMPLE_STEP_MAX && fabsf(source_step_y) < SAMPLE_STEP_MAX))
+        return;
+
+    const int64_t step_u = (int64_t)(inverse_a * SAMPLE_FIXED_ONE);
+    const int64_t step_v = (int64_t)(inverse_b * SAMPLE_FIXED_ONE);
+    const int64_t step_source_x = (int64_t)(source_step_x * SAMPLE_FIXED_ONE);
+    const int64_t step_source_y = (int64_t)(source_step_y * SAMPLE_FIXED_ONE);
+    const int last_source_x = placement.source_x + placement.source_width - 1;
+    const int last_source_y = placement.source_y + placement.source_height - 1;
+
+    for (int row = clip_y0; row < clip_y1; row++)
+    {
+        /* Destination-local position of column 0 on this row. */
+        const float row_u = inverse_c * (float)row + inverse_translate_x - (float)placement.destination_x;
+        const float row_v = inverse_d * (float)row + inverse_translate_y - (float)placement.destination_y;
+        int span_start = clip_x0, span_end = clip_x1;
+        if (!narrow_columns(row_u, inverse_a, placement.destination_width, &span_start, &span_end)
+            || !narrow_columns(row_v, inverse_b, placement.destination_height, &span_start, &span_end))
+            continue;
+
+        /* Positions are stepped from column 0, whatever the clip, so a partial repaint lands on the same
+         * samples as a full one. The half pixel aligns the source as the untransformed scaler does. */
+        const int64_t base_u = to_fixed(row_u);
+        const int64_t base_v = to_fixed(row_v);
+        const int64_t base_source_x = to_fixed((float)placement.source_x + (row_u + 0.5f) * ratio_x - 0.5f);
+        const int64_t base_source_y = to_fixed((float)placement.source_y + (row_v + 0.5f) * ratio_y - 0.5f);
+
+        /* The columns wholly inside the image: full coverage and every tap in the crop. They take the lean
+         * loop; the few either side take the edge one. */
+        int inside_start = span_start, inside_end = span_end;
+        narrow_run(base_u,
+                   step_u,
+                   0,
+                   (int64_t)(placement.destination_width - 1) * SAMPLE_FIXED_UNIT,
+                   &inside_start,
+                   &inside_end);
+        narrow_run(base_v,
+                   step_v,
+                   0,
+                   (int64_t)(placement.destination_height - 1) * SAMPLE_FIXED_UNIT,
+                   &inside_start,
+                   &inside_end);
+        narrow_run(base_source_x,
+                   step_source_x,
+                   (int64_t)placement.source_x * SAMPLE_FIXED_UNIT,
+                   (int64_t)last_source_x * SAMPLE_FIXED_UNIT,
+                   &inside_start,
+                   &inside_end);
+        narrow_run(base_source_y,
+                   step_source_y,
+                   (int64_t)placement.source_y * SAMPLE_FIXED_UNIT,
+                   (int64_t)last_source_y * SAMPLE_FIXED_UNIT,
+                   &inside_start,
+                   &inside_end);
+
+        for (int chunk_x = span_start; chunk_x < span_end; chunk_x += ERUI_MAX_IMAGE_ROW_PIXELS)
         {
-            /* Tile the image at original size across the destination rect. */
-            for (int tile_y = 0; tile_y < height; tile_y += image->height)
+            const int chunk_end =
+                (span_end - chunk_x) < ERUI_MAX_IMAGE_ROW_PIXELS ? span_end : chunk_x + ERUI_MAX_IMAGE_ROW_PIXELS;
+            /* The part of the inside run in this chunk. */
+            int lean_start = inside_start < chunk_x ? chunk_x : (inside_start > chunk_end ? chunk_end : inside_start);
+            int lean_end = inside_end < lean_start ? lean_start : (inside_end > chunk_end ? chunk_end : inside_end);
+            uint32_t* row_pixels = irow();
+            int first_ink = chunk_end, last_ink = chunk_x - 1;
+            bool whole = true;
+
+            for (int column = chunk_x; column < chunk_end; column++)
             {
-                const int tile_height = (tile_y + image->height <= height) ? image->height : (height - tile_y);
-                for (int tile_x = 0; tile_x < width; tile_x += image->width)
+                if (column == lean_start && lean_end > lean_start)
                 {
-                    const int tile_width = (tile_x + image->width <= width) ? image->width : (width - tile_x);
-                    render_region(image,
-                                  &mask,
-                                  0,
-                                  0,
-                                  tile_width,
-                                  tile_height,
-                                  x + tile_x,
-                                  y + tile_y,
-                                  tile_width,
-                                  tile_height,
-                                  has_tint,
-                                  tint_red,
-                                  tint_green,
-                                  tint_blue);
+                    uint32_t* lean_pixels = &row_pixels[lean_start - chunk_x];
+                    const int lean_count = lean_end - lean_start;
+                    sample_inside(image,
+                                  base_source_x + step_source_x * lean_start,
+                                  base_source_y + step_source_y * lean_start,
+                                  step_source_x,
+                                  step_source_y,
+                                  lean_pixels,
+                                  lean_count);
+                    if (has_tint)
+                        for (int lean_column = 0; lean_column < lean_count; lean_column++)
+                            lean_pixels[lean_column] =
+                                apply_tint(lean_pixels[lean_column], tint_red, tint_green, tint_blue);
+                    if (lean_start < first_ink)
+                        first_ink = lean_start;
+                    last_ink = lean_end - 1;
+                    column = lean_end - 1;
+                    continue;
                 }
+
+                const uint32_t coverage = (axis_coverage(base_u + step_u * column, placement.destination_width)
+                                           * axis_coverage(base_v + step_v * column, placement.destination_height))
+                                          >> 8;
+                uint32_t pixel = 0u;
+                if (coverage != 0u)
+                {
+                    pixel = sample_crop(image,
+                                        base_source_x + step_source_x * column,
+                                        base_source_y + step_source_y * column,
+                                        placement.source_x,
+                                        placement.source_y,
+                                        last_source_x,
+                                        last_source_y);
+                    if (has_tint)
+                        pixel = apply_tint(pixel, tint_red, tint_green, tint_blue);
+                    if (coverage < SAMPLE_WEIGHT_ONE)
+                    {
+                        pixel = er_px_scale_premul(pixel, coverage);
+                        whole = false;
+                    }
+                    if (column < first_ink)
+                        first_ink = column;
+                    last_ink = column;
+                }
+                row_pixels[column - chunk_x] = pixel;
             }
-            break;
+            if (last_ink >= first_ink)
+                emit_span(
+                    &row_pixels[first_ink - chunk_x], image->opaque && whole, first_ink, row, last_ink - first_ink + 1);
         }
     }
 }
+
+#endif /* ERUI_TRANSFORMS_FULL */
