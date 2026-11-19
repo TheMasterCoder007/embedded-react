@@ -989,9 +989,9 @@ import { View, StyleSheet } from 'embedded-react';
   it('names an unknown style key as unknown, not as state-driven', () => {
     const error = err(`${IMPORTS}
       export function App() {
-        return (<View style={{transform: [{scale: 2}]}} />);
+        return (<View style={{aspectRatio: 2}} />);
       }`);
-    expect(error.message).toMatch(/style "transform" is not supported/);
+    expect(error.message).toMatch(/style "aspectRatio" is not supported/);
     expect(error.message).not.toMatch(/state-driven/);
     expect(error.aotHint).toMatch(/Flow B lowers these:/);
   });

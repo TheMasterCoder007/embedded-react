@@ -192,6 +192,31 @@ export const FONT_FAMILY_KEY = 'fontFamily';
 /** The lightest numeric fontWeight drawn bold. */
 const BOLD_WEIGHT = 600;
 
+/** Radians to degrees, as the engine's float holds it. */
+export const RADIANS_TO_DEGREES = Math.fround(57.29577951308232);
+
+/** Each transform key's ERProps fields, and whether its value is an angle. */
+export const TRANSFORM_KEYS: Record<
+  string,
+  {fields: string[]; angle: boolean}
+> = {
+  translateX: {fields: ['transform_translate_x'], angle: false},
+  translateY: {fields: ['transform_translate_y'], angle: false},
+  scale: {fields: ['transform_scale_x', 'transform_scale_y'], angle: false},
+  scaleX: {fields: ['transform_scale_x'], angle: false},
+  scaleY: {fields: ['transform_scale_y'], angle: false},
+  rotate: {fields: ['transform_rotate_z'], angle: true},
+  rotateZ: {fields: ['transform_rotate_z'], angle: true},
+  rotateX: {fields: ['transform_rotate_x'], angle: true},
+  rotateY: {fields: ['transform_rotate_y'], angle: true},
+  perspective: {fields: ['transform_perspective'], angle: false},
+};
+
+/** Every ERProps field a `transform` writes; a later transform replaces an earlier one whole. */
+export const TRANSFORM_FIELDS = [
+  ...new Set(Object.values(TRANSFORM_KEYS).flatMap(entry => entry.fields)),
+];
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -363,6 +388,57 @@ const percentOrPixels =
   };
 
 /**
+ * An angle in degrees, as Flow A reads one: a number of degrees, or a string such as '45deg' or '0.5rad'.
+ *
+ * @param value  The angle.
+ *
+ * @returns The degrees.
+ */
+export function angleDegrees(value: unknown): number {
+  if (typeof value === 'number') return floatConstant(value);
+
+  const amount = typeof value === 'string' ? parseFloat(value) : NaN;
+  if (!Number.isFinite(amount)) {
+    throw new Error(
+      `expected an angle like '45deg' or '0.5rad', got ${JSON.stringify(value)}`,
+    );
+  }
+
+  return (value as string).includes('rad')
+    ? amount * RADIANS_TO_DEGREES
+    : amount;
+}
+
+/**
+ * Lowers one key of a transform entry.
+ *
+ * @param key  The transform key, such as `rotate`.
+ * @param value  Its value.
+ *
+ * @returns The ERProps writes; none for an undefined or null value.
+ */
+export function lowerTransformEntry(
+  key: string,
+  value: unknown,
+): StaticAssign[] {
+  const transformKey = Object.hasOwn(TRANSFORM_KEYS, key)
+    ? TRANSFORM_KEYS[key]
+    : undefined;
+  if (!transformKey) {
+    throw new Error(
+      `unsupported transform "${key}" (one of ${Object.keys(TRANSFORM_KEYS).join(', ')})`,
+    );
+  }
+
+  if (value === undefined || value === null) return [];
+
+  const amount = transformKey.angle
+    ? angleDegrees(value)
+    : floatConstant(value);
+  return transformKey.fields.map(field => ({field, value: amount}));
+}
+
+/**
  * Per-style-key lowering. Each entry maps a style value to one or more { field, value } ERProps writes
  * (field = ERProps member, value = the constant). `flex` expands to several fields.
  */
@@ -530,6 +606,40 @@ const KEYS: Record<string, StyleLowering> = {
     },
   ],
   zIndex: zIndex => [{field: 'z_index', value: dimension(zIndex)}],
+
+  // Transform: the entries flatten into one set of fields, as Flow A reads them, so a later entry of a key wins.
+  transform: transform => {
+    if (!Array.isArray(transform)) {
+      throw new Error(
+        `expected an array of entries, got ${JSON.stringify(transform)}`,
+      );
+    }
+
+    return transform.flatMap(entry => {
+      if (entry === undefined || entry === null || entry === false) return [];
+      if (typeof entry !== 'object') {
+        throw new Error(
+          `expected an entry like {rotate: '45deg'}, got ${JSON.stringify(entry)}`,
+        );
+      }
+
+      return Object.entries(entry).flatMap(([key, value]) =>
+        lowerTransformEntry(key, value),
+      );
+    });
+  },
+  transformOrigin: origin => {
+    if (!Array.isArray(origin) || origin.length !== 2) {
+      throw new Error(
+        `expected [x, y] fractions, got ${JSON.stringify(origin)}`,
+      );
+    }
+
+    return [
+      {field: 'transform_origin_x', value: floatConstant(origin[0])},
+      {field: 'transform_origin_y', value: floatConstant(origin[1])},
+    ];
+  },
 
   // Shadow, drawn only by a firmware built with ERUI_SHADOWS (same as Flow A).
   shadowColor: color => [

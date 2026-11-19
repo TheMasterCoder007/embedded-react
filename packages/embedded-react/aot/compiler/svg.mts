@@ -20,7 +20,7 @@
 
 import {settledOf} from './typing.mts';
 import {check, checkNumber} from './check.mts';
-import {lowerStyle, NODE_TYPES} from '../style-map.mts';
+import {lowerStyle, NODE_TYPES, TRANSFORM_FIELDS} from '../style-map.mts';
 import {
   flattenSvg,
   parseColor,
@@ -1320,8 +1320,8 @@ function svgBootSizes(width: unknown, height: unknown): DynAssign[] {
 }
 
 /**
- * Lowers the box an <Svg> draws in: a node of `type` with its size, then its static style, its animated
- * transform and its refs. No state drives the box: it is not a node the update rewrites.
+ * Lowers the box an <Svg> draws in: a node of `type` with its size, then its static style, its transform and
+ * its refs. State drives only the box's transform.
  *
  * @param nodeId  The node's variable.
  * @param type  The engine node type: a vector node, or an image for a rasterized .svg.
@@ -1350,13 +1350,19 @@ function lowerSvgBox(
     environment,
     elementSpec('Svg')!,
   );
-  // A value worked out at boot is set once, so only one state drives is refused.
+  // A value worked out at boot is set once, so only one state drives is refused, a transform aside.
   const readsOnlyBoot = (assign: DynAssign): boolean =>
     (assign.value.kind === 'dimension' || assign.value.kind === 'opacity') &&
     settledOf(assign.value.value)?.kind === 'boot';
-  if (!dynamicAssigns.every(readsOnlyBoot)) {
+  const isTransform = (assign: DynAssign): boolean =>
+    TRANSFORM_FIELDS.includes(assign.field);
+  if (
+    !dynamicAssigns.every(
+      assign => readsOnlyBoot(assign) || isTransform(assign),
+    )
+  ) {
     throw aotError(
-      'AOT: a state-driven style on an <Svg> is not supported',
+      'AOT: a state-driven style on an <Svg> is not supported, a transform aside',
       'put the changing style on a wrapping <View>: <View style={…}><Svg …/></View>.',
     );
   }

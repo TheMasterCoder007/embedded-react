@@ -34,6 +34,11 @@ import {
   FONT_FAMILY_KEY,
   DYN_FIELDS,
   parseColorValue,
+  angleDegrees,
+  lowerTransformEntry,
+  RADIANS_TO_DEGREES,
+  TRANSFORM_FIELDS,
+  TRANSFORM_KEYS,
 } from '../style-map.mts';
 import {parseColor} from '../../src/embedded-react/svg-ops.mts';
 import {aotError, checkEngineString} from './diagnostics.mts';
@@ -338,6 +343,77 @@ function dynamicFontFamily(valueNode: t.Node, environment: Env): IrFontFamily {
   }
 
   return {kind: 'value', value};
+}
+
+/**
+ * A state-driven angle rewritten as a number of degrees: `${turn}deg`, `turn + 'deg'`, an angle string, or a
+ * ternary of them. Anything else is left as it is, for a number of degrees.
+ *
+ * @param node  The angle expression.
+ * @param environment  The expression environment.
+ *
+ * @returns The expression in degrees.
+ */
+function angleExpression(node: t.Expression, environment: Env): t.Expression {
+  const number = (value: number): t.Expression =>
+    ({type: 'NumericLiteral', value}) as t.Expression;
+  // An amount in a unit, in degrees; null for a unit that is not an angle's.
+  const inUnit = (
+    amount: t.Expression,
+    unit: string | null | undefined,
+  ): t.Expression | null => {
+    if (unit?.trim() === 'deg') return amount;
+    if (unit?.trim() !== 'rad') return null;
+    return {
+      type: 'BinaryExpression',
+      operator: '*',
+      left: amount,
+      right: number(RADIANS_TO_DEGREES),
+    } as t.Expression;
+  };
+
+  if (node.type === 'ConditionalExpression') {
+    return {
+      ...node,
+      consequent: angleExpression(node.consequent, environment),
+      alternate: angleExpression(node.alternate, environment),
+    };
+  }
+
+  if (
+    node.type === 'TemplateLiteral' &&
+    node.expressions.length === 1 &&
+    node.quasis[0].value.cooked === ''
+  ) {
+    const degrees = inUnit(
+      node.expressions[0] as t.Expression,
+      node.quasis[1].value.cooked,
+    );
+    if (degrees) return degrees;
+  }
+
+  if (
+    node.type === 'BinaryExpression' &&
+    node.operator === '+' &&
+    node.right.type === 'StringLiteral' &&
+    node.left.type !== 'PrivateName'
+  ) {
+    const degrees = inUnit(node.left, node.right.value);
+    if (degrees) return degrees;
+  }
+
+  // An angle string, written out or held in a const.
+  try {
+    const angle = evalStatic(
+      node,
+      foldScope(environment, environment.constants ?? {}),
+    );
+    if (typeof angle === 'string') return number(angleDegrees(angle));
+  } catch {
+    /* not static: a number of degrees */
+  }
+
+  return node;
 }
 
 /**
@@ -694,21 +770,68 @@ export function collectStyleAssigns(
     return null;
   };
 
-  // A transform array's binds, or null when no entry is animated. Flow B has no static transform, so once one
-  // entry binds an animated value, every other entry must too; one left behind would be dropped.
-  const animatedTransform = (array: t.ArrayExpression): AnimBind[] | null => {
-    const transformBinds: AnimBind[] = [];
-    const leftOver: t.Node[] = [];
+  // A later transform replaces an earlier one whole, as in RN: its fields and its binds.
+  const transformBinds = new Set<AnimBind>();
+  const clearTransform = (): void => {
+    for (const field of TRANSFORM_FIELDS) {
+      fields.delete(field);
+    }
+
+    for (const bind of transformBinds) {
+      binds.splice(binds.indexOf(bind), 1);
+    }
+
+    transformBinds.clear();
+  };
+
+  // How a constant folds: a value worked out at boot only where nothing is set at runtime.
+  const foldMode = bootValues === 'fold' ? 'fold' : 'strict';
+
+  // Lowers a transform array. A constant entry folds, a state-driven one is set in the update, and an animated
+  // one binds on the native driver.
+  const applyTransform = (
+    array: t.ArrayExpression,
+    styleProp: t.Node,
+  ): void => {
+    clearTransform();
     for (const transformEntry of array.elements) {
-      if (transformEntry?.type !== 'ObjectExpression') {
-        leftOver.push(transformEntry ?? array);
+      if (!transformEntry) continue;
+
+      // An entry that is not written out has to fold whole.
+      if (transformEntry.type !== 'ObjectExpression') {
+        let entryValue: unknown;
+        try {
+          entryValue = evalStatic(
+            transformEntry,
+            withUndefined(scope),
+            foldMode,
+          );
+        } catch {
+          throw at(
+            aotError(
+              'AOT: a transform entry must be written out, or be a constant',
+              'put the changing value inside the entry: transform: [{rotate: `${turn}deg`}].',
+            ),
+            transformEntry,
+          );
+        }
+
+        checkStyleKey(spec, 'transform', styleProp);
+        for (const assign of lowerStyleChecked('transform', [entryValue])) {
+          setField(assign.field, {constant: assign.value});
+        }
         continue;
       }
 
       for (const transformProp of transformEntry.properties) {
-        if (transformProp.type !== 'ObjectProperty') {
-          leftOver.push(transformProp);
-          continue;
+        if (transformProp.type !== 'ObjectProperty' || transformProp.computed) {
+          throw at(
+            aotError(
+              'AOT: a transform entry takes plain keys only',
+              "write each one out: transform: [{rotate: '45deg'}, {scale: 2}].",
+            ),
+            transformProp,
+          );
         }
 
         const transformKey =
@@ -716,50 +839,106 @@ export function collectStyleAssigns(
           (transformProp.key as t.StringLiteral).value;
         const direct = animRef(transformProp.value);
         const mapped = direct ? null : animInterpRef(transformProp.value);
-        if (!direct && !mapped) {
-          leftOver.push(transformProp);
-          continue;
-        }
+        if (direct || mapped) {
+          // An animated entry the engine has no property for is refused, not skipped.
+          if (!Object.hasOwn(ANIMATED_TRANSFORM_PROPS, transformKey)) {
+            throw at(
+              aotError(
+                `AOT: transform "${transformKey}" cannot be animated in Flow B`,
+                `animated transforms: ${Object.keys(ANIMATED_TRANSFORM_PROPS).join(', ')}.`,
+              ),
+              transformProp,
+            );
+          }
 
-        // An animated entry the engine has no property for is refused, not skipped.
-        if (!Object.hasOwn(ANIMATED_TRANSFORM_PROPS, transformKey)) {
-          throw at(
-            aotError(
-              `AOT: transform "${transformKey}" cannot be animated in Flow B`,
-              `animated transforms: ${Object.keys(ANIMATED_TRANSFORM_PROPS).join(', ')}.`,
-            ),
+          checkAnimatedStyleKey(spec, 'transform', styleProp);
+          checkAnimatedColor(
+            transformKey,
+            mapped?.interpolation,
             transformProp,
           );
-        }
-        checkAnimatedColor(transformKey, mapped?.interpolation, transformProp);
-
-        for (const animationProp of ANIMATED_TRANSFORM_PROPS[transformKey]) {
-          transformBinds.push(
-            mapped
+          for (const animationProp of ANIMATED_TRANSFORM_PROPS[transformKey]) {
+            const bind: AnimBind = mapped
               ? {
                   slotName: mapped.slotName,
                   prop: animationProp,
                   interpolation: mapped.interpolation,
                 }
-              : {slotName: direct!, prop: animationProp},
+              : {slotName: direct!, prop: animationProp};
+            binds.push(bind);
+            transformBinds.add(bind);
+          }
+          continue;
+        }
+
+        if (!Object.hasOwn(TRANSFORM_KEYS, transformKey)) {
+          throw at(
+            aotError(
+              `AOT: transform "${transformKey}" is not supported`,
+              `transforms: ${Object.keys(TRANSFORM_KEYS).join(', ')}.`,
+            ),
+            transformProp,
           );
+        }
+
+        checkStyleKey(spec, 'transform', styleProp);
+        let constant: {value: unknown} | null;
+        try {
+          constant = {
+            value: evalStatic(
+              transformProp.value,
+              withUndefined(scope),
+              foldMode,
+            ),
+          };
+        } catch {
+          constant = null;
+        }
+
+        if (constant) {
+          let assigns: StaticAssign[];
+          try {
+            assigns = lowerTransformEntry(transformKey, constant.value);
+          } catch (error) {
+            throw at(
+              aotError(
+                `AOT: unsupported value for transform "${transformKey}": ${(error as Error).message}`,
+              ),
+              transformProp,
+            );
+          }
+
+          for (const assign of assigns) {
+            setField(assign.field, {constant: assign.value});
+          }
+          continue;
+        }
+
+        // State drives it: a number, with an angle in degrees.
+        const {fields: transformFields, angle} = TRANSFORM_KEYS[transformKey];
+        const value = lowerExpr(
+          angle
+            ? angleExpression(transformProp.value as t.Expression, environment)
+            : transformProp.value,
+          environment,
+        );
+        if (shapeOf(value) === 'string') {
+          throw at(
+            aotError(
+              `AOT: a state-driven transform "${transformKey}" needs a number`,
+              angle
+                ? 'give the angle as `${turn}deg`, or as a number of degrees.'
+                : 'keep the state numeric.',
+            ),
+            transformProp,
+          );
+        }
+
+        for (const field of transformFields) {
+          setField(field, {value: {kind: 'float', value}});
         }
       }
     }
-
-    if (!transformBinds.length) return null;
-    if (leftOver.length) {
-      throw at(
-        aotError(
-          'AOT: a transform entry that is not an animated value cannot sit beside an animated one',
-          'Flow B lowers a transform only as animated values bound on the native driver, so this entry ' +
-            'would be dropped. Drive it from an animated value too (useAnimatedValue(45) holds a fixed one).',
-        ),
-        leftOver[0],
-      );
-    }
-
-    return transformBinds;
   };
 
   // Lowers one style source (an array, an inline object, or a static reference) into `fields` and `binds`.
@@ -829,14 +1008,10 @@ export function collectStyleAssigns(
           continue;
         }
 
-        // transform: [{ scale: <anim> }, { translateX: <anim>.interpolate(...) }, ...] — bind each entry.
+        // transform: [{rotate: '45deg'}, {scale: <state>}, {translateX: <anim>}, ...], entry by entry.
         if (key === 'transform' && prop.value.type === 'ArrayExpression') {
-          const transformBinds = animatedTransform(prop.value);
-          if (transformBinds) {
-            checkAnimatedStyleKey(spec, key, prop);
-            binds.push(...transformBinds);
-            continue;
-          }
+          applyTransform(prop.value, prop);
+          continue;
         }
 
         // A font family is a string, so it has no ERProps number to fold to.
@@ -844,11 +1019,7 @@ export function collectStyleAssigns(
           let family: unknown;
           let isStatic = true;
           try {
-            family = evalStatic(
-              prop.value,
-              withUndefined(scope),
-              bootValues === 'fold' ? 'fold' : 'strict',
-            );
+            family = evalStatic(prop.value, withUndefined(scope), foldMode);
           } catch {
             isStatic = false;
           }
@@ -866,11 +1037,7 @@ export function collectStyleAssigns(
         let readsBoot = false;
         try {
           staticValue = {
-            value: evalStatic(
-              prop.value,
-              withUndefined(scope),
-              bootValues === 'fold' ? 'fold' : 'strict',
-            ),
+            value: evalStatic(prop.value, withUndefined(scope), foldMode),
           };
         } catch (error) {
           staticValue = null; // references state — lower it as a dynamic value
@@ -896,6 +1063,9 @@ export function collectStyleAssigns(
         if (staticValue) {
           if (staticValue.value != null) {
             checkStyleKey(spec, key, prop);
+            if (key === 'transform') {
+              clearTransform();
+            }
           }
 
           for (const assign of lowerStyleChecked(key, staticValue.value)) {
@@ -903,6 +1073,16 @@ export function collectStyleAssigns(
           }
         } else {
           checkStyleKey(spec, key, prop);
+          if (key === 'transform') {
+            throw at(
+              aotError(
+                'AOT: a state-driven "transform" must be an array written in place',
+                'put the changing value inside an entry: transform: [{rotate: `${turn}deg`}].',
+              ),
+              prop,
+            );
+          }
+
           for (const assign of lowerDynamicStyleValue(
             key,
             prop.value,
@@ -945,6 +1125,10 @@ export function collectStyleAssigns(
       if (styleKey === FONT_FAMILY_KEY) {
         fontFamily = staticFontFamily(styleValue);
         continue;
+      }
+
+      if (styleKey === 'transform') {
+        clearTransform();
       }
 
       for (const assign of lowerStyleChecked(styleKey, styleValue)) {
