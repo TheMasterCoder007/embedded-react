@@ -113,15 +113,30 @@ static void test_storage_that_doesnt_fit_registers_nothing(void)
     tpack_font(&s_pack, "f", ERUI_FONT_FORMAT_1BIT);
 
     static BitmapFont fonts[1];
-    static GlyphInfo glyphs[1];
-    ErAssetsStorage no_glyph_room = {fonts, 1u, glyphs, 0u, NULL, 0u, 0u, 0u, 0u};
-    CHECK(!er_assets_load_pack_into(s_pack.bytes, s_pack.length, &no_glyph_room), "no room for the glyphs");
+    ErAssetsStorage no_room = {fonts, 0u, 0u};
+    CHECK(!er_assets_load_pack_into(s_pack.bytes, s_pack.length, &no_room), "no room for the font");
     CHECK(!er_image_exists("early"), "the image before the font isn't registered");
 
-    ErAssetsStorage room = {fonts, 1u, glyphs, 1u, NULL, 0u, 0u, 0u, 0u};
+    ErAssetsStorage room = {fonts, 1u, 0u};
     CHECK(er_assets_load_pack_into(s_pack.bytes, s_pack.length, &room), "the same pack with room");
     CHECK(er_image_exists("early"), "the image is registered");
-    CHECK(room.fonts_used == 1u && room.glyphs_used == 1u && room.extras_used == 0u, "the storage it took");
+    CHECK(room.fonts_used == 1u, "the storage it took");
+    /* The glyph table and the bitmap are the pack's own bytes. */
+    const uint8_t* pack_end = s_pack.bytes + s_pack.length;
+    CHECK((const uint8_t*)fonts[0].glyphs >= s_pack.bytes && (const uint8_t*)fonts[0].glyphs < pack_end
+              && fonts[0].bitmap == pack_end - 1 && fonts[0].glyphs[0].advance == 1u,
+          "the font points into the pack");
+
+    /* A pack off its word can't have its glyph tables read in place. */
+    static uint8_t shifted_pack[sizeof(s_pack.bytes) + 4u];
+    memcpy(shifted_pack + 1, s_pack.bytes, s_pack.length);
+    ErAssetsInfo shifted_info;
+    ErAssetsStorage shifted_room = {fonts, 1u, 0u};
+    CHECK(er_assets_check_pack(shifted_pack + 1, s_pack.length, &shifted_info) && shifted_info.misaligned_fonts == 1u,
+          "a font in a pack off its word is counted");
+    CHECK(!er_assets_load_pack_into(shifted_pack + 1, s_pack.length, &shifted_room), "and doesn't load in place");
+    clear_registries();
+    CHECK(er_assets_load_pack_ex(shifted_pack + 1, s_pack.length, true), "but loads from a copy");
 }
 
 static void test_empty_rgb565_isnt_counted_as_odd(void)

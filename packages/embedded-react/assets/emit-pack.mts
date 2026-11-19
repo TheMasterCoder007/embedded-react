@@ -21,21 +21,20 @@
 // loads this at runtime and calls er_image_load / er_font_register, so assets hot-reload without a
 // sim rebuild. Little-endian (the simulator is x86). Format:
 //
-//   magic "ERPK" (4 bytes), version u32 (1 or 2), n_images u32, n_font_sizes u32
+//   magic "ERPK" (4 bytes), version u32 (3), n_images u32, n_font_sizes u32
 //   images[n_images]:    name(u16 len + bytes), width u32, height u32,
-//                        [v2 only: format u8 (0=ARGB8888, 1=RGB565), zero-pad to 4-byte alignment],
+//                        format u8 (0=ARGB8888, 1=RGB565), zero-pad to 4-byte alignment,
 //                        pixels (w*h * u32 ARGB, or w*h * u16 RGB565 when format=1)
 //   fonts[n_font_sizes]: family(u16 len + bytes), pixel_size/line_height/baseline/format (4*u8),
 //                        first u16, last u16, glyph_count u16, extras_count u16, bitmap_len u32,
-//                        glyphs[glyph_count] (9B: off u32, w/h u8, xo/yo i8, adv u8),
-//                        extras[extras_count] (13B: codepoint u32 + the 9B glyph),
+//                        zero-pad to 4-byte alignment,
+//                        glyphs[glyph_count] (12B: off u32, w/h u8, xo/yo i8, adv u8, 3 zero bytes),
+//                        extras[extras_count] (16B: codepoint u32 + the 12B glyph),
 //                        bitmap (bitmap_len bytes)
 //
-// Version 2 is now emitted ALWAYS. It was introduced for the 16-bit image bake, but its real value
-// is the per-image alignment pad: the engine reads pixels in place, and a DMA2D-class backend
-// refuses a word-misaligned ARGB8888 source (configuration error — silently absent image). v1 had
-// no alignment machinery, so whether an image's pixels landed word-aligned in flash was an accident
-// of the name strings — it varied build to build. Parsers still accept v1 packs from older tooling.
+// The engine reads image pixels, glyph tables and glyph bitmaps in place, so a pack must sit on a 4-byte
+// boundary in memory. A glyph record is the engine's GlyphInfo and an extra its ExtraGlyph, byte for byte
+// (engine/include/font_bitmap.h): change one and the other, with the version.
 
 import type {BakedFont, GlyphInfo} from './bake-font.mts';
 import type {BakedImage} from './bake-image.mts';
@@ -43,6 +42,7 @@ import type {BakedImage} from './bake-image.mts';
 const INT8_MIN = -128;
 const INT8_MAX = 127;
 const PIXEL_ALIGNMENT = 4;
+const TABLE_ALIGNMENT = 4;
 const FORMAT_ARGB8888 = 0;
 const FORMAT_RGB565 = 1;
 
@@ -91,7 +91,10 @@ class Writer {
   }
 }
 
-/** Writes one glyph record (9 bytes). */
+/** Bytes of padding that end a glyph record, as the engine's GlyphInfo has them. */
+const GLYPH_PADDING = 3;
+
+/** Writes one glyph record (12 bytes, the engine's GlyphInfo). */
 function writeGlyph(writer: Writer, glyph: GlyphInfo): void {
   writer.u32(glyph.bitmapOffset);
   writer.u8(glyph.width);
@@ -99,6 +102,7 @@ function writeGlyph(writer: Writer, glyph: GlyphInfo): void {
   writer.i8(glyph.xOffset);
   writer.i8(glyph.yOffset);
   writer.u8(glyph.advance);
+  writer.bytes(new Uint8Array(GLYPH_PADDING));
 }
 
 /**
@@ -123,7 +127,7 @@ export function emitAssetPack({
   images = [...images].sort(byName('name'));
   fonts = [...fonts].sort(byName('family'));
 
-  const version = 2;
+  const version = 3;
   const writer = new Writer();
   writer.bytes(Buffer.from('ERPK', 'ascii'));
   writer.u32(version);
@@ -135,10 +139,8 @@ export function emitAssetPack({
     writer.str(image.name);
     writer.u32(image.width);
     writer.u32(image.height);
-    if (version >= 2) {
-      writer.u8(image.format === 'rgb565' ? FORMAT_RGB565 : FORMAT_ARGB8888);
-      writer.align(PIXEL_ALIGNMENT); // the engine reads the pixels in place; keep the pointer 4-byte aligned
-    }
+    writer.u8(image.format === 'rgb565' ? FORMAT_RGB565 : FORMAT_ARGB8888);
+    writer.align(PIXEL_ALIGNMENT); // the engine reads the pixels in place; keep the pointer 4-byte aligned
     // pixels is a Uint32Array (premultiplied ARGB words) or Uint16Array (RGB565);
     // copy its LE bytes verbatim.
     writer.bytes(
@@ -162,6 +164,7 @@ export function emitAssetPack({
       writer.u16(size.dense.length);
       writer.u16(size.extras.length);
       writer.u32(size.bitmap.length);
+      writer.align(TABLE_ALIGNMENT); // the engine reads the glyph tables in place
       for (const glyph of size.dense) writeGlyph(writer, glyph);
       for (const extra of size.extras) {
         writer.u32(extra.codepoint);

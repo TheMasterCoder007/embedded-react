@@ -210,10 +210,6 @@ static const char* resource_name(uint16_t resource)
             return "images";
         case ERB_RESOURCE_FONTS:
             return "fonts";
-        case ERB_RESOURCE_GLYPHS:
-            return "glyphs";
-        case ERB_RESOURCE_EXTRA_GLYPHS:
-            return "extra glyphs";
         default:
             return "an unknown resource";
     }
@@ -1900,7 +1896,7 @@ static ErbStatus start(const ErbConfig* config)
     const ErbProgram* program = &g_erb.program;
     if (program->assets)
     {
-        /* A pack with fonts only verifies with storage for them, so no storage means no fonts to place. */
+        /* A pack with fonts only verifies with room for them, so no storage means no fonts to place. */
         ErAssetsStorage no_fonts;
         memset(&no_fonts, 0, sizeof(no_fonts));
         const bool loaded = er_assets_load_pack_into(

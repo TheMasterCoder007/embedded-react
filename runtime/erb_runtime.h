@@ -181,7 +181,7 @@ typedef struct
     uint16_t node_count;      /**< Nodes the app may use; 0 means ERUI_MAX_NODES. */
     const ErbNative* natives; /**< Native functions and events packages may use. */
     uint16_t native_count;
-    ErAssetsStorage* fonts; /**< Storage for the asset pack's font tables; NULL if packages have no fonts. */
+    ErAssetsStorage* fonts; /**< Room for the asset pack's fonts, one per family and size; NULL if packages have none. */
     uint32_t budget;        /**< Instructions per run; 0 means ERB_EVENT_BUDGET. */
     void (*log)(const char* line, void* context);           /**< Reports and console.* lines, one each; may be NULL. */
     void (*on_fault)(const ErbError* error, void* context); /**< NULL: erb_show_error(). */

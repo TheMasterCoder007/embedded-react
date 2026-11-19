@@ -91,13 +91,14 @@ sections:   vendor bytecode | alignment pad (optional) | ERPK asset pack | app b
 
 **Flow B carries them in its package too.** `npx embedded-react build --aot` puts an asset pack in
 `app.erpkg`, and the runtime registers every image and font straight from flash when it loads the
-package. Image pixels and glyph bitmaps take no RAM, since the engine reads the bytes in place.
+package. Image pixels, glyph tables and glyph bitmaps take no RAM, since the engine reads the bytes in
+place.
 
 The compiler knows which family draws each text, so Flow B bakes a font only at the sizes its own
-text uses, and leaves out a font no text reaches. A font's glyph tables (12 bytes a glyph) go in
-storage the firmware reserves, `ErbConfig::fonts`. The board examples size it with `ERB_FONT_COUNT`,
-`ERB_GLYPH_COUNT` and `ERB_EXTRA_GLYPH_COUNT` in their `main` file: one font per family and size, 95
-glyphs each for ASCII. A package whose fonts need more is rejected at boot.
+text uses, and leaves out a font no text reaches. Each family and size takes one small struct (about
+24 bytes) in storage the firmware reserves, `ErbConfig::fonts`. The board examples size it with
+`ERB_FONT_COUNT` in their `main` file, 16 by default. A package with more fonts is rejected at boot,
+with both counts on the error screen.
 
 Either way the engine holds each image in a registry slot (`ERUI_IMAGE_REGISTRY_MAX`, 128 by
 default, about 80 bytes each). Past the limit, registration is refused and the image simply does not

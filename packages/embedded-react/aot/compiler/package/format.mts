@@ -83,8 +83,6 @@ export const Resource = {
   animationGroups: 4,
   images: 5,
   fonts: 6,
-  glyphs: 7,
-  extraGlyphs: 8,
 } as const;
 
 /** Table ids. */

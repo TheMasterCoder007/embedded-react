@@ -24,10 +24,10 @@
  * filesystem-free — the buffer can be a file read into RAM (simulator) or a pointer into flash (a
  * config container on a device). It is also the asset section of the ERCF config container.
  *
- * The buffer must stay live for as long as the assets are used: image pixels and font bitmaps are
- * referenced by pointer into it. er_assets_load_pack's GlyphInfo/ExtraGlyph arrays + BitmapFont structs are
- * heap-allocated (er_assets_heap.c) and kept for the process (a reload leaks the previous set rather than risk a
- * dangling reference; fine for the few-KB-per-reload dev/config-swap case).
+ * The buffer must stay live for as long as the assets are used: image pixels, glyph tables and glyph bitmaps
+ * are referenced by pointer into it, so it must sit on a 4-byte boundary. er_assets_load_pack's BitmapFont
+ * structs, which hold those pointers, are heap-allocated (er_assets_heap.c) and kept for the process (a reload
+ * leaks the previous set rather than risk a dangling reference; a few dozen bytes a font).
  *
  * The loaders check the whole pack before registering anything, so a pack that fails to load leaves the
  * registries as they were. That includes an image pixel format this firmware doesn't know.
@@ -49,29 +49,27 @@
 /** @brief What a pack holds, as er_assets_check_pack counts it. */
 typedef struct
 {
-    uint32_t images;         /**< Images. */
-    uint32_t fonts;          /**< Fonts (one per family and size). */
-    uint32_t glyphs;         /**< Glyph records, over every font. */
-    uint32_t extra_glyphs;   /**< Extra-glyph records (codepoints past a font's range), over every font. */
-    uint32_t misaligned;     /**< Images whose pixels don't sit on their word size (only a v1 pack can have them). */
-    uint32_t empty_images;   /**< Images with no width or no height, which the engine won't register. */
-    uint32_t odd_rgb565;     /**< Non-empty RGB565 images on an odd address, which the engine won't register. */
-    uint32_t font_families;  /**< Distinct family names, as the font registry compares them. */
-    uint32_t largest_family; /**< The most sizes one family has. */
+    uint32_t images;           /**< Images. */
+    uint32_t fonts;            /**< Fonts (one per family and size). */
+    uint32_t glyphs;           /**< Glyph records, over every font. */
+    uint32_t extra_glyphs;     /**< Extra-glyph records (codepoints past a font's range), over every font. */
+    uint32_t misaligned;       /**< Images whose pixels don't sit on their word size (a pack off a 4-byte boundary). */
+    uint32_t empty_images;     /**< Images with no width or no height, which the engine won't register. */
+    uint32_t odd_rgb565;       /**< Non-empty RGB565 images on an odd address, which the engine won't register. */
+    uint32_t misaligned_fonts; /**< Fonts whose glyph tables don't sit on a word (a pack off a 4-byte boundary). */
+    uint32_t font_families;    /**< Distinct family names, as the font registry compares them. */
+    uint32_t largest_family;   /**< The most sizes one family has. */
 } ErAssetsInfo;
 
-/** @brief Caller storage for the font tables a pack registers, for a firmware with no heap. */
+/**
+ * @brief Caller storage for the fonts a pack registers, for a firmware with no heap: one BitmapFont per family
+ *        and size. Their glyph tables and bitmaps stay in the pack.
+ */
 typedef struct
 {
-    BitmapFont* fonts;    /**< One per font. */
-    uint32_t font_count;  /**< Length of fonts. */
-    GlyphInfo* glyphs;    /**< Glyph records. */
-    uint32_t glyph_count; /**< Length of glyphs. */
-    ExtraGlyph* extras;   /**< Extra-glyph records. */
-    uint32_t extra_count; /**< Length of extras. */
-    uint32_t fonts_used;  /**< Set by er_assets_load_pack_into: entries it took. */
-    uint32_t glyphs_used;
-    uint32_t extras_used;
+    BitmapFont* fonts;   /**< One per font. */
+    uint32_t font_count; /**< Length of fonts. */
+    uint32_t fonts_used; /**< Set by er_assets_load_pack_into: entries it took. */
 } ErAssetsStorage;
 
 /**
@@ -109,7 +107,8 @@ bool er_assets_load_pack_ex(const void* buffer, size_t length, bool copy);
  * @param[out] info    Receives the counts (may be NULL).
  *
  * Every font must be drawable: a known format, a dense glyph array that covers [first, last], every glyph's
- * bitmap inside the font's, and extra glyphs in ascending codepoint order.
+ * bitmap inside the font's, and extra glyphs in ascending codepoint order. A font whose glyph tables are off
+ * their word is counted (misaligned_fonts), and only loads from a copy.
  *
  * @return true when the whole pack reads cleanly, so loading it can't fail part way for its own sake.
  */
@@ -153,13 +152,13 @@ bool er_assets_check_pack_images(
 bool er_assets_find_image(const void* buffer, const uint32_t* names, uint32_t count, const char* name);
 
 /**
- * @brief Like er_assets_load_pack (in place), with font tables taken from @p storage instead of the heap.
+ * @brief Like er_assets_load_pack (in place), with the BitmapFont structs taken from @p storage instead of the heap.
  *
  * @param[in]     buffer   Pack bytes (caller-owned; must outlive use).
  * @param[in]     length   Byte length.
- * @param[in,out] storage  Font table storage; its *_used fields report what was taken.
+ * @param[in,out] storage  Font storage; fonts_used reports what was taken.
  *
- * @return true if parsed and registered; false on a malformed pack or font tables that don't fit, with nothing
+ * @return true if parsed and registered; false on a malformed pack or more fonts than fit, with nothing
  *         registered.
  */
 bool er_assets_load_pack_into(const void* buffer, size_t length, ErAssetsStorage* storage);

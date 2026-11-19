@@ -38,7 +38,6 @@
 #include "erb_package_reload.h"
 #endif
 
-#include "esp_attr.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -58,32 +57,16 @@ static const char* TAG = "embedded-react";
 static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 
 /**
- * @brief Room for the tables of the fonts a package brings: fonts (one per family and size), their glyphs (95 each
- *        for ASCII) and extra glyphs. 12 B a glyph; the bitmaps stay in flash. 0 fonts leaves the storage out.
+ * @brief Fonts a package may bring, one per family and size. Each takes a BitmapFont here; its glyph tables and
+ *        bitmaps stay in flash. 0 leaves the storage out.
  */
 #ifndef ERB_FONT_COUNT
 #define ERB_FONT_COUNT 16
 #endif
-#ifndef ERB_GLYPH_COUNT
-#define ERB_GLYPH_COUNT (ERB_FONT_COUNT * 95)
-#endif
-#ifndef ERB_EXTRA_GLYPH_COUNT
-#define ERB_EXTRA_GLYPH_COUNT 16
-#endif
 
 #if ERB_FONT_COUNT > 0
-/* In PSRAM: internal RAM has to keep room for the main task's stack. */
-static EXT_RAM_BSS_ATTR BitmapFont s_fonts[ERB_FONT_COUNT];
-static EXT_RAM_BSS_ATTR GlyphInfo s_glyphs[ERB_GLYPH_COUNT];
-static EXT_RAM_BSS_ATTR ExtraGlyph s_extra_glyphs[ERB_EXTRA_GLYPH_COUNT];
-static ErAssetsStorage s_font_storage = {
-    .fonts = s_fonts,
-    .font_count = ERB_FONT_COUNT,
-    .glyphs = s_glyphs,
-    .glyph_count = ERB_GLYPH_COUNT,
-    .extras = s_extra_glyphs,
-    .extra_count = ERB_EXTRA_GLYPH_COUNT,
-};
+static BitmapFont s_fonts[ERB_FONT_COUNT];
+static ErAssetsStorage s_font_storage = {.fonts = s_fonts, .font_count = ERB_FONT_COUNT};
 #endif
 
 /** @brief Room for one line of erb_error_message(). */

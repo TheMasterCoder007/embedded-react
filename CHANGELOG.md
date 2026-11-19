@@ -14,11 +14,15 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Flow B: `fontFamily` with an imported font. `build --aot` bakes each font at the sizes its text uses and
   puts it in the package.
-- Flow B board examples reserve storage for a package's font tables (`ERB_FONT_COUNT`).
+- Flow B board examples reserve room for a package's fonts (`ERB_FONT_COUNT`).
 
 ### Changed
 
+- Asset packs are now version 3: the engine reads a font's glyph tables from the pack in place, so they take
+  no RAM. Older packs no longer load, so rebuild the app with this version.
+- `ErAssetsStorage` holds fonts only.
 - Flow B: the font-size check reports against the family a text uses.
+- Flow B: a package with more fonts than the firmware reserves reports both counts.
 
 ## [0.24.1] - 2026-11-18
 ### Added

@@ -18,21 +18,33 @@
  * er_assets — portable ERPK asset-pack parser (see er_assets.h).
  *
  * Reads a pack from a caller-owned memory buffer and registers its images and fonts via the public
- * engine API (er_image_load / er_font_register). Image pixels and font bitmaps are referenced by
- * pointer into the buffer (the caller must keep it live); per-font GlyphInfo/ExtraGlyph arrays + the
- * BitmapFont structs are taken from caller storage here (er_assets_load_pack_into), or from the heap in
+ * engine API (er_image_load / er_font_register). Image pixels, glyph tables and glyph bitmaps are referenced
+ * by pointer into the buffer (the caller must keep it live); only the BitmapFont structs, which hold those
+ * pointers, are taken from caller storage here (er_assets_load_pack_into), or from the heap in
  * er_assets_heap.c.
  *
- * The pack is little-endian; multi-byte image pixels are read in place (works on LE hosts — desktop
- * x86, ESP32-S3, STM32H7).
+ * The pack is little-endian, and its image pixels and glyph tables are read in place: a glyph record is a
+ * GlyphInfo and an extra an ExtraGlyph, byte for byte. So the host must be little-endian (desktop x86 and ARM,
+ * ESP32, RP2040, STM32), and a pack with fonts must sit on a 4-byte boundary.
  */
 
 #include "er_assets_internal.h"
 
 #include "er_scene.h" /* er_image_load, er_font_register, BitmapFont, GlyphInfo, ExtraGlyph */
 
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "er_assets reads a pack's glyph tables in place, which needs a little-endian host"
+#endif
+
+/* The pack's glyph records are these structs: see emit-pack.mts. */
+_Static_assert(sizeof(GlyphInfo) == 12 && offsetof(GlyphInfo, width) == 4 && offsetof(GlyphInfo, advance) == 8,
+               "GlyphInfo changed: change the pack's glyph record with it");
+_Static_assert(sizeof(ExtraGlyph) == 16 && offsetof(ExtraGlyph, info) == 4,
+               "ExtraGlyph changed: change the pack's extra-glyph record with it");
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Bounds-checked little-endian cursor
@@ -81,11 +93,6 @@ static uint32_t rd_u32(Cur* cursor)
     return value;
 }
 
-static int8_t rd_i8(Cur* cursor)
-{
-    return (int8_t)rd_u8(cursor);
-}
-
 /** @brief Returns a pointer to the next @p byte_count bytes and advances, or NULL on over-read. */
 static const uint8_t* rd_bytes(Cur* cursor, size_t byte_count)
 {
@@ -116,16 +123,10 @@ static void rd_name(Cur* cursor, char* out, size_t capacity)
     out[kept_length] = '\0';
 }
 
-/** @brief Fills a GlyphInfo from the 9-byte serialized form. */
-static void rd_glyph(Cur* cursor, GlyphInfo* glyph)
+/** @brief Skips the zero padding that puts the next record on a 4-byte boundary from the pack's start. */
+static void rd_align(Cur* cursor, const uint8_t* source)
 {
-    memset(glyph, 0, sizeof(*glyph));
-    glyph->bitmap_offset = rd_u32(cursor);
-    glyph->width = rd_u8(cursor);
-    glyph->height = rd_u8(cursor);
-    glyph->x_offset = rd_i8(cursor);
-    glyph->y_offset = rd_i8(cursor);
-    glyph->advance = rd_u8(cursor);
+    rd_bytes(cursor, (size_t)((4u - ((uintptr_t)(cursor->next - source) & 3u)) & 3u));
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -139,9 +140,8 @@ static void rd_glyph(Cur* cursor, GlyphInfo* glyph)
 #define PACK_HEADER_SIZE 16u
 #define PACK_MAGIC_SIZE 4
 
-/** @brief Version 1 has only ARGB8888 images; version 2 gives each image a pixel format. */
-#define PACK_VERSION_ARGB8888 1u
-#define PACK_VERSION_PIXEL_FORMATS 2u
+/** @brief The one version read: glyph tables in the engine's own layout, on a 4-byte boundary. */
+#define PACK_VERSION 3u
 
 /** @brief An image's pixel format, and its bytes per pixel. */
 #define PIXEL_FORMAT_ARGB8888 0u
@@ -238,10 +238,7 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
     {
         return false; /* not our pack (or truncated header) */
     }
-    /* Version 2 adds a per-image format byte (0=ARGB8888, 1=RGB565) plus a pad that 4-byte
-     * aligns the pixels; a pack with no RGB565 images is still emitted as version 1. */
-    const uint32_t version = rd_u32(&cursor);
-    if (version != PACK_VERSION_ARGB8888 && version != PACK_VERSION_PIXEL_FORMATS)
+    if (rd_u32(&cursor) != PACK_VERSION)
     {
         return false;
     }
@@ -256,16 +253,12 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
         rd_name(&cursor, name, sizeof(name));
         const uint32_t width = rd_u32(&cursor);
         const uint32_t height = rd_u32(&cursor);
-        uint8_t format = PIXEL_FORMAT_ARGB8888; /* v1 packs are always ARGB8888 */
-        if (version >= PACK_VERSION_PIXEL_FORMATS)
+        const uint8_t format = rd_u8(&cursor);
+        if (format > PIXEL_FORMAT_RGB565)
         {
-            format = rd_u8(&cursor);
-            if (format > PIXEL_FORMAT_RGB565)
-            {
-                return false; /* unknown pixel format: the record length is unknowable, abort */
-            }
-            rd_bytes(&cursor, (size_t)((4u - ((uintptr_t)(cursor.next - source) & 3u)) & 3u)); /* skip alignment pad */
+            return false; /* unknown pixel format: the record length is unknowable, abort */
         }
+        rd_align(&cursor, source);
         /* Checked before multiplying, so a hostile size can't wrap the byte count. */
         const size_t bytes_per_pixel = format == PIXEL_FORMAT_RGB565 ? RGB565_BYTES : ARGB8888_BYTES;
         if (height != 0u && width > length / bytes_per_pixel / height)
@@ -324,50 +317,60 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
         const uint16_t name_length = (uint16_t)(name_record[0] | (name_record[1] << 8)); /* read by rd_name */
         count_family(walk, name_record + 2, name_length);
 
-        BitmapFont* font = NULL;
-        GlyphInfo* glyphs = NULL;
-        ExtraGlyph* extras = NULL;
-        if (walk->registering && !walk->tables(walk, glyph_count, extras_count, &font, &glyphs, &extras))
+        /* The tables are read where they are, so they have to sit on a word in memory too. */
+        rd_align(&cursor, source);
+        const uint8_t* tables = rd_bytes(&cursor, (size_t)glyph_count * sizeof(GlyphInfo));
+        const uint8_t* extra_tables = rd_bytes(&cursor, (size_t)extras_count * sizeof(ExtraGlyph));
+        const uint8_t* bitmap = rd_bytes(&cursor, bitmap_length);
+        if (!cursor.ok)
         {
             return false;
         }
-
-        GlyphInfo glyph;
-        for (uint16_t glyph_index = 0; glyph_index < glyph_count && cursor.ok; glyph_index++)
-        {
-            GlyphInfo* record = glyphs ? &glyphs[glyph_index] : &glyph;
-            rd_glyph(&cursor, record);
-            cursor.ok = cursor.ok && glyph_fits(record, header.format, bitmap_length);
-        }
+        /* Checked through copies, so a pack off its word can still be checked before it is copied to one. */
+        bool drawable = true;
         uint32_t previous_codepoint = 0u;
-        for (uint16_t extra_index = 0; extra_index < extras_count && cursor.ok; extra_index++)
+        for (uint16_t glyph_index = 0; glyph_index < glyph_count && drawable; glyph_index++)
+        {
+            GlyphInfo glyph;
+            memcpy(&glyph, tables + (size_t)glyph_index * sizeof(glyph), sizeof(glyph));
+            drawable = glyph_fits(&glyph, header.format, bitmap_length);
+        }
+        for (uint16_t extra_index = 0; extra_index < extras_count && drawable; extra_index++)
         {
             /* Extras are binary searched, so their codepoints must climb. */
-            const uint32_t codepoint = rd_u32(&cursor);
-            GlyphInfo* record = extras ? &extras[extra_index].info : &glyph;
-            rd_glyph(&cursor, record);
-            cursor.ok = cursor.ok && glyph_fits(record, header.format, bitmap_length)
-                        && (extra_index == 0u || codepoint > previous_codepoint);
-            previous_codepoint = codepoint;
-            if (extras)
-            {
-                extras[extra_index].codepoint = codepoint;
-            }
+            ExtraGlyph extra;
+            memcpy(&extra, extra_tables + (size_t)extra_index * sizeof(extra), sizeof(extra));
+            drawable = glyph_fits(&extra.info, header.format, bitmap_length)
+                       && (extra_index == 0u || extra.codepoint > previous_codepoint);
+            previous_codepoint = extra.codepoint;
         }
-        const uint8_t* bitmap = rd_bytes(&cursor, bitmap_length);
-
-        if (cursor.ok && font)
+        if (!drawable)
         {
+            return false;
+        }
+        const bool misaligned = ((uintptr_t)tables & 3u) != 0u;
+        walk->info.misaligned_fonts += misaligned ? 1u : 0u;
+
+        if (walk->registering)
+        {
+            if (misaligned)
+            {
+                return false;
+            }
+            const GlyphInfo* glyphs = (const GlyphInfo*)(const void*)tables;
+            const ExtraGlyph* extras = (const ExtraGlyph*)(const void*)extra_tables;
+            ErAssetsStorage* storage = walk->storage;
+            if (!storage->fonts || storage->fonts_used >= storage->font_count)
+            {
+                return false;
+            }
+            BitmapFont* font = &storage->fonts[storage->fonts_used++];
             *font = header;
             font->glyphs = glyphs;
-            font->extras = extras;
+            font->extras = extras_count ? extras : NULL;
             font->extras_count = extras_count;
             font->bitmap = bitmap;
-            er_font_register(name, font); /* tables kept; the bitmap points into the pack */
-        }
-        else if (font && walk->release)
-        {
-            walk->release(font, glyphs, extras);
+            er_font_register(name, font); /* the font points into the pack */
         }
     }
 
@@ -377,34 +380,6 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
-
-/** @brief Takes @p count entries of @p size bytes from a caller storage array, or NULL when it is out of room. */
-static void* take(void* base, uint32_t capacity, uint32_t* used, size_t size, uint32_t count)
-{
-    if (!base || capacity - *used < count)
-    {
-        return NULL;
-    }
-    void* entries = (uint8_t*)base + (size_t)*used * size;
-    *used += count;
-    return entries;
-}
-
-static bool storage_tables(ErAssetsWalk* walk,
-                           uint16_t glyph_count,
-                           uint16_t extras_count,
-                           BitmapFont** font,
-                           GlyphInfo** glyphs,
-                           ExtraGlyph** extras)
-{
-    ErAssetsStorage* storage = walk->storage;
-    *font = (BitmapFont*)take(storage->fonts, storage->font_count, &storage->fonts_used, sizeof(BitmapFont), 1u);
-    *glyphs =
-        (GlyphInfo*)take(storage->glyphs, storage->glyph_count, &storage->glyphs_used, sizeof(GlyphInfo), glyph_count);
-    *extras = (ExtraGlyph*)take(
-        storage->extras, storage->extra_count, &storage->extras_used, sizeof(ExtraGlyph), extras_count);
-    return *font && (glyph_count == 0u || *glyphs) && (extras_count == 0u || *extras);
-}
 
 bool er_assets_check_pack(const void* buffer, size_t length, ErAssetsInfo* info)
 {
@@ -583,20 +558,16 @@ bool er_assets_load_pack_into(const void* buffer, size_t length, ErAssetsStorage
         return false;
     }
     storage->fonts_used = 0u;
-    storage->glyphs_used = 0u;
-    storage->extras_used = 0u;
     /* Checked first, so a pack that fails registers nothing. */
     ErAssetsInfo info;
-    if (!er_assets_check_pack(buffer, length, &info) || !storage_fits(storage->fonts, storage->font_count, info.fonts)
-        || !storage_fits(storage->glyphs, storage->glyph_count, info.glyphs)
-        || !storage_fits(storage->extras, storage->extra_count, info.extra_glyphs))
+    if (!er_assets_check_pack(buffer, length, &info) || info.misaligned_fonts
+        || !storage_fits(storage->fonts, storage->font_count, info.fonts))
     {
         return false;
     }
     ErAssetsWalk walk;
     memset(&walk, 0, sizeof(walk));
     walk.registering = true;
-    walk.tables = storage_tables;
     walk.storage = storage;
     return er_assets_walk((const uint8_t*)buffer, length, &walk);
 }

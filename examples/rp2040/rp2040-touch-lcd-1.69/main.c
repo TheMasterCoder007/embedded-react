@@ -59,32 +59,16 @@
 static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 
 /**
- * @brief Room for the tables of the fonts a package brings: fonts (one per family and size), their glyphs (95 each
- *        for ASCII) and extra glyphs. 12 B a glyph; the bitmaps stay in flash. 0 fonts leaves the storage out.
- *        The framebuffer leaves about 4 KB of RAM, so more fonts need smaller ERUI_* pools: the link fails if not.
+ * @brief Fonts a package may bring, one per family and size. Each takes a BitmapFont here; its glyph tables and
+ *        bitmaps stay in flash. 0 leaves the storage out.
  */
 #ifndef ERB_FONT_COUNT
-#define ERB_FONT_COUNT 2
-#endif
-#ifndef ERB_GLYPH_COUNT
-#define ERB_GLYPH_COUNT (ERB_FONT_COUNT * 95)
-#endif
-#ifndef ERB_EXTRA_GLYPH_COUNT
-#define ERB_EXTRA_GLYPH_COUNT 8
+#define ERB_FONT_COUNT 16
 #endif
 
 #if ERB_FONT_COUNT > 0
 static BitmapFont s_fonts[ERB_FONT_COUNT];
-static GlyphInfo s_glyphs[ERB_GLYPH_COUNT];
-static ExtraGlyph s_extra_glyphs[ERB_EXTRA_GLYPH_COUNT];
-static ErAssetsStorage s_font_storage = {
-    .fonts = s_fonts,
-    .font_count = ERB_FONT_COUNT,
-    .glyphs = s_glyphs,
-    .glyph_count = ERB_GLYPH_COUNT,
-    .extras = s_extra_glyphs,
-    .extra_count = ERB_EXTRA_GLYPH_COUNT,
-};
+static ErAssetsStorage s_font_storage = {.fonts = s_fonts, .font_count = ERB_FONT_COUNT};
 #endif
 
 /** @brief Room for one line of erb_error_message(). */

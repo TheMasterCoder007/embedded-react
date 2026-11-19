@@ -99,7 +99,7 @@ Then, in order:
 - **Needs**, 8 bytes each: `resource u16`, `panel u16`, `amount u32`. `panel` (since minor 6) is the panel
   the need is for, or `0xFFFF` for every panel, since only the chosen layout's needs have to fit. Before
   minor 6 it was reserved. The engine pools the package uses besides nodes: vector nodes (1), animation values (2), concurrent animations (3), animation
-  groups (4), registered images (5), fonts (6), glyphs (7) and extra glyphs (8), each at most once.
+  groups (4), registered images (5) and fonts (6), each at most once.
   A firmware that doesn't know a resource id rejects the package, so a later pool can be added
   without a format change.
 - **Table directory**, 12 bytes each: `id u16`, `panel u16`, `offset u32`, `length u32`. `panel`
@@ -383,12 +383,12 @@ one `ERProps` scratch, one paint table for a vector update, the current event's 
 engine's on-screen keyboard, a copy of a package's keyboard layout. They are part of the runtime's
 footprint, not the package's.
 
-Fonts need a change to the asset loader too. `er_assets_load_pack()` allocates each font's glyph tables
-with `calloc`, and the Flow B runtime has no heap. It gets a variant that takes those tables from
-storage the caller provides, arrays the firmware sizes (`ErbConfig::fonts`), and checked against the
-package's font and glyph needs. The heap path lives in its own file (`er_assets_heap.c`), so a Flow B
-firmware never links the allocator. The table layout depends on the firmware's structs, so it can't
-live in the arena.
+A font's glyph tables and bitmaps are read from the pack in place: a glyph record in the pack is the
+engine's `GlyphInfo`, byte for byte, on a 4-byte boundary. Only the `BitmapFont` that points at them
+needs RAM, one per family and size. `er_assets_load_pack()` takes those from `calloc`, and the Flow B
+runtime has no heap, so it uses a variant that takes them from an array the firmware sizes
+(`ErbConfig::fonts`). The heap path lives in its own file (`er_assets_heap.c`), so a Flow B firmware
+never links the allocator. The struct holds pointers, so it can't live in the arena.
 
 ### The RP2040
 
@@ -690,7 +690,7 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Keyboard  | Whole records; each layer and row names the runs after the ones before it, with 1 to 255 rows or keys; every key a known type with valid strings, and one that types something has its text                                                                                    | malformed table                    |
 | Keyboard  | No more layers, rows and keys than `ERB_MAX_KEYBOARD_LAYERS`, `ERB_MAX_KEYBOARD_ROWS` and `ERB_MAX_KEYBOARD_KEYS`                                                                                                                                                              | needs more than firmware reserves  |
 | Debug     | Each table for a declared panel or all; one at most for this panel. Its `build_id` matches; parts in order, not overlapping; `function_count` is the program's; entries sorted, each on an instruction; each `file` and name an index into its strings, checked like `strings` | debug table does not match         |
-| Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable); its fonts fit the firmware's font storage and the font registry                                                                                                          | asset pack failed to load          |
+| Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable, with word-aligned glyph tables); its fonts fit the firmware's font storage and the font registry                                                                          | asset pack failed to load          |
 
 ### Run-time checks
 
@@ -807,8 +807,8 @@ A native's signature is its result, a colon, then its parameters, each `i` (int)
 (int64, two cells, low word first) or `s` (string, a cell that `erb_native_string()` reads and `erb_native_text()`
 makes), or a record of them that names its fields in order, `{x:i,y:i}`; `v` as the result means none.
 `erb_native_codes()` reads one into its values, a record's one by one. An entry with no callback is an event the
-firmware posts with `erb_native_post(index, values)`, from the frame loop. Firmware with fonts in its packages gives the runtime storage
-for their tables (`ErbConfig::fonts`): arrays of fonts, glyphs, and extra glyphs, as many as its apps
+firmware posts with `erb_native_post(index, values)`, from the frame loop. Firmware with fonts in its packages gives the runtime room
+for them (`ErbConfig::fonts`): an array of `BitmapFont`, one per family and size its apps
 need. `on_fault` replaces the error screen when the firmware wants to handle a fault itself, and `log`
 receives the reported limits. The error screen is the engine's (`er_error_screen.h`): it shows the
 reason, the amounts (`arena: needs 41,210 B, firmware reserves 32,768 B`) and the source line. A

@@ -19,7 +19,7 @@
 
 /*
  * er_assets_internal — the pack walk shared by er_assets.c (checking, caller storage) and
- * er_assets_heap.c (heap font tables). The heap path is its own file so a firmware with no heap never
+ * er_assets_heap.c (fonts from the heap). The heap path is its own file so a firmware with no heap never
  * links the allocator.
  */
 
@@ -27,23 +27,6 @@
 
 /** @brief Font families a walk tells apart; more than this counts as one more. */
 #define ER_ASSETS_MAX_FAMILIES 16u
-
-typedef struct ErAssetsWalk ErAssetsWalk;
-
-/**
- * @brief Gets the tables for one font: its BitmapFont and room for its glyph and extra-glyph records.
- *
- * @return false when there is no room, which fails the walk.
- */
-typedef bool (*ErAssetsTablesFn)(ErAssetsWalk* walk,
-                                 uint16_t glyph_count,
-                                 uint16_t extras_count,
-                                 BitmapFont** font,
-                                 GlyphInfo** glyphs,
-                                 ExtraGlyph** extras);
-
-/** @brief Gives back tables from ErAssetsTablesFn for a font that wasn't registered; may be NULL. */
-typedef void (*ErAssetsReleaseFn)(BitmapFont* font, GlyphInfo* glyphs, ExtraGlyph* extras);
 
 /** @brief A font family seen so far: its name in the pack (as far as the registry compares it), and its sizes. */
 typedef struct
@@ -54,22 +37,20 @@ typedef struct
 } ErAssetsFamily;
 
 /** @brief One walk over a pack. */
-struct ErAssetsWalk
+typedef struct
 {
-    bool registering;          /**< Register each image and font; else only check and count. */
-    ErAssetsTablesFn tables;   /**< Registering: where font tables come from. */
-    ErAssetsReleaseFn release; /**< Registering: gives back a font's tables when it isn't registered. */
-    ErAssetsStorage* storage;  /**< Caller storage, for tables that come from it. */
-    ErAssetsInfo info;         /**< Counts so far. */
-    uint32_t* image_names;     /**< Non-NULL: receives each image's name record, as an offset into the pack. */
-    uint32_t image_capacity;   /**< Length of image_names; later images are counted but not listed. */
+    bool registering;         /**< Register each image and font; else only check and count. */
+    ErAssetsStorage* storage; /**< Registering: where each font's BitmapFont comes from. */
+    ErAssetsInfo info;        /**< Counts so far. */
+    uint32_t* image_names;    /**< Non-NULL: receives each image's name record, as an offset into the pack. */
+    uint32_t image_capacity;  /**< Length of image_names; later images are counted but not listed. */
     ErAssetsFamily families[ER_ASSETS_MAX_FAMILIES];
-};
+} ErAssetsWalk;
 
 /**
  * @brief Walks a pack: checks every record and, when registering, registers each image and font.
  *
- * @return true when the whole pack was read cleanly and every font's tables were found.
+ * @return true when the whole pack was read cleanly and every font had room.
  */
 bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk);
 
