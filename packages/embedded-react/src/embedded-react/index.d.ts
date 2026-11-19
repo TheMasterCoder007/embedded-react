@@ -707,8 +707,8 @@ export interface SvgPaintProps {
   strokeGradient?: VectorGradient;
 }
 
-/** A `.svg` import: the build bakes it to a vector op-tape, or to a raster asset when it uses features the
- *  vector baker cannot represent (text, masks, filters). Pass it straight to `<Svg source>`. */
+/** A `.svg` import: the build bakes it to a vector op-tape, text included, or to a raster asset when it uses
+ *  features the vector baker cannot represent (masks, filters). Pass it straight to `<Svg source>`. */
 export type SvgSource =
   | {
       kind: 'vector';
@@ -794,6 +794,33 @@ export interface ArcProps extends SvgPaintProps {
   endAngle?: SvgNumber;
 }
 
+/**
+ * Text drawn as glyph outlines, so it scales and turns with its <Svg>. The build bakes it to a path from the
+ * font file, so the text and everything that places it must be constants: literals, module-level constants,
+ * or an imported font. Paint may change at run time. For text that changes, put a <Text> over the <Svg>.
+ */
+export interface SvgTextProps extends SvgPaintProps {
+  /** The text. */
+  children?: string | number;
+  /** Where the baseline starts, or its middle or end by `textAnchor`. */
+  x?: SvgNumber;
+  y?: SvgNumber;
+  /** An imported font (`import Inter from './fonts/Inter.ttf'`), or the name of a font file beside the
+   *  source file or in its `fonts` folder. */
+  fontFamily?: string;
+  /** In px. Defaults to 16. */
+  fontSize?: SvgNumber;
+  /** A weight other than normal takes the family's file for it, such as `Inter-Bold.ttf`. */
+  fontWeight?: 'normal' | 'bold' | SvgNumber;
+  /** Extra space after each glyph, in px. */
+  letterSpacing?: SvgNumber;
+  textAnchor?: 'start' | 'middle' | 'end';
+  /** Where `y` sits on the glyphs. Defaults to the baseline. */
+  dominantBaseline?: 'auto' | 'middle' | 'central' | 'hanging';
+  /** An SVG transform list, such as `rotate(90 50 50)`, baked into the outlines. */
+  transform?: string;
+}
+
 export const Svg: (props: SvgProps) => JSX.Element;
 export const Path: (props: PathProps) => JSX.Element;
 export const Circle: (props: CircleProps) => JSX.Element;
@@ -802,6 +829,7 @@ export const Rect: (props: RectProps) => JSX.Element;
 export const Line: (props: LineProps) => JSX.Element;
 export const G: (props: GProps) => JSX.Element;
 export const Arc: (props: ArcProps) => JSX.Element;
+export const SvgText: (props: SvgTextProps) => JSX.Element;
 
 // --- StyleSheet ------------------------------------------------------------
 export const StyleSheet: {

@@ -22,9 +22,10 @@
 //
 // Supports <path> + <rect>/<circle>/<ellipse>/<line>/<polygon>/<polyline> + <g> nesting + viewBox + solid
 // AND gradient fill/stroke (linear/radial/conic via url() refs; presentation attrs + inline style +
-// inheritance). Features the op-tape can't represent (<text>, <mask>, <filter>, <use>, …) are recorded in
-// `dropped` so the caller can rasterize the whole SVG as a fallback image instead. Primitives are emitted as
-// line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
+// inheritance). <text> and <tspan> bake to glyph outlines from a font file (svg-text.mts). Features the
+// op-tape can't represent (<mask>, <filter>, <use>, …) are recorded in `dropped` so the caller can rasterize
+// the whole SVG as a fallback image instead. Primitives are emitted as line/cubic paths (no native arc op)
+// so an arbitrary matrix bakes cleanly.
 import {parse} from 'svgson';
 import type {INode} from 'svgson';
 import {mkdirSync, writeFileSync} from 'node:fs';
@@ -52,9 +53,22 @@ import type {
   PackedStop,
   VectorArtifact,
 } from '../src/embedded-react/svg-ops.mts';
+import {
+  DEFAULT_FONT_SIZE,
+  anchorOffset,
+  baselineShift,
+  parseFontFamilies,
+  parseFontWeight,
+  parseLetterSpacing,
+  parseTextAnchor,
+  resolveFont,
+  runAdvance,
+  runOps,
+} from './svg-text.mts';
+import type {FontSearch, TextAnchor, TextRun} from './svg-text.mts';
 
 /** A 2D affine matrix [a, b, c, d, e, f]. */
-type Matrix = readonly [number, number, number, number, number, number];
+export type Matrix = readonly [number, number, number, number, number, number];
 
 /** An element's attributes, as written. */
 type Attributes = Record<string, string>;
@@ -113,7 +127,7 @@ function mul(outer: Matrix, inner: Matrix): Matrix {
 }
 
 /** Parses an SVG `transform` attribute (a chain of functions) into a single matrix. */
-function parseTransform(transform: string | undefined): Matrix {
+export function parseTransform(transform: string | undefined): Matrix {
   let matrix = IDENTITY;
   if (!transform) return matrix;
   const pattern = /(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)/g;
@@ -195,7 +209,7 @@ function pt(matrix: Matrix, x: number, y: number): [number, number] {
 
 /** Transforms a path op array (no leading SHAPE op) by @p matrix. parsePath only emits MOVE/LINE/QUAD/
  *  CUBIC/CLOSE (it converts arcs to cubics), so every coordinate pair is a plain point — matrix-safe. */
-function transformOps(ops: readonly number[], matrix: Matrix): number[] {
+export function transformOps(ops: readonly number[], matrix: Matrix): number[] {
   const transformed: number[] = [];
   let index = 0;
   while (index < ops.length) {
@@ -293,7 +307,33 @@ const PAINT_KEYS = [
   'fill-opacity',
   'stroke-opacity',
   'stroke-dasharray',
+  'font-family',
+  'font-size',
+  'font-weight',
+  'letter-spacing',
+  'text-anchor',
+  'dominant-baseline',
 ];
+
+/** The keys that decide a shape's paint record; text runs that agree on them share one shape. */
+const SHAPE_PAINT_KEYS = PAINT_KEYS.filter(
+  key => !/^(font|letter|text|dominant)-/.test(key),
+);
+
+/** <text> attributes this baker does not lay out; a file that uses one falls back to a raster. */
+const UNSUPPORTED_TEXT_ATTRIBUTES = ['rotate', 'textLength', 'writing-mode'];
+
+/** A position attribute on <text> or <tspan>, or the text it holds, in document order. */
+type TextItem =
+  | {x?: number; y?: number; dx: number; dy: number}
+  | {text: string; paint: Paint};
+
+/** Text between two absolute positions; `text-anchor` aligns it as one piece. */
+interface TextChunk {
+  x: number;
+  anchor: TextAnchor;
+  runs: Array<{run: TextRun; dx: number; y: number; paint: Paint}>;
+}
 const DEFAULT_PAINT: Paint = {
   fill: 'black',
   stroke: 'none',
@@ -526,11 +566,15 @@ function bakeGradient(
  * Compiles an SVG document string into the engine vector op-tape.
  *
  * @param svgString  The full SVG file contents.
+ * @param fonts  Where the fonts its text names are found. Without it, a file with text fails.
  * @returns op-tape + intrinsic
  *          size (px). `ops`/`paints` are plain arrays ready to inline into the bundle; `width`/`height`
  *          are the SVG's rendered size for layout (a <Svg source> scales the tape to its box).
  */
-export async function svgToVector(svgString: string): Promise<BakedSvg> {
+export async function svgToVector(
+  svgString: string,
+  fonts: FontSearch = {imports: new Map(), directories: []},
+): Promise<BakedSvg> {
   const root = await parse(String(svgString));
   const attributes = root.attributes || {};
 
@@ -563,7 +607,7 @@ export async function svgToVector(svgString: string): Promise<BakedSvg> {
   const gradientDefinitions = collectGradients(root);
 
   // Elements we intentionally skip without losing visible content (gradient defs are collected separately,
-  // the rest are metadata). Anything else hitting the skip branch — text/image/use/mask/filter/pattern/… —
+  // the rest are metadata). Anything else hitting the skip branch — image/use/mask/filter/pattern/… —
   // is unsupported VISUAL content, recorded in `dropped` so the loader can warn + fall back to raster.
   const SVG_IGNORABLE = new Set([
     'defs',
@@ -575,6 +619,187 @@ export async function svgToVector(svgString: string): Promise<BakedSvg> {
     'conicGradient',
   ]);
   const dropped = new Set<string>();
+
+  /** Appends one shape: its paint record and its ops, moved by @p matrix. */
+  const emitShape = (
+    shapeOps: readonly number[],
+    matrix: Matrix,
+    paint: Paint,
+    attributes: Attributes,
+  ): void => {
+    // A filter/mask/clip applied to an otherwise-bakeable shape still loses fidelity as a vector → flag it.
+    for (const feature of ['filter', 'mask', 'clip-path']) {
+      if (attributes[feature] && attributes[feature] !== 'none')
+        dropped.add(feature);
+    }
+    // A dashed stroke can't be represented in the op-tape (the stroke is baked solid). Flag it so the SVG
+    // falls back to raster (resvg renders the dashes) — but only when a visible stroke is actually dashed
+    // by a positive pattern, so a stray stroke-dasharray on an unstroked/zero-width shape isn't penalized.
+    const dash = paint['stroke-dasharray'];
+    const stroked =
+      paint.stroke &&
+      paint.stroke !== 'none' &&
+      num(paint['stroke-width'], DEFAULT_STROKE_WIDTH) > 0;
+    if (stroked && dash && dash !== 'none' && /[1-9]/.test(dash))
+      dropped.add('stroke-dasharray');
+
+    const paintIndex = paints.length / PAINT_STRIDE;
+    const opacity = clamp01(num(paint.opacity, 1));
+    // A url(#id) fill/stroke referencing a parsed gradient bakes to a 1-based gradient-table index; the
+    // solid color stays 0 (colorOf returns 0 for url()). The shape's bbox is computed once, lazily.
+    let bbox: BBox | null = null;
+    const gradientIndex = (reference: string | null): number => {
+      if (!reference) return 0;
+      const definition = gradientDefinitions.get(reference);
+      if (!definition || definition.stops.length < MIN_GRADIENT_STOPS) return 0;
+      if (!bbox) bbox = opsBBox(shapeOps);
+      gradients.push(bakeGradient(definition, matrix, bbox));
+      return gradients.length; // 1-based
+    };
+    const fillGradient = gradientIndex(urlRef(paint.fill));
+    const strokeGradient = gradientIndex(urlRef(paint.stroke));
+    ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, matrix));
+    paints.push(
+      applyAlpha(
+        colorOf(paint.fill ?? 'black'),
+        opacity * clamp01(num(paint['fill-opacity'], 1)),
+      ),
+      applyAlpha(
+        colorOf(paint.stroke ?? 'none'),
+        opacity * clamp01(num(paint['stroke-opacity'], 1)),
+      ),
+      num(paint['stroke-width'], DEFAULT_STROKE_WIDTH) * scaleOf(matrix),
+      num(paint['stroke-miterlimit'], DEFAULT_MITER_LIMIT),
+      CAP[paint['stroke-linecap']] ?? 0,
+      JOIN[paint['stroke-linejoin']] ?? 0,
+      paint['fill-rule'] === 'evenodd' ? FILL_RULE_EVEN_ODD : FILL_RULE_NONZERO,
+      fillGradient,
+      strokeGradient,
+    );
+  };
+
+  /** Flattens a <text>'s content into positions and text, in document order. */
+  const textItems = (node: INode, paint: Paint, items: TextItem[]): void => {
+    const attributes = node.attributes || {};
+    const single = (key: string): number | undefined => {
+      const values = String(attributes[key] ?? '')
+        .trim()
+        .split(/[\s,]+/)
+        .filter(Boolean);
+      if (values.length > 1) dropped.add(`text ${key} list`);
+      return values.length === 1 ? num(values[0]) : undefined;
+    };
+    for (const key of UNSUPPORTED_TEXT_ATTRIBUTES) {
+      if (attributes[key]) dropped.add(`text ${key}`);
+    }
+    items.push({
+      x: single('x'),
+      y: single('y'),
+      dx: single('dx') ?? 0,
+      dy: single('dy') ?? 0,
+    });
+    for (const child of node.children || []) {
+      if (child.type === 'text') items.push({text: child.value, paint});
+      else if (child.name === 'tspan')
+        textItems(child, resolvePaint(child.attributes || {}, paint), items);
+      else if (child.type === 'element' && !SVG_IGNORABLE.has(child.name))
+        dropped.add(child.name);
+    }
+  };
+
+  /** Bakes a <text> to glyph outlines: one shape per stretch of runs that share a paint. */
+  const bakeText = (node: INode, matrix: Matrix, paint: Paint): void => {
+    const items: TextItem[] = [];
+    const droppedBefore = dropped.size;
+    textItems(node, paint, items);
+    // Text this baker cannot lay out leaves the whole file to the raster fallback.
+    if (dropped.size > droppedBefore) return;
+
+    // XML whitespace collapses to single spaces, and none leads or trails the element.
+    const preserve = (node.attributes || {})['xml:space'] === 'preserve';
+    let endsWithSpace = true;
+    let lastText: {text: string} | null = null;
+    for (const item of items) {
+      if (!('text' in item)) continue;
+      item.text = item.text.replace(preserve ? /\s/g : /\s+/g, ' ');
+      if (!preserve && endsWithSpace) item.text = item.text.replace(/^ /, '');
+      if (item.text) {
+        endsWithSpace = item.text.endsWith(' ');
+        lastText = item;
+      }
+    }
+    if (lastText && !preserve) lastText.text = lastText.text.replace(/ $/, '');
+
+    const shapes: Array<{paint: Paint; ops: number[]}> = [];
+    let penX = 0;
+    let penY = 0;
+    let pendingDx = 0;
+    let chunk: TextChunk = {x: 0, anchor: 'start', runs: []};
+    const flush = (): void => {
+      const width = chunk.runs.reduce(
+        (total, placed) => total + placed.dx + runAdvance(placed.run),
+        0,
+      );
+      let cursor = chunk.x + anchorOffset(chunk.anchor, width);
+      for (const placed of chunk.runs) {
+        cursor += placed.dx;
+        const glyphOps = runOps(placed.run, cursor, placed.y);
+        cursor += runAdvance(placed.run);
+        const last = shapes[shapes.length - 1];
+        if (
+          last &&
+          SHAPE_PAINT_KEYS.every(key => last.paint[key] === placed.paint[key])
+        )
+          last.ops.push(...glyphOps);
+        else shapes.push({paint: placed.paint, ops: glyphOps});
+      }
+      penX = cursor;
+    };
+
+    for (const item of items) {
+      if (!('text' in item)) {
+        if (item.x !== undefined || item.y !== undefined) {
+          flush();
+          chunk = {x: item.x ?? penX, anchor: 'start', runs: []};
+          penY = item.y ?? penY;
+        }
+        pendingDx += item.dx;
+        penY += item.dy;
+        continue;
+      }
+      if (!item.text) continue;
+      const fontSize = num(item.paint['font-size'], DEFAULT_FONT_SIZE);
+      const font = resolveFont(
+        parseFontFamilies(item.paint['font-family']),
+        parseFontWeight(item.paint['font-weight']),
+        fonts,
+      );
+      if (chunk.runs.length === 0)
+        chunk.anchor = parseTextAnchor(item.paint['text-anchor']);
+      chunk.runs.push({
+        run: {
+          text: item.text,
+          font,
+          fontSize,
+          letterSpacing: parseLetterSpacing(
+            item.paint['letter-spacing'],
+            fontSize,
+          ),
+        },
+        dx: pendingDx,
+        y:
+          penY + baselineShift(font, fontSize, item.paint['dominant-baseline']),
+        paint: item.paint,
+      });
+      pendingDx = 0;
+    }
+    flush();
+
+    for (const shape of shapes) {
+      if (shape.ops.length)
+        emitShape(shape.ops, matrix, shape.paint, node.attributes || {});
+    }
+  };
 
   const walk = (node: INode, matrix: Matrix, paint: Paint): void => {
     for (const child of node.children || []) {
@@ -588,6 +813,10 @@ export async function svgToVector(svgString: string): Promise<BakedSvg> {
 
       if (child.name === 'g' || child.name === 'svg') {
         walk(child, childMatrix, childPaint);
+        continue;
+      }
+      if (child.name === 'text') {
+        bakeText(child, childMatrix, childPaint);
         continue;
       }
 
@@ -605,66 +834,13 @@ export async function svgToVector(svgString: string): Promise<BakedSvg> {
       }
       if (!d) continue;
 
-      // A filter/mask/clip applied to an otherwise-bakeable shape still loses fidelity as a vector → flag it.
-      for (const feature of ['filter', 'mask', 'clip-path']) {
-        if (childAttributes[feature] && childAttributes[feature] !== 'none')
-          dropped.add(feature);
-      }
-      // A dashed stroke can't be represented in the op-tape (the stroke is baked solid). Flag it so the SVG
-      // falls back to raster (resvg renders the dashes) — but only when a visible stroke is actually dashed
-      // by a positive pattern, so a stray stroke-dasharray on an unstroked/zero-width shape isn't penalized.
-      const dash = childPaint['stroke-dasharray'];
-      const stroked =
-        childPaint.stroke &&
-        childPaint.stroke !== 'none' &&
-        num(childPaint['stroke-width'], DEFAULT_STROKE_WIDTH) > 0;
-      if (stroked && dash && dash !== 'none' && /[1-9]/.test(dash))
-        dropped.add('stroke-dasharray');
-
       const shapeOps = parsePath(d);
-      if (!shapeOps.length) continue;
-
-      const paintIndex = paints.length / PAINT_STRIDE;
-      const opacity = clamp01(num(childPaint.opacity, 1));
-      // A url(#id) fill/stroke referencing a parsed gradient bakes to a 1-based gradient-table index; the
-      // solid color stays 0 (colorOf returns 0 for url()). The shape's bbox is computed once, lazily.
-      let bbox: BBox | null = null;
-      const gradientIndex = (reference: string | null): number => {
-        if (!reference) return 0;
-        const definition = gradientDefinitions.get(reference);
-        if (!definition || definition.stops.length < MIN_GRADIENT_STOPS)
-          return 0;
-        if (!bbox) bbox = opsBBox(shapeOps);
-        gradients.push(bakeGradient(definition, childMatrix, bbox));
-        return gradients.length; // 1-based
-      };
-      const fillGradient = gradientIndex(urlRef(childPaint.fill));
-      const strokeGradient = gradientIndex(urlRef(childPaint.stroke));
-      ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, childMatrix));
-      paints.push(
-        applyAlpha(
-          colorOf(childPaint.fill ?? 'black'),
-          opacity * clamp01(num(childPaint['fill-opacity'], 1)),
-        ),
-        applyAlpha(
-          colorOf(childPaint.stroke ?? 'none'),
-          opacity * clamp01(num(childPaint['stroke-opacity'], 1)),
-        ),
-        num(childPaint['stroke-width'], DEFAULT_STROKE_WIDTH) *
-          scaleOf(childMatrix),
-        num(childPaint['stroke-miterlimit'], DEFAULT_MITER_LIMIT),
-        CAP[childPaint['stroke-linecap']] ?? 0,
-        JOIN[childPaint['stroke-linejoin']] ?? 0,
-        childPaint['fill-rule'] === 'evenodd'
-          ? FILL_RULE_EVEN_ODD
-          : FILL_RULE_NONZERO,
-        fillGradient,
-        strokeGradient,
-      );
+      if (shapeOps.length)
+        emitShape(shapeOps, childMatrix, childPaint, childAttributes);
     }
   };
 
-  walk(root, rootMatrix, DEFAULT_PAINT);
+  walk(root, rootMatrix, resolvePaint(attributes, DEFAULT_PAINT));
   return {ops, paints, gradients, width, height, dropped: [...dropped].sort()};
 }
 

@@ -39,6 +39,7 @@ export {
   Line,
   G,
   Arc,
+  SvgText,
 } from './components.mts';
 export {Pressable} from './Pressable.mts';
 export {Button} from './Button.mts';

@@ -445,7 +445,7 @@ import gauge from './gauge.svg';
 
 | Prop              | Type              | Notes                                                                                                                                                                           |
 | ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`          | imported `.svg`   | Baked at build time to a vector tape (or a raster, if the file uses text, masks or filters). Scaled to the render box; shape children are ignored                               |
+| `source`          | imported `.svg`   | Baked at build time to a vector tape, [text](#text) included (or a raster, if the file uses masks or filters). Scaled to the render box; shape children are ignored             |
 | `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source` |
 | `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then         |
 | paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                              |
@@ -467,6 +467,7 @@ stops. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` a
 | `<Line>`    | `x1`, `y1`, `x2`, `y2`                                                                                                                                                                                 |
 | `<Arc>`     | `cx`, `cy`, `r`, `startAngle`, `endAngle`: degrees clockwise from 12 o'clock. Not a standard SVG element; it emits a native arc op with no bezier conversion, cheap enough to rebuild every drag frame |
 | `<G>`       | Groups shapes under one paint and an optional `x`/`y`/`translateX`/`translateY`/`scale`, composed with enclosing groups                                                                                |
+| `<SvgText>` | Constant text as glyph outlines: `x`, `y`, `fontFamily`, `fontSize`, `fontWeight`, `letterSpacing`, `textAnchor`, `dominantBaseline`, `transform`. See [Text](#text)                                   |
 
 Limits: 16 shapes per `<Svg>` and 8 vector nodes at once, by default (`ERUI_VECTOR_PAINTS_MAX`,
 `ERUI_MAX_VECTOR_NODES`). Combine many tick marks into one `<Path>` with several subpaths.
@@ -474,6 +475,61 @@ Limits: 16 shapes per `<Svg>` and 8 vector nodes at once, by default (`ERUI_VECT
 **Flow B:** a state-driven `<Svg>` uses absolute pixels (no `viewBox`, no `<G>`) and literal shape
 children; a state-driven `<Path d>` is not supported, and `visible` or an event on an `<Svg>` is
 rejected (wrap it in a `View` or `Pressable`).
+
+### Text
+
+Text in an `<Svg>` is baked to glyph outlines at build time, so it scales and turns with the drawing
+and the device needs no font for it. Each `<SvgText>`, or each stretch of same-coloured text in a
+file, is one shape.
+
+```jsx
+import Inter from './fonts/Inter.ttf';
+
+<Svg
+  width={200}
+  height={200}
+  viewBox="0 0 100 100"
+  style={{transform: [{rotate: heading}]}}>
+  <Circle cx={50} cy={50} r={46} fill="none" stroke="#607080" />
+  <SvgText
+    x={50}
+    y={18}
+    fontFamily={Inter}
+    fontSize={12}
+    textAnchor="middle"
+    fill="#fff">
+    N
+  </SvgText>
+</Svg>;
+```
+
+| `<SvgText>` prop   | Notes                                                                                              |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| `x`, `y`           | Where the baseline starts, or its middle or end by `textAnchor`                                    |
+| `fontFamily`       | An imported font, or the name of a font file beside the source file or in its `fonts` folder       |
+| `fontSize`         | In px; 16 by default                                                                               |
+| `fontWeight`       | `'bold'` or 100 to 900. A weight other than normal uses the family's file for it: `Inter-Bold.ttf` |
+| `letterSpacing`    | Extra space after each glyph, in px                                                                |
+| `textAnchor`       | `'start'`, `'middle'` or `'end'`                                                                   |
+| `dominantBaseline` | `'middle'`, `'central'` or `'hanging'` move `y` off the baseline                                   |
+| `transform`        | An SVG transform list, such as `rotate(90 50 50)`, baked into the outlines                         |
+| paint props        | As on any shape. These may change at run time                                                      |
+
+The text and every prop in the table above must be constants: literals, module-level constants or
+an imported font. **Text that changes at run time is not supported**; put a `<Text>` over the
+`<Svg>` for it. A font used only by `<SvgText>` is not baked as a bitmap font.
+
+In an `.svg` file, `<text>` and `<tspan>` bake the same way and honour `x`, `y`, `dx`, `dy`,
+`font-family`, `font-size`, `font-weight`, `letter-spacing`, `text-anchor`, `dominant-baseline` and
+`transform`. A `font-family` names a font file: `font-family="Inter"` is `Inter.ttf` or `Inter.otf`
+beside the `.svg`, in a `fonts` folder next to it, or imported by the file that imports the `.svg`.
+The build fails, naming the family, when it finds no file or the font lacks a character. Kerning
+is applied; ligatures are not. A file with `<textPath>`, per-glyph positions, `rotate` or
+`textLength` falls back to a raster.
+
+Outlines are large: a glyph takes roughly 40 to 250 of the 1024 tape values an `<Svg>` holds by default
+(`ERUI_VECTOR_TAPE_MAX`), so a dial's cardinal letters fit and a sentence does not. In Flow B a drawing over the
+limit fails the build; set `ER_AOT_VECTOR_TAPE_MAX` to match a board that changes it.
 
 ## Intentionally absent React Native APIs
 

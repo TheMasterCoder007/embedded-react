@@ -21,6 +21,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: a `transform` takes constant and state-driven entries, alone or beside animated ones, and
   `transformOrigin` is supported.
 - Flow A: `er_runtime_follows_screen_size()` says whether the running app lays out again on a size change.
+- Text in an `.svg` file is baked to vector outlines, so a file with text stays a vector.
+- `<SvgText>` draws constant text as vector outlines inside an `<Svg>`, in both flows.
+- Flow B: a drawing too long for one `<Svg>` fails the build. `ER_AOT_VECTOR_TAPE_MAX` sets the limit.
 
 ### Changed
 

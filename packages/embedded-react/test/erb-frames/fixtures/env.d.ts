@@ -6,6 +6,11 @@ declare module '*.png' {
   export default src;
 }
 
+declare module '*.ttf' {
+  const family: string;
+  export default family;
+}
+
 declare module '*.svg' {
   import type {SvgSource} from 'embedded-react';
   const src: SvgSource;

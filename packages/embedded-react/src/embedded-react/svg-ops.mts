@@ -1166,7 +1166,16 @@ function isEmptyChild(child: unknown): boolean {
 
 // Shape/grouping tags flattenSvg knows. A tag outside this set is a mistake worth reporting; a known
 // tag that produces no geometry (a <Path> with no `d`, a zero-radius <Circle>) is not.
-const SVG_TAGS = ['Path', 'Circle', 'Ellipse', 'Rect', 'Line', 'Arc', 'G'];
+const SVG_TAGS = [
+  'Path',
+  'Circle',
+  'Ellipse',
+  'Rect',
+  'Line',
+  'Arc',
+  'SvgText',
+  'G',
+];
 
 let _warnedSvgChild = false;
 
@@ -1267,7 +1276,8 @@ export function flattenSvg(props: SvgProps): VectorTape {
     // the primitives build a fixed handful of numbers, which is cheaper than any cache lookup.
     let entry: PathEntry | null = null;
     let shapeOps: number[] | null = null;
-    if (child.type === 'Path' && childProps.d)
+    // An <SvgText> arrives baked to a `d` by the build.
+    if ((child.type === 'Path' || child.type === 'SvgText') && childProps.d)
       entry = pathEntry(childProps.d); // pathEntry coerces the key
     else if (child.type === 'Ellipse')
       entry = pathEntry(ellipsePathD(childProps));

@@ -53,6 +53,8 @@ export interface CompileOptions {
   maxTextSpans?: number;
   /** Timers that run at once. */
   maxTimers?: number;
+  /** Tape values one <Svg> holds. */
+  maxVectorTape?: number;
   /** Build the package for release: the debug flag clear, and the debug table left out of it. */
   release?: boolean;
 }
@@ -78,6 +80,7 @@ export const MAX_LIST_CAPACITY = 32767;
 const MAX_LIST_STRING_CAPACITY = 32767;
 const MAX_TEXT_SPANS = 255;
 const MAX_TIMERS = 4096;
+const MAX_VECTOR_TAPE = 65535;
 
 // What each size or cap is when neither the options nor a variable set it.
 const DEFAULT_SCREEN_WIDTH = 800;
@@ -86,6 +89,7 @@ const DEFAULT_LIST_CAPACITY = 16;
 const DEFAULT_LIST_STRING_CAPACITY = 48;
 const DEFAULT_TEXT_SPANS = 4;
 const DEFAULT_TIMERS = 8;
+const DEFAULT_VECTOR_TAPE = 1024;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -136,9 +140,11 @@ function wholeInRange(
  *                                                  engine's ER_TEXT_MAX_SPANS.
  *   maxTimers     ER_AOT_MAX_TIMERS       8        Timers that run at once. Sizes the package's timer
  *                                                  table.
+ *   maxVectorTape ER_AOT_VECTOR_TAPE_MAX  1024     Tape values one <Svg> holds. Must match the engine's
+ *                                                  ERUI_VECTOR_TAPE_MAX.
  *
  * Each value must be a whole number from 1 up: to 32767 for the screen and the list caps, to 255 for
- * maxTextSpans, to 4096 for maxTimers. One that isn't, from the options or a variable, is an `AOT:` error
+ * maxTextSpans, to 4096 for maxTimers, to 65535 for maxVectorTape. One that isn't, from the options or a variable, is an `AOT:` error
  * that names it.
  *
  * @param options  The options the caller passed.
@@ -209,6 +215,13 @@ export function resolveOptions(options: CompileOptions): ResolvedOptions {
         'ER_AOT_MAX_TIMERS',
         DEFAULT_TIMERS,
         MAX_TIMERS,
+      ),
+      maxVectorTape: fromOption(
+        options.maxVectorTape,
+        'maxVectorTape',
+        'ER_AOT_VECTOR_TAPE_MAX',
+        DEFAULT_VECTOR_TAPE,
+        MAX_VECTOR_TAPE,
       ),
     },
   };

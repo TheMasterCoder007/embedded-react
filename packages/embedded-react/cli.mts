@@ -444,11 +444,16 @@ async function compileAppPackage(
     release = false,
   }: {screens?: Screen[] | null; release?: boolean} = {},
 ) {
-  const {compilePackage, bakeSvgArtifacts, packPackage, readNativeFiles} =
-    await import('./aot/compile.mts');
+  const {
+    compilePackage,
+    bakeSvgArtifacts,
+    bakeSvgTextPaths,
+    packPackage,
+    readNativeFiles,
+  } = await import('./aot/compile.mts');
   const {bakePackageAssets} = await import('./aot/package-assets.mts');
   const appDir = dirname(appPath);
-  const source = readFileSync(appPath, 'utf8');
+  const source = bakeSvgTextPaths(readFileSync(appPath, 'utf8'), appDir);
   // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
   const svgArtifacts = await bakeSvgArtifacts(source, appDir);
   // A package has every layout the app's breakpoints call for, and --screen <WxH>,<WxH> keeps only those the

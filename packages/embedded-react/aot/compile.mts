@@ -87,6 +87,7 @@ import {bakePackageAssets} from './package-assets.mts';
 import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
+import {bakeSvgTextPaths} from './svg-text-elements.mts';
 import {nativeHeaders} from './compiler/native-header.mts';
 import {readModuleFile, readNativeFiles} from './compiler/native-files.mts';
 import {demoFile} from './demo-file.mts';
@@ -129,6 +130,7 @@ const FIRST_SIZE: Screen = {width: 240, height: 320};
 export {
   bakePackage,
   bakeSvgArtifacts,
+  bakeSvgTextPaths,
   nativeHeaders,
   packPackage,
   readModuleFile,
@@ -345,9 +347,13 @@ if (
   }
 
   // Compile the app, baking <Svg source> .svg imports first so the compile itself stays pure (no I/O).
-  const source = readFileSync(appPath, 'utf8');
+  let source: string;
   let result: PackageResult;
   try {
+    source = bakeSvgTextPaths(
+      readFileSync(appPath, 'utf8'),
+      resolve(demosDirectory, demo),
+    );
     result = compilePackage(source, demo, {
       filename: appPath,
       svgArtifacts: await bakeSvgArtifacts(
