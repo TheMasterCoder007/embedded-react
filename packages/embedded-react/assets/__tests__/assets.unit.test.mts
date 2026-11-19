@@ -285,11 +285,8 @@ function readPack(pack) {
     const name = str();
     const width = u32();
     const height = u32();
-    let format = 0; // v1: implicitly ARGB8888
-    if (version >= 2) {
-      format = u8();
-      offset += (4 - (offset % 4)) % 4; // skip the 4-byte alignment pad before the pixels
-    }
+    const format = u8();
+    offset += (4 - (offset % 4)) % 4; // skip the 4-byte alignment pad before the pixels
     const pixelOffset = offset; // pack-relative; what the in-place pointer's alignment derives from
     const pixels = [];
     for (let pixelIndex = 0; pixelIndex < width * height; pixelIndex++)
@@ -311,23 +308,27 @@ function readPack(pack) {
     font.glyphCount = u16();
     font.extraCount = u16();
     font.bitmapLength = u32();
-    for (let glyphIndex = 0; glyphIndex < font.glyphCount; glyphIndex++) {
-      u32();
-      u8();
-      u8();
-      i8();
-      i8();
-      u8();
-    } // glyph
-    for (let extraIndex = 0; extraIndex < font.extraCount; extraIndex++) {
-      u32();
-      u32();
-      u8();
-      u8();
-      i8();
-      i8();
-      u8();
-    } // extra
+    offset += (4 - (offset % 4)) % 4; // the glyph tables are read in place too
+    font.glyphOffset = offset;
+    // A glyph is the engine's 12-byte GlyphInfo: its last 3 bytes are padding.
+    const glyph = () => {
+      const record = {
+        bitmapOffset: u32(),
+        width: u8(),
+        height: u8(),
+        xOffset: i8(),
+        yOffset: i8(),
+        advance: u8(),
+        padding: [u8(), u8(), u8()],
+      };
+      return record;
+    };
+    font.glyphs = [];
+    for (let glyphIndex = 0; glyphIndex < font.glyphCount; glyphIndex++)
+      font.glyphs.push(glyph());
+    font.extras = [];
+    for (let extraIndex = 0; extraIndex < font.extraCount; extraIndex++)
+      font.extras.push({codepoint: u32(), info: glyph()});
     offset += font.bitmapLength; // bitmap
     fonts.push(font);
   }
@@ -355,7 +356,7 @@ describe('emitAssetPack', () => {
     const parsed = readPack(emitAssetPack({images: [image], fonts: [font]}));
 
     expect(parsed.magic).toBe('ERPK');
-    expect(parsed.version).toBe(2);
+    expect(parsed.version).toBe(3);
     expect(parsed.imageCount).toBe(1);
     expect(parsed.fontCount).toBe(1); // one font *size*
 
@@ -372,10 +373,10 @@ describe('emitAssetPack', () => {
     expect(parsed.consumed).toBe(parsed.total);
   });
 
-  it('emits version 2 (aligned pixels) even when no image is RGB565', () => {
+  it('aligns pixels even when no image is RGB565', () => {
     // v1 had no pixel-alignment machinery — an all-ARGB pack's pixel offsets were an accident of
     // the name strings, and a word-misaligned ARGB8888 source is refused outright by DMA2D-class
-    // backends (configuration error, image silently absent). Every pack now carries the v2 pad.
+    // backends (configuration error, image silently absent). Every pack carries the pad.
     const image = {
       name: 'logo',
       width: 1,
@@ -384,7 +385,7 @@ describe('emitAssetPack', () => {
       pixels: new Uint32Array([0xffffffff]),
     };
     const parsed = readPack(emitAssetPack({images: [image], fonts: []}));
-    expect(parsed.version).toBe(2);
+    expect(parsed.version).toBe(3);
   });
 
   it("4-aligns every image's pixels relative to the pack, whatever the name lengths", () => {
@@ -398,13 +399,13 @@ describe('emitAssetPack', () => {
     const images = ['a', 'bb', 'ccc', 'dddd', 'eeeee'].map(mk);
     const pack = emitAssetPack({images, fonts: []});
     const parsed = readPack(pack);
-    expect(parsed.version).toBe(2);
+    expect(parsed.version).toBe(3);
     for (const image of parsed.images) {
       expect(image.pixelOffset % 4).toBe(0);
     }
   });
 
-  it('writes version 2 with per-image format + aligned pixels when RGB565 is used', () => {
+  it('writes a per-image format + aligned pixels when RGB565 is used', () => {
     const background = {
       name: 'bg',
       width: 3,
@@ -423,7 +424,7 @@ describe('emitAssetPack', () => {
       emitAssetPack({images: [background, icon], fonts: []}),
     );
 
-    expect(parsed.version).toBe(2);
+    expect(parsed.version).toBe(3);
     expect(parsed.images[0]).toMatchObject({
       name: 'bg',
       width: 3,
@@ -439,6 +440,34 @@ describe('emitAssetPack', () => {
     });
     expect(parsed.images[1].pixels[0] >>> 0).toBe(0x80000080);
     expect(parsed.consumed).toBe(parsed.total);
+  });
+
+  it("writes glyph tables in the engine's layout, on a 4-byte boundary", () => {
+    // The engine reads the tables in place: a glyph is its 12-byte GlyphInfo, an extra its 16-byte ExtraGlyph.
+    for (const family of ['F', 'Fo', 'Fon', 'Font']) {
+      const font = bakeFont({
+        path: INTER,
+        family,
+        sizes: [12, 20],
+        extraGlyphs: '°',
+      });
+      const pack = emitAssetPack({images: [], fonts: [font]});
+      const parsed = readPack(pack);
+      expect(parsed.consumed).toBe(parsed.total);
+      parsed.fonts.forEach((packed, index) => {
+        const baked = font.sizes[index];
+        expect(packed.glyphOffset % 4).toBe(0);
+        expect(packed.glyphs.map(({padding, ...glyph}) => glyph)).toEqual(
+          baked.dense,
+        );
+        expect(
+          packed.glyphs.every(glyph => glyph.padding.join() === '0,0,0'),
+        ).toBe(true);
+        expect(packed.extras.map(extra => extra.codepoint)).toEqual(
+          baked.extras.map(extra => extra.codepoint),
+        );
+      });
+    }
   });
 
   it('emits byte-identical packs regardless of input order (reproducible builds)', () => {

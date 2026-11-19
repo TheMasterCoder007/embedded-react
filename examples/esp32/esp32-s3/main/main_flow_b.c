@@ -56,6 +56,19 @@ static const char* TAG = "embedded-react";
 
 static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 
+/**
+ * @brief Fonts a package may bring, one per family and size. Each takes a BitmapFont here; its glyph tables and
+ *        bitmaps stay in flash. 0 leaves the storage out.
+ */
+#ifndef ERB_FONT_COUNT
+#define ERB_FONT_COUNT 16
+#endif
+
+#if ERB_FONT_COUNT > 0
+static BitmapFont s_fonts[ERB_FONT_COUNT];
+static ErAssetsStorage s_font_storage = {.fonts = s_fonts, .font_count = ERB_FONT_COUNT};
+#endif
+
 /** @brief Room for one line of erb_error_message(). */
 #define ERROR_MESSAGE_BYTES 160
 
@@ -185,6 +198,9 @@ static void load_package(bool touch)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
+#if ERB_FONT_COUNT > 0
+        .fonts = &s_font_storage,
+#endif
         .natives = native_modules,
         .native_count = native_module_count,
         .log = host_log,

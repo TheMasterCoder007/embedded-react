@@ -1236,9 +1236,9 @@ static void tpkg_base(TPkg* package)
     package->debug_strings[0] = "App.jsx";
     package->debug_string_count = 1;
 
-    /* An ERPK v2 pack with one 1x1 ARGB image named "img": format byte, then a pad so the pixels sit at 32. */
+    /* An ERPK v3 pack with one 1x1 ARGB image named "img": format byte, then a pad so the pixels sit at 32. */
     static const uint8_t assets[] = {
-        'E', 'R', 'P', 'K', 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,    0,    3,    0,
+        'E', 'R', 'P', 'K', 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,    0,    3,    0,
         'i', 'm', 'g', 1,   0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF,
     };
     memcpy(package->assets, assets, sizeof(assets));

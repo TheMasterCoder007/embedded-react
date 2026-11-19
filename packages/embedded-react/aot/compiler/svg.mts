@@ -1385,6 +1385,7 @@ function lowerSvgBox(
     placeholder: null,
     text: null,
     image: null,
+    fontFamily: null,
     spans: null,
     wiring: [
       ...binds.map((bind, index) => ({kind: 'bind' as const, bind, index})),

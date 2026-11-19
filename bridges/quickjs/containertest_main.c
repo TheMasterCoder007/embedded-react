@@ -122,12 +122,20 @@ static void build_with_pack(const TestPack* pack)
     container_seal();
 }
 
+/** @brief Adds an asset pack on a 4-byte boundary, behind a padding section, as the emitter places one. */
+static void container_pack(const TestPack* pack)
+{
+    static const uint8_t zeros[4];
+    container_section(ER_SECTION_PADDING, zeros, (4u - ((s_container_length + 2u * SECTION_HEADER_BYTES) & 3u)) & 3u);
+    container_section(ER_SECTION_ASSET_PACK, pack->bytes, pack->length);
+}
+
 /** @brief A container with two asset packs, then bytecode that fails to load. */
 static void build_with_packs(const TestPack* first, const TestPack* second)
 {
-    container_begin(3u);
-    container_section(ER_SECTION_ASSET_PACK, first->bytes, first->length);
-    container_section(ER_SECTION_ASSET_PACK, second->bytes, second->length);
+    container_begin(5u);
+    container_pack(first);
+    container_pack(second);
     container_section(ER_SECTION_BYTECODE, s_bytecode, sizeof(s_bytecode));
     container_seal();
 }

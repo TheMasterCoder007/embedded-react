@@ -160,8 +160,8 @@ reference rather than an inline object.
 
 The AOT compiler rejects a style key it cannot lower. Beyond the limits above, Flow B does not accept
 `aspectRatio`, `alignContent`, `overflow`, `pointerEvents`, `borderStyle`, the per-side
-border widths and colors, `transformOrigin`, `fontFamily`, `fontStyle`, `textAlign` or
-`textDecorationLine`.
+border widths and colors, `transformOrigin`, `fontStyle`, `textAlign` or
+`textDecorationLine`. `fontFamily` must be an imported font, or a ternary of them.
 
 It also rejects a key the engine does not draw on that element, which Flow A ignores without a word.
 The layout keys and `transform` work everywhere. `backgroundColor`, the borders and `opacity` work on

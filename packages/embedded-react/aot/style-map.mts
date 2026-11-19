@@ -186,6 +186,9 @@ const ALPHA_OPAQUE = 0xff;
 /** The largest value a byte field holds. */
 const BYTE_MAX = 255;
 
+/** The one style key that is a string: a font's family name, which collectStyleAssigns lowers itself. */
+export const FONT_FAMILY_KEY = 'fontFamily';
+
 /** The lightest numeric fontWeight drawn bold. */
 const BOLD_WEIGHT = 600;
 
@@ -576,10 +579,11 @@ const KEYS: Record<string, StyleLowering> = {
  *
  * @returns Whether lowerStyle has a lowering for it.
  */
-export const isStyleKey = (key: string): boolean => Object.hasOwn(KEYS, key);
+export const isStyleKey = (key: string): boolean =>
+  Object.hasOwn(KEYS, key) || key === FONT_FAMILY_KEY;
 
 /** Every style key the AOT lowers statically — listed in the "unsupported style key" diagnostic. */
-export const STYLE_KEYS = Object.keys(KEYS);
+export const STYLE_KEYS = [...Object.keys(KEYS), FONT_FAMILY_KEY];
 
 /**
  * Lowers one flattened style object to a list of ERProps field assignments. This is the build-time mirror

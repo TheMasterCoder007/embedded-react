@@ -44,6 +44,7 @@ import {
   findReturnJSX,
   collectComponents,
   collectHelpers,
+  collectFontImports,
   collectImageImports,
   collectSvgImports,
   collectCallbacks,
@@ -56,6 +57,7 @@ import {collectAnims, collectRefs} from './animations.mts';
 import {lowerEffect, lowerNativeEvent} from './handlers.mts';
 import {collectPanResponders} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
+import {fontUses} from './fonts.mts';
 import {lowerKeyboardConfig} from './keyboard.mts';
 import {itemValueAt} from './list-items.mts';
 import {normalizeUndefined, parseApp} from './parse.mts';
@@ -320,10 +322,15 @@ function lowerProgram(
   const {screen} = options;
   const imageImports = collectImageImports(ast.program);
   const svgImports = collectSvgImports(ast.program);
-  const imageSeed = Object.fromEntries(
-    [...imageImports].map(([local, imageImport]) => [local, imageImport.name]),
+  const fontImports = collectFontImports(ast.program);
+  // An image import is its asset's name, and a font import its family's.
+  const assetSeed = Object.fromEntries(
+    [...imageImports, ...fontImports].map(([local, assetImport]) => [
+      local,
+      assetImport.name,
+    ]),
   );
-  const scope: Scope = moduleScope(ast.program, screen, imageSeed);
+  const scope: Scope = moduleScope(ast.program, screen, assetSeed);
   // Snapshot module bindings before App's consts fold in: child components close over these, not App's shadows.
   const moduleConstants: Scope = {...scope};
   const component = findComponent(ast.program);
@@ -339,6 +346,12 @@ function lowerProgram(
       imageImport.importPath,
     ]),
   ); // asset name → path
+  const fontFamilies = new Map(
+    [...fontImports].map(([, fontImport]) => [
+      fontImport.name,
+      fontImport.importPath,
+    ]),
+  );
   const moduleEnvironment: Env = {
     state: new Map(),
     locals: new Map(),
@@ -353,6 +366,7 @@ function lowerProgram(
       ast.program,
     ),
     imageNames,
+    fontFamilies,
     svgImports,
     svgArtifacts: options.svgArtifacts || {},
     caps: options.caps,
@@ -465,6 +479,7 @@ function lowerProgram(
     callbacks,
     helpers,
     imageNames,
+    fontFamilies,
     svgImports,
     svgArtifacts: options.svgArtifacts || {},
     caps: options.caps,
@@ -590,6 +605,7 @@ function lowerProgram(
       name,
       importPath,
     })),
+    fonts: fontUses(output, fontFamilies),
     output,
   };
 }

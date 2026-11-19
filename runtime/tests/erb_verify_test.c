@@ -216,8 +216,7 @@ static void test_panel_and_needs(void)
     EXPECT(ERB_ERROR_TOO_BIG, "an unknown resource");
     base()->needs[0].resource = ERB_RESOURCE_FONTS;
     EXPECT(ERB_ERROR_TOO_BIG, "fonts with no font storage");
-    static GlyphInfo glyphs[1];
-    static ErAssetsStorage no_array = {NULL, 1, glyphs, 1, NULL, 0, 0, 0, 0};
+    static ErAssetsStorage no_array = {NULL, 1, 0};
     s_config.fonts = &no_array;
     EXPECT(ERB_ERROR_TOO_BIG, "font storage with a count but no array");
     base()->needs[1].resource = ERB_RESOURCE_ANIMATION_VALUES;
@@ -1541,27 +1540,17 @@ static void test_assets(void)
     EXPECT(ERB_ERROR_ASSETS, "a truncated asset pack");
     base()->assets[4] = 9u;
     EXPECT(ERB_ERROR_ASSETS, "an asset pack of an unknown version");
-    /* The same image as a v1 pack: no pad, so its pixels land at 29. */
-    static const uint8_t version1_pack[] = {
-        'E', 'R', 'P', 'K', 1, 0, 0, 0, 1, 0, 0, 0, 0,    0,    0,    0,    3,
-        0,   'i', 'm', 'g', 1, 0, 0, 0, 1, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF,
-    };
-    base();
-    memcpy(s_package_spec.assets, version1_pack, sizeof(version1_pack));
-    s_package_spec.assets_length = sizeof(version1_pack);
-    EXPECT(ERB_ERROR_ASSETS, "image pixels off their word");
-    /* A font, with no storage for its tables. */
+    /* A font, with no room for it. The pack is 36 bytes, so one byte of padding puts its glyph table on a word. */
     static const uint8_t font[] = {
-        1, 0, 'f', 16, 18, 14, 1, 'A', 0, 'A', 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0xFF,
+        1, 0, 'f', 16, 18, 14, 1, 'A', 0, 'A', 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0xFF,
     };
     base();
     s_package_spec.assets[TEST_FONT_COUNT_AT] = 1u;
     memcpy(s_package_spec.assets + s_package_spec.assets_length, font, sizeof(font));
     s_package_spec.assets_length += sizeof(font);
-    EXPECT(ERB_ERROR_ASSETS, "a font that doesn't fit the firmware's font storage");
+    EXPECT(ERB_ERROR_TOO_BIG, "a font with no font storage");
     static BitmapFont fonts[1];
-    static GlyphInfo glyphs[1];
-    static ErAssetsStorage storage = {fonts, 1, glyphs, 1, NULL, 0, 0, 0, 0};
+    static ErAssetsStorage storage = {fonts, 1, 0};
     s_config.fonts = &storage;
     EXPECT(ERB_OK, "the same font with room for it");
 
@@ -1572,9 +1561,9 @@ static void test_assets(void)
     base()->assets[TEST_FONT_COUNT_AT] = 1u;
     memcpy(s_package_spec.assets + s_package_spec.assets_length, font, sizeof(font));
     s_package_spec.assets_length += sizeof(font);
-    static ErAssetsStorage no_fonts_array = {NULL, 1, glyphs, 1, NULL, 0, 0, 0, 0};
+    static ErAssetsStorage no_fonts_array = {NULL, 1, 0};
     s_config.fonts = &no_fonts_array;
-    EXPECT(ERB_ERROR_ASSETS, "a font with font storage that has a count but no array");
+    EXPECT(ERB_ERROR_TOO_BIG, "a font with font storage that has a count but no array");
 }
 
 /** @brief A font for the test pack: each glyph is glyph_width by 1 pixel at bitmap_offset. */
@@ -1624,6 +1613,9 @@ static void put_glyph(const TestFont* font)
     put_u8(0u);
     put_u8(0u);
     put_u8(font->glyph_width); /* advance */
+    put_u8(0u);
+    put_u8(0u);
+    put_u8(0u);
 }
 
 /** @brief Appends @p font to the baseline pack and counts it in the pack's header. */
@@ -1643,6 +1635,10 @@ static void add_font(const TestFont* font)
     put_u16(font->glyph_count);
     put_u16(font->extras_count);
     put_u32(font->bitmap_length);
+    while (s_package_spec.assets_length & 3u)
+    {
+        put_u8(0u);
+    }
     for (uint16_t glyph_index = 0; glyph_index < font->glyph_count; glyph_index++)
     {
         put_glyph(font);
@@ -1721,11 +1717,8 @@ static void test_image_index(void)
 static void give_font_storage(void)
 {
     static BitmapFont fonts[FONT_STORAGE_FONTS];
-    static GlyphInfo glyphs[FONT_STORAGE_FONTS];
-    static ExtraGlyph extras[FONT_STORAGE_FONTS];
     static ErAssetsStorage storage;
-    storage =
-        (ErAssetsStorage){fonts, FONT_STORAGE_FONTS, glyphs, FONT_STORAGE_FONTS, extras, FONT_STORAGE_FONTS, 0, 0, 0};
+    storage = (ErAssetsStorage){fonts, FONT_STORAGE_FONTS, 0};
     s_config.fonts = &storage;
 }
 

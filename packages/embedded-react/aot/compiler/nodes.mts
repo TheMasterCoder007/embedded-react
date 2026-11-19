@@ -30,6 +30,7 @@ import {
 import {buildValueOf, foldBoot} from './boot.mts';
 import {evalStaticOrThrow, evalStatic, foldScope} from './static-eval.mts';
 import {lowerExpr} from './expressions.mts';
+import {recordFontUse} from './fonts.mts';
 import {isFn} from './collect.mts';
 import {
   attrExpr,
@@ -717,12 +718,8 @@ function emitNodeImpl(
 
   // Allocate the node and collect its style, text content, and image attributes.
   const nodeId = `n${output.allocateNodeId()}`;
-  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
-    element.openingElement,
-    scope,
-    environment,
-    spec!,
-  );
+  const {staticAssigns, dynamicAssigns, binds, fontFamily} =
+    collectStyleAssigns(element.openingElement, scope, environment, spec!);
   if (tag === 'Text') {
     staticAssigns.push(...lowerTextTruncation(element.openingElement, scope));
   }
@@ -864,10 +861,14 @@ function emitNodeImpl(
         : image?.imageName != null
           ? {kind: 'static', name: image.imageName}
           : null,
+    fontFamily,
     spans,
     wiring,
     children: [],
   };
+  if (tag === 'Text') {
+    recordFontUse(node, output);
+  }
 
   // Compile each event prop into a handler; a disabled one drops its press events.
   const fadesWired = new Set<string>();

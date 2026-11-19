@@ -285,6 +285,34 @@ describe('findSizeGaps', () => {
     ]);
   });
 
+  it('checks each family against the sizes it draws when told them', () => {
+    const {gaps} = findSizeGaps({
+      fonts: [{family: 'Inter', sizes: [64]}],
+      usedBy: new Map([
+        ['Inter', [64, 72]],
+        [BUILTIN_FAMILY, [14, 16]],
+      ]),
+    });
+    expect(gaps).toEqual([
+      {
+        size: 14,
+        family: BUILTIN_FAMILY,
+        snapsTo: 16,
+        baked: [...BUILTIN_SIZES],
+      },
+      {size: 72, family: 'Inter', snapsTo: 64, baked: [64]},
+    ]);
+  });
+
+  it('leaves the built-in font out when no text is drawn in it', () => {
+    expect(
+      findSizeGaps({
+        fonts: [{family: 'Inter', sizes: [64]}],
+        usedBy: new Map([['Inter', [64]]]),
+      }).gaps,
+    ).toEqual([]);
+  });
+
   it('says nothing when every used size is baked', () => {
     expect(
       findSizeGaps({
@@ -327,6 +355,24 @@ describe('formatFontSizeReport', () => {
       '3 fontSize value(s) could not be read at build time',
     );
     expect(text).toContain('fontSize: p.size  (×3)');
+  });
+});
+
+describe('formatFontSizeReport — both kinds of font', () => {
+  it('gives a fix for the built-in font and one for the imported font', () => {
+    const fonts = [{family: 'Inter', sizes: [64]}];
+    const text = formatFontSizeReport({
+      ...findSizeGaps({
+        fonts,
+        usedBy: new Map([
+          ['Inter', [72]],
+          [BUILTIN_FAMILY, [14]],
+        ]),
+      }),
+      fonts,
+    });
+    expect(text).toContain('the built-in font is baked at');
+    expect(text).toContain('fonts: {Inter: {sizes: [64, 72]}}');
   });
 });
 

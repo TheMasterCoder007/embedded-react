@@ -15,7 +15,7 @@
  */
 
 /*
- * er_assets_heap — er_assets_load_pack and er_assets_load_pack_ex, which take font tables (and, for a
+ * er_assets_heap — er_assets_load_pack and er_assets_load_pack_ex, which take the fonts (and, for a
  * volatile source, a copy of the pack) from the heap, then register through er_assets_load_pack_into. Kept
  * apart from er_assets.c so a firmware that only checks packs or loads them into caller storage never links
  * the allocator.
@@ -55,17 +55,12 @@ bool er_assets_load_pack_ex(const void* buffer, size_t length, bool copy)
         return false;
     }
 
-    /* One block per table for the whole pack, kept for the process (see er_assets.h). */
+    /* One block of fonts for the whole pack, kept for the process (see er_assets.h). */
     ErAssetsStorage storage;
     memset(&storage, 0, sizeof(storage));
     storage.fonts = info.fonts ? (BitmapFont*)calloc(info.fonts, sizeof(BitmapFont)) : NULL;
-    storage.glyphs = info.glyphs ? (GlyphInfo*)calloc(info.glyphs, sizeof(GlyphInfo)) : NULL;
-    storage.extras = info.extra_glyphs ? (ExtraGlyph*)calloc(info.extra_glyphs, sizeof(ExtraGlyph)) : NULL;
     storage.font_count = info.fonts;
-    storage.glyph_count = info.glyphs;
-    storage.extra_count = info.extra_glyphs;
-    bool ok =
-        (!info.fonts || storage.fonts) && (!info.glyphs || storage.glyphs) && (!info.extra_glyphs || storage.extras);
+    bool ok = !info.fonts || storage.fonts;
 
     /* When the source is volatile (a hot-reload staging buffer about to be reused for the next upload),
      * take our own copy and register the engine against it, so the caller's buffer is free after load.
@@ -91,13 +86,11 @@ bool er_assets_load_pack_ex(const void* buffer, size_t length, bool copy)
         }
     }
 
-    /* er_assets_load_pack_into registers nothing when it fails, so the tables are free to give back. */
+    /* er_assets_load_pack_into registers nothing when it fails, so the fonts are free to give back. */
     if (ok && er_assets_load_pack_into(source, length, &storage))
     {
         return true;
     }
     free(storage.fonts);
-    free(storage.glyphs);
-    free(storage.extras);
     return false;
 }

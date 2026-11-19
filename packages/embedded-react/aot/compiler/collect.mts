@@ -113,6 +113,7 @@ export const wideInitial = (value: unknown): 'number' | 'float' | null =>
         : null;
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+const FONT_EXT_RE = /\.(ttf|otf)$/i;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -1385,20 +1386,23 @@ export function collectHelpers(
 }
 
 /**
- * Collects image imports — `import wxSun from './assets/wx_sun.png'` → Map (local → { name, importPath }).
- * `name` is the file's basename without extension (the asset key `<Image source>` resolves to and that the
- * Flow A bundler also uses); `importPath` is the source-relative path the CLI bakes from. Mirrors the Flow A
- * esbuild asset plugin so the same `import → basename` convention holds in both flows. Two different files of
- * one name would be one asset, so they are refused.
+ * Collects the default imports of asset files of one kind, by local name. An asset is named by its file's
+ * basename without extension, as the Flow A bundler names it; `importPath` is the source-relative path the CLI
+ * bakes from. Two different files of one name would be one asset, so they are refused.
  *
  * @param program  The parsed module.
+ * @param extension  Matches the kind's file extensions.
+ * @param plural  What the assets are, for the error: "images" or "fonts".
+ * @param one  One of them: "an image" or "a font".
  *
- * @returns The image imports, by local name.
+ * @returns The imports, by local name.
  */
-export function collectImageImports(
+function collectAssetImports(
   program: t.Program,
+  extension: RegExp,
+  plural: string,
+  one: string,
 ): Map<string, AssetImport> {
-  // Map each default import of an image file to the file's basename.
   const byLocal = new Map<string, AssetImport>();
   const pathOf = new Map<string, string>(); // name → the file it names
   const normalized = (path: string): string =>
@@ -1412,14 +1416,14 @@ export function collectImageImports(
     }
 
     const importPath = statement.source.value;
-    if (!IMAGE_EXT_RE.test(importPath)) continue;
+    if (!extension.test(importPath)) continue;
 
-    const name = importPath.split(/[\\/]/).pop()!.replace(IMAGE_EXT_RE, '');
+    const name = importPath.split(/[\\/]/).pop()!.replace(extension, '');
     const first = pathOf.get(name);
     if (first !== undefined && normalized(first) !== normalized(importPath)) {
       const error = aotError(
-        `AOT: two images are named "${name}" (${first} and ${importPath})`,
-        'an image is named by its file name, so rename one of the files.',
+        `AOT: two ${plural} are named "${name}" (${first} and ${importPath})`,
+        `${one} is named by its file name, so rename one of the files.`,
       );
       locateError(error, statement.loc?.start);
       throw error;
@@ -1434,6 +1438,32 @@ export function collectImageImports(
 
   return byLocal;
 }
+
+/**
+ * Collects image imports — `import wxSun from './assets/wx_sun.png'` → Map (local → { name, importPath }).
+ * `name` is the asset key `<Image source>` resolves to.
+ *
+ * @param program  The parsed module.
+ *
+ * @returns The image imports, by local name.
+ */
+export const collectImageImports = (
+  program: t.Program,
+): Map<string, AssetImport> =>
+  collectAssetImports(program, IMAGE_EXT_RE, 'images', 'an image');
+
+/**
+ * Collects font imports — `import Manrope from './fonts/Manrope-Light.ttf'` → Map (local → { name, importPath }).
+ * `name` is the family `fontFamily` looks up.
+ *
+ * @param program  The parsed module.
+ *
+ * @returns The font imports, by local name.
+ */
+export const collectFontImports = (
+  program: t.Program,
+): Map<string, AssetImport> =>
+  collectAssetImports(program, FONT_EXT_RE, 'fonts', 'a font');
 
 /**
  * Collects `import x from './foo.svg'` → Map(localName → { name, importPath }). Unlike an image (whose

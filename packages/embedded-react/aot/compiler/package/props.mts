@@ -133,7 +133,7 @@ export function constantPropEntry(
 /**
  * A string or image prop as a prop set entry.
  *
- * @param field  `text`, `placeholder` or `image_name`.
+ * @param field  `text`, `placeholder`, `image_name` or `font_family`.
  * @param stringIndex  The string's index in the strings table.
  *
  * @returns The entry.

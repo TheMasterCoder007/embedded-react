@@ -962,8 +962,8 @@ static bool asset_packs_fit(const ErContainer* container, bool copy_assets)
     }
     ERPoolLimits limits;
     er_pool_limits(&limits);
-    /* A copy is word-aligned, and a v2 pack aligns its pixels from its own first byte. */
-    const bool odd_pixels = !copy_assets && info.odd_rgb565 != 0u;
+    /* A copy is word-aligned, and a pack aligns its pixels and glyph tables from its own first byte. */
+    const bool odd_pixels = !copy_assets && (info.odd_rgb565 != 0u || info.misaligned_fonts != 0u);
     /* The registry doesn't store empty images, so they take no slot. */
     return !odd_pixels && info.images - info.empty_images <= limits.images && info.font_families <= limits.font_families
            && info.largest_family <= limits.font_sizes;

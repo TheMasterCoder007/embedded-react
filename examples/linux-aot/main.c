@@ -50,6 +50,9 @@
 /** @brief Bytes of the firmware's arena. */
 #define ARENA_BYTES (64u * 1024u)
 
+/** @brief Fonts a package may bring, one per family and size: as many as the engine's font registry holds. */
+#define FONT_COUNT 128u
+
 /** @brief A package is read into memory aligned to this many bytes. */
 #define PACKAGE_ALIGNMENT 4u
 
@@ -76,6 +79,10 @@
 
 /** @brief The firmware's arena. */
 static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
+
+/** @brief The fonts a package brings. Their glyph tables and bitmaps stay in the package. */
+static BitmapFont s_fonts[FONT_COUNT];
+static ErAssetsStorage s_font_storage = {.fonts = s_fonts, .font_count = FONT_COUNT};
 
 /** @brief Reads a file into a 4-aligned buffer, as a board places a package. NULL when it can't be read. */
 static uint32_t* read_package(const char* path, size_t* bytes)
@@ -280,6 +287,7 @@ int main(int argc, char** argv)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
+        .fonts = &s_font_storage,
         .log = log_line,
         .natives = desktop_natives,
         .native_count = desktop_native_count,

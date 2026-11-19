@@ -18,7 +18,7 @@
 #define ERPK_PACK_H
 
 /*
- * A tiny ERPK v2 writer for tests: 1x1 images and a one-glyph font, in the layout the emitter writes.
+ * A tiny ERPK v3 writer for tests: 1x1 images and a one-glyph font, in the layout the emitter writes.
  */
 
 #include <stddef.h>
@@ -65,12 +65,12 @@ static void tpack_name(TestPack* pack, const char* name)
     pack->length += name_length;
 }
 
-/** @brief Starts a version 2 pack that says it holds @p image_count images and @p font_count fonts. */
+/** @brief Starts a version 3 pack that says it holds @p image_count images and @p font_count fonts. */
 static void tpack_begin(TestPack* pack, uint32_t image_count, uint32_t font_count)
 {
     memcpy(pack->bytes, "ERPK", 4);
     pack->length = 4u;
-    tpack_u32(pack, 2u);
+    tpack_u32(pack, 3u);
     tpack_u32(pack, image_count);
     tpack_u32(pack, font_count);
 }
@@ -110,12 +110,19 @@ static void tpack_font(TestPack* pack, const char* family, uint8_t format)
     tpack_u16(pack, 1u); /* glyphs */
     tpack_u16(pack, 0u); /* extras */
     tpack_u32(pack, 1u); /* bitmap bytes */
-    tpack_u32(pack, 0u); /* glyph: bitmap offset, width, height, x and y offsets, advance */
+    while (pack->length & 3u)
+    {
+        tpack_u8(pack, 0u);
+    }
+    tpack_u32(pack, 0u); /* glyph: bitmap offset, width, height, x and y offsets, advance, padding */
     tpack_u8(pack, 1u);
     tpack_u8(pack, 1u);
     tpack_u8(pack, 0u);
     tpack_u8(pack, 0u);
     tpack_u8(pack, 1u);
+    tpack_u8(pack, 0u);
+    tpack_u8(pack, 0u);
+    tpack_u8(pack, 0u);
     tpack_u8(pack, 0xFFu); /* bitmap */
 }
 

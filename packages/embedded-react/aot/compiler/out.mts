@@ -91,6 +91,13 @@ export class Out {
   readonly images = new Map<string, string>();
   /** A dynamic image source was reached, so every imported image has to be baked. */
   bakeAllImages = false;
+  /** The sizes text is drawn at, by font family; '' is the built-in font. */
+  readonly fontSizes = new Map<string, {sizes: Set<number>; open: boolean}>();
+  /** Sizes drawn in a family state picks, which every imported font has to be baked at. */
+  readonly anyFontSizes: {sizes: Set<number>; open: boolean} = {
+    sizes: new Set(),
+    open: false,
+  };
   /** Numbers the next inlined component instance (its storage prefix is `c<n>_`). */
   instanceCount = 0;
   /** State, refs, and animated values that belong to inlined component instances. */

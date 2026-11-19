@@ -47,6 +47,7 @@
 #include "freertos/task.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 static const char* TAG = "embedded-react";
 
@@ -56,6 +57,19 @@ static const char* TAG = "embedded-react";
 #endif
 
 static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
+
+/**
+ * @brief Fonts a package may bring, one per family and size. Each takes a BitmapFont here; its glyph tables and
+ *        bitmaps stay in flash. 0 leaves the storage out.
+ */
+#ifndef ERB_FONT_COUNT
+#define ERB_FONT_COUNT 16
+#endif
+
+#if ERB_FONT_COUNT > 0
+static BitmapFont s_fonts[ERB_FONT_COUNT];
+static ErAssetsStorage s_font_storage = {.fonts = s_fonts, .font_count = ERB_FONT_COUNT};
+#endif
 
 /** @brief Longest a rejected package's reason stays on screen before the last good one runs; a tap ends it sooner. */
 #define REJECTED_HOLD_MS 10000U
@@ -147,6 +161,9 @@ static void load_package(bool touch)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
+#if ERB_FONT_COUNT > 0
+        .fonts = &s_font_storage,
+#endif
         .screen_width = BOARD_LCD_WIDTH,
         .screen_height = BOARD_LCD_HEIGHT,
         .natives = native_modules,

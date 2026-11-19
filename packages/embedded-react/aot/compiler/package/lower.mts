@@ -1228,6 +1228,12 @@ function constantProps(node: IrNode, lowering: Lowering): ProgramPropEntry[] {
     entries.push(stringPropEntry('image_name', tables.string(node.image.name)));
   }
 
+  if (node.fontFamily?.kind === 'static') {
+    entries.push(
+      stringPropEntry('font_family', tables.string(node.fontFamily.name)),
+    );
+  }
+
   return entries;
 }
 
@@ -1567,6 +1573,16 @@ function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
         'PSETS',
         codegen.valueAs(image, 'string').index,
         abiProp('image_name').id,
+      ),
+    );
+  }
+  if (node.fontFamily?.kind === 'value') {
+    const family = node.fontFamily.value;
+    codegen.scoped(() =>
+      builder.abx(
+        'PSETS',
+        codegen.valueAs(family, 'string').index,
+        abiProp('font_family').id,
       ),
     );
   }

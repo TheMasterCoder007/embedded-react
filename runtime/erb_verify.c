@@ -754,12 +754,6 @@ static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError*
             case ERB_RESOURCE_FONTS:
                 available = fonts ? storage_room(fonts->fonts, fonts->font_count) : 0u;
                 break;
-            case ERB_RESOURCE_GLYPHS:
-                available = fonts ? storage_room(fonts->glyphs, fonts->glyph_count) : 0u;
-                break;
-            case ERB_RESOURCE_EXTRA_GLYPHS:
-                available = fonts ? storage_room(fonts->extras, fonts->extra_count) : 0u;
-                break;
             default:
                 error->resource = resource;
                 error->needed = amount;
@@ -1991,12 +1985,16 @@ static bool check_assets(const ErbConfig* config, ErbProgram* program, ErbError*
     ErAssetsInfo info;
     if (!er_assets_check_pack_images(program->assets, program->assets_length, &info, s_image_names, ERB_MAX_IMAGES))
     {
-        return fail(error, ERB_ERROR_ASSETS, "asset pack malformed");
+        return fail(error, ERB_ERROR_ASSETS, "asset pack malformed, or from an older build");
     }
     /* The engine reads pixels in place as words, which faults on a core with no unaligned loads. */
     if (info.misaligned)
     {
-        return fail(error, ERB_ERROR_ASSETS, "image pixels not word-aligned (a v1 pack)");
+        return fail(error, ERB_ERROR_ASSETS, "image pixels not word-aligned");
+    }
+    if (info.misaligned_fonts)
+    {
+        return fail(error, ERB_ERROR_ASSETS, "glyph tables not word-aligned");
     }
     if (info.empty_images)
     {
@@ -2009,13 +2007,15 @@ static bool check_assets(const ErbConfig* config, ErbProgram* program, ErbError*
         return fail(error, ERB_ERROR_ASSETS, "more images than the image registry holds");
     }
     s_image_count = info.images;
-    const ErAssetsStorage* fonts = config->fonts;
-    if (info.images > limits.images || info.fonts > (fonts ? storage_room(fonts->fonts, fonts->font_count) : 0u)
-        || info.glyphs > (fonts ? storage_room(fonts->glyphs, fonts->glyph_count) : 0u)
-        || info.extra_glyphs > (fonts ? storage_room(fonts->extras, fonts->extra_count) : 0u))
+    if (info.images > limits.images)
     {
-        return fail(
-            error, ERB_ERROR_ASSETS, "asset pack doesn't fit the image registry or the firmware's font storage");
+        return fail(error, ERB_ERROR_ASSETS, "asset pack has more images than the image registry holds");
+    }
+    const ErAssetsStorage* fonts = config->fonts;
+    const uint32_t font_room = fonts ? storage_room(fonts->fonts, fonts->font_count) : 0u;
+    if (info.fonts > font_room)
+    {
+        return too_big(error, ERB_RESOURCE_FONTS, info.fonts, font_room);
     }
     if (info.font_families > limits.font_families || info.largest_family > limits.font_sizes)
     {

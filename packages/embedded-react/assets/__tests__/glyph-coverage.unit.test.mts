@@ -147,6 +147,17 @@ describe('findMissingGlyphs', () => {
     expect(missing[0].noGlyphIn).toEqual(['Inter']); // Inter has no CJK
   });
 
+  it('checks the built-in font beside an imported one when asked', () => {
+    const missing = findMissingGlyphs({
+      source: `const t = '\\u03C0';`,
+      fonts: [inter('π')],
+      withBuiltin: true,
+    });
+    expect(missing.map(missingGlyph => missingGlyph.missingFrom)).toEqual([
+      [BUILTIN_FAMILY],
+    ]);
+  });
+
   it('reports a gap in any one font when several are baked', () => {
     const missing = findMissingGlyphs({
       source: `const t = '\\u2318';`,

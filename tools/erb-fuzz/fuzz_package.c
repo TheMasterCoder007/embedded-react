@@ -84,8 +84,6 @@ static const uint16_t s_panels[][2] = {
 
 /** @brief The fonts, glyphs and extra glyphs a package may register. */
 #define FONT_SLOTS 8
-#define GLYPH_SLOTS 1024
-#define EXTRA_GLYPH_SLOTS 64
 
 /** @brief The probe's events, by their index in s_natives. */
 #define PROBE_DONE 10
@@ -336,8 +334,6 @@ static const ErbNative s_natives[] = {
 };
 
 static BitmapFont s_fonts[FONT_SLOTS];
-static GlyphInfo s_glyphs[GLYPH_SLOTS];
-static ExtraGlyph s_extras[EXTRA_GLYPH_SLOTS];
 
 /** @brief Reads a log line through, so one that runs off its string shows. */
 static void log_line(const char* line, void* context)
@@ -369,8 +365,6 @@ typedef struct
 static bool load(Run* run)
 {
     run->fonts.fonts_used = 0u;
-    run->fonts.glyphs_used = 0u;
-    run->fonts.extras_used = 0u;
     if (erb_load(run->package, run->package_bytes, &run->config, &run->error))
     {
         return true;
@@ -510,10 +504,6 @@ static void run_panel(const uint8_t* package,
     run.package_bytes = package_bytes;
     run.fonts.fonts = s_fonts;
     run.fonts.font_count = sizeof(s_fonts) / sizeof(s_fonts[0]);
-    run.fonts.glyphs = s_glyphs;
-    run.fonts.glyph_count = sizeof(s_glyphs) / sizeof(s_glyphs[0]);
-    run.fonts.extras = s_extras;
-    run.fonts.extra_count = sizeof(s_extras) / sizeof(s_extras[0]);
     run.config.arena = arena;
     run.config.arena_bytes = arena_bytes;
     run.config.screen_width = width;
