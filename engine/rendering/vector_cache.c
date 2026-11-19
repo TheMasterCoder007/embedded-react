@@ -34,7 +34,8 @@
  * Invalidation is eager and lives with the store's mutators: er_vector_store()/er_vector_free() call
  * er_vector_cache_invalidate_slot(), er_vector_reset() calls er_vector_cache_reset(). An entry is
  * additionally keyed on the node origin (origin_x, origin_y) — edges bake the screen position in — so a node that
- * moved simply misses and rebuilds.
+ * moved simply misses and rebuilds. A transformed node's entry is keyed on its flattening detail instead: its
+ * edges stay in layout space and take the matrix on replay.
  */
 
 #include "vector_cache.h" /* the entry layout + pool-size tunables (shared with vector.c only) */
@@ -57,6 +58,7 @@ typedef struct
     bool armed;   /**< A previous render already missed on (origin_x, origin_y) and no store has intervened since. */
     bool blocked; /**< Geometry overflowed the entry; do not record again for this tape. */
     int origin_x, origin_y;
+    int detail;
 } VecCachePending;
 
 static VecCachePending s_pending[ERUI_MAX_VECTOR_NODES > 0 ? ERUI_MAX_VECTOR_NODES : 1];
@@ -76,6 +78,14 @@ static void ensure_init(void)
         s_entries[entry_index].slot = -1;
 }
 
+/** @brief Whether a stored key serves a render: the same detail, and for screen-space edges the same origin. */
+static bool key_matches(int key_origin_x, int key_origin_y, int key_detail, int origin_x, int origin_y, int detail)
+{
+    if (key_detail != detail)
+        return false;
+    return detail != 0 || (key_origin_x == origin_x && key_origin_y == origin_y);
+}
+
 /** @brief The entry currently caching @p slot, valid or not (NULL when none). */
 static ERVecCache* entry_for_slot(int slot)
 {
@@ -85,13 +95,14 @@ static ERVecCache* entry_for_slot(int slot)
     return 0;
 }
 
-const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y)
+const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y, int detail)
 {
     if (slot < 0)
         return 0;
     ensure_init();
     ERVecCache* entry = entry_for_slot(slot);
-    if (entry && entry->valid && entry->origin_x == origin_x && entry->origin_y == origin_y)
+    if (entry && entry->valid
+        && key_matches(entry->origin_x, entry->origin_y, entry->detail, origin_x, origin_y, detail))
     {
         entry->stamp = ++s_tick;
         s_hits++;
@@ -100,7 +111,7 @@ const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y)
     return 0;
 }
 
-ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y)
+ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y, int detail)
 {
     if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || s_recording)
         return 0;
@@ -108,7 +119,8 @@ ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y)
     VecCachePending* pending = &s_pending[slot];
     if (pending->blocked)
         return 0;
-    if (!pending->armed || pending->origin_x != origin_x || pending->origin_y != origin_y)
+    if (!pending->armed
+        || !key_matches(pending->origin_x, pending->origin_y, pending->detail, origin_x, origin_y, detail))
     {
         /* First touch of this key: arm it and decline. Recording is only granted on the NEXT render —
          * if the tape changes in between, the store's invalidate disarms, so an animated node (whose
@@ -116,6 +128,7 @@ ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y)
         pending->armed = true;
         pending->origin_x = origin_x;
         pending->origin_y = origin_y;
+        pending->detail = detail;
         return 0;
     }
 
@@ -134,6 +147,7 @@ ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y)
     entry->valid = false;
     entry->origin_x = origin_x;
     entry->origin_y = origin_y;
+    entry->detail = detail;
     entry->stamp = ++s_tick;
     entry->pass_count = 0;
     entry->edge_count = 0;
@@ -223,19 +237,21 @@ void er_vector_cache_stats_reset(void)
 
 #else /* !ERUI_VECTOR_EDGE_CACHE — no pool, no state; every call is a cheap no-op */
 
-const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y)
+const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y, int detail)
 {
     (void)slot;
     (void)origin_x;
     (void)origin_y;
+    (void)detail;
     return 0;
 }
 
-ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y)
+ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y, int detail)
 {
     (void)slot;
     (void)origin_x;
     (void)origin_y;
+    (void)detail;
     return 0;
 }
 

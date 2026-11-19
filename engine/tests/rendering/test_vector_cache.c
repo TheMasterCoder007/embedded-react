@@ -177,7 +177,7 @@ int main(void)
 
     /* --- render #1: legacy path (two-touch: nothing recorded yet); this is the reference frame --- */
     memset(framebuffer, 0, sizeof(framebuffer));
-    er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    er_vector_render_slot(slot, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
     memcpy(reference, framebuffer, sizeof(framebuffer));
     const uint32_t arcs_per_render = er_vector_analytic_arc_count();
     if (arcs_per_render == 0)
@@ -189,7 +189,7 @@ int main(void)
 
     /* --- render #2: records; output must not change --- */
     memset(framebuffer, 0, sizeof(framebuffer));
-    er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    er_vector_render_slot(slot, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
     if (memcmp(framebuffer, reference, sizeof(framebuffer)) != 0)
         return fail("recording render differs from the reference frame");
 #if ERUI_VECTOR_EDGE_CACHE
@@ -201,7 +201,7 @@ int main(void)
 
     /* --- render #3: replays; output must not change, and the arc must still route analytically --- */
     memset(framebuffer, 0, sizeof(framebuffer));
-    er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    er_vector_render_slot(slot, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
     if (memcmp(framebuffer, reference, sizeof(framebuffer)) != 0)
         return fail("replayed render differs from the reference frame");
 #if ERUI_VECTOR_EDGE_CACHE
@@ -215,7 +215,7 @@ int main(void)
     {
         const int clip_left = 30, clip_top = 24, clip_right = 84, clip_bottom = 70;
         memset(framebuffer, 0, sizeof(framebuffer));
-        er_vector_render_slot(slot, 0, 0, clip_left, clip_top, clip_right, clip_bottom);
+        er_vector_render_slot(slot, 0, 0, NULL, clip_left, clip_top, clip_right, clip_bottom);
         for (int y = 0; y < FRAMEBUFFER_HEIGHT; y++)
             for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
             {
@@ -264,7 +264,7 @@ int main(void)
                 != slot)
                 return fail("re-store changed the slot");
             memset(framebuffer, 0, sizeof(framebuffer));
-            er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+            er_vector_render_slot(slot, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
             if (use2)
             {
                 if (framebuffer[110 * FRAMEBUFFER_WIDTH + 110] != 0xFFFF0000u)
@@ -288,8 +288,8 @@ int main(void)
         /* Re-establish a cached entry for the original tape first. */
         if (er_vector_store(slot, tape, tape_count, paints, 3, NULL, 0) != slot)
             return fail("re-store changed the slot");
-        er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* arm */
-        er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* record */
+        er_vector_render_slot(slot, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* arm */
+        er_vector_render_slot(slot, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* record */
         er_vector_free(slot);
         const float tape3[] = {ER_VECTOR_OP_SHAPE,
                                0,
@@ -311,7 +311,7 @@ int main(void)
         if (slot2 != slot)
             return fail("freed slot was not re-issued (test setup assumption)");
         memset(framebuffer, 0, sizeof(framebuffer));
-        er_vector_render_slot(slot2, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+        er_vector_render_slot(slot2, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
         if (framebuffer[10 * FRAMEBUFFER_WIDTH + 10] != 0xFF00FF00u)
             return fail("re-issued slot did not paint its own geometry");
         if (framebuffer[90 * FRAMEBUFFER_WIDTH + 40] != 0u)
@@ -324,11 +324,11 @@ int main(void)
         const int slot3 = er_vector_store(-1, tape, tape_count, paints, 3, NULL, 0);
         if (slot3 < 0)
             return fail("no slot for the move test");
-        er_vector_render_slot(slot3, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* arm */
-        er_vector_render_slot(slot3, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* record at (0,0) */
+        er_vector_render_slot(slot3, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* arm */
+        er_vector_render_slot(slot3, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* record at (0,0) */
         memset(framebuffer, 0, sizeof(framebuffer));
         er_vector_render_slot(
-            slot3, 6, 3, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* moved: must NOT replay (0,0) edges */
+            slot3, 6, 3, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* moved: must NOT replay (0,0) edges */
         for (int y = 0; y < FRAMEBUFFER_HEIGHT - 3; y++)
             for (int x = 0; x < FRAMEBUFFER_WIDTH - 6; x++)
                 if (framebuffer[(y + 3) * FRAMEBUFFER_WIDTH + (x + 6)] != reference[y * FRAMEBUFFER_WIDTH + x])
@@ -371,12 +371,12 @@ int main(void)
 #endif
         static uint32_t first[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
         memset(framebuffer, 0, sizeof(framebuffer));
-        er_vector_render_slot(big_slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+        er_vector_render_slot(big_slot, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
         memcpy(first, framebuffer, sizeof(framebuffer));
         for (int frame_index = 0; frame_index < 3; frame_index++)
         {
             memset(framebuffer, 0, sizeof(framebuffer));
-            er_vector_render_slot(big_slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+            er_vector_render_slot(big_slot, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
             if (memcmp(framebuffer, first, sizeof(framebuffer)) != 0)
                 return fail("overflowing node renders inconsistently across frames");
         }
@@ -388,8 +388,8 @@ int main(void)
     }
 
     /* --- empty / invalid slots are safe no-ops --- */
-    er_vector_render_slot(-1, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
-    er_vector_render_slot(1234, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    er_vector_render_slot(-1, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    er_vector_render_slot(1234, 0, 0, NULL, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
 
     er_vector_reset();
     printf("OK\n");

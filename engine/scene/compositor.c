@@ -374,6 +374,9 @@ typedef struct
                                         below it is in SOURCE space and reaches the screen only through that
                                         ancestor's inverse-map blit. */
     ERRect transform_capture_destination; /**< Where that blit writes — the ancestor's transformed screen AABB. */
+    bool vector_transform_active;         /**< The node about to be painted transforms directly, through the matrix
+                                        below. Consumed by its paint. */
+    ERVectorTransform vector_transform;
 } CompCtx;
 
 static CompCtx s_composite_contexts[ERUI_RENDER_WORKERS];
@@ -1488,6 +1491,9 @@ static void clip_transform_damage(NodeTransformDamage* damage)
  * `moved` latches true, and the node damages and re-reports its own region on every commit for as long
  * as it exists.
  *
+ * A node that transforms directly (er_node_transforms_directly) captures nothing: an invertible matrix
+ * paints its AABB and a singular one its raw box, whatever its size or ancestors.
+ *
  * Three things stop a capture, and two of them are visible from here:
  *   - the node is larger than the transform source (or degenerate) — er_transform_source_fits() is the
  *     exact test er_transform_source_begin() admits on, so this is a prediction, not a guess;
@@ -1538,7 +1544,9 @@ static bool node_transform_damage(ERNode* node, NodeTransformDamage* damage)
     node_ancestor_scroll(node, &scroll_x, &scroll_y);
 
     damage->hedge = false;
-    if (!er_transform_source_fits((int)node->animated.width, (int)node->animated.height))
+    /* A node that transforms directly has no capture to be refused: size and ancestors do not matter. */
+    const bool direct = er_node_transforms_directly(node);
+    if (!direct && !er_transform_source_fits((int)node->animated.width, (int)node->animated.height))
     {
         /* Decisive: er_transform_source_begin() admits on size alone, so this node paints its raw box.
          * No matrix, no AABB — and no full-repaint fallback either, even for a degenerate transform,
@@ -1583,7 +1591,14 @@ static bool node_transform_damage(ERNode* node, NodeTransformDamage* damage)
     if (!bounded)
         return false;
 
-    if (node->has_last_paint && node->last_paint_untransformed)
+    if (direct)
+    {
+        damage->footprint_x = transformed_x;
+        damage->footprint_y = transformed_y;
+        damage->footprint_width = transformed_width;
+        damage->footprint_height = transformed_height;
+    }
+    else if (node->has_last_paint && node->last_paint_untransformed)
     {
         /* Carried over from the last paint, not predicted from size, so the capture may succeed this
          * commit and paint the AABB instead. Damage both rather than risk scissoring away its own paint. */
@@ -2591,6 +2606,8 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
     /* An occluded node whose capture would have been admitted: it captures nothing, but records and
      * scopes its subtree exactly as doing_affine does (see the transform block below). */
     bool doing_bookkeeping_capture = false;
+    /* The node paints its own transform: no capture, but its footprint is the transformed AABB. */
+    bool doing_direct = false;
     int destination_x = 0, destination_y = 0, destination_width = 0, destination_height = 0;
     float inverse_a = 1.0f, inverse_b = 0.0f, inverse_c = 0.0f, inverse_d = 1.0f, inverse_translate_x = 0.0f,
           inverse_translate_y = 0.0f;
@@ -2709,7 +2726,24 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
                                     &inverse_translate_x,
                                     &inverse_translate_y))
             {
-                if (occluded)
+                if (er_node_transforms_directly(node))
+                {
+                    doing_direct = true;
+                    ERVectorTransform* direct = &cc()->vector_transform;
+                    direct->a = matrix_a;
+                    direct->b = matrix_b;
+                    direct->c = matrix_c;
+                    direct->d = matrix_d;
+                    direct->translate_x = matrix_translate_x;
+                    direct->translate_y = matrix_translate_y;
+                    direct->inverse_a = inverse_a;
+                    direct->inverse_b = inverse_b;
+                    direct->inverse_c = inverse_c;
+                    direct->inverse_d = inverse_d;
+                    direct->inverse_translate_x = inverse_translate_x;
+                    direct->inverse_translate_y = inverse_translate_y;
+                }
+                else if (occluded)
                     doing_bookkeeping_capture = !cc()->transform_capturing && er_transform_source_fits(width, height);
                 else if (cc()->tile_active && !cc()->tile_first
                          && er_transform_source_is_cached(node->tag, cc()->current_loop_generation))
@@ -2778,10 +2812,12 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
     const bool outer_capturing = cc()->transform_capturing;
     const ERRect outer_destination = cc()->transform_capture_destination;
     /* The node's pixels are (or, occluded, were last painted as) its capture's inverse-map blit. */
-    const bool transformed_footprint = doing_affine || doing_bookkeeping_capture;
+    const bool capture_scope = doing_affine || doing_bookkeeping_capture;
+    /* Either way, or painted through its own matrix, the node covers its transformed AABB. */
+    const bool transformed_footprint = capture_scope || doing_direct;
     if (doing_bookkeeping_capture)
         er_push_clip_reset(); /* what er_transform_source_begin() pushes: the subtree is walked in source space */
-    if (transformed_footprint)
+    if (capture_scope)
     {
         cc()->tile_active = false;
         cc()->transform_capturing = true;
@@ -2951,8 +2987,10 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
         const uint8_t saved_alpha = er_get_draw_alpha();
         if (node_opacity < ER_ALPHA_OPAQUE && should_render)
             er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * node_opacity / ER_ALPHA_OPAQUE));
+        cc()->vector_transform_active = doing_direct;
         render_node_content(
             node, needs_paint, occluded, box_x, box_y, width, height, child_translate_x, child_translate_y);
+        cc()->vector_transform_active = false;
         er_set_draw_alpha(saved_alpha);
     }
 
@@ -2993,7 +3031,7 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
     {
         er_pop_clip_rect(); /* the clip reset pushed above; nothing was captured, so nothing is blitted */
     }
-    if (transformed_footprint)
+    if (capture_scope)
     {
         cc()->tile_active = saved_tile_active;
         cc()->transform_capturing = outer_capturing;
@@ -3123,6 +3161,34 @@ static ER_NOINLINE void paint_node(ERNode* node, int box_x, int box_y, int width
                 er_layout_content_box(&node->layout, &vector_x, &vector_y, &vector_width, &vector_height);
                 int clip_left = vector_x, clip_top = vector_y, clip_right = vector_x + vector_width,
                     clip_bottom = vector_y + vector_height;
+                /* A transformed node paints through its matrix: the rasterizer clips ink to the turned
+                 * content box, and the clip here is that box's screen bounds. */
+                ERVectorTransform* transform = cc()->vector_transform_active ? &cc()->vector_transform : NULL;
+                cc()->vector_transform_active = false;
+                if (transform)
+                {
+                    transform->box_x0 = (float)clip_left;
+                    transform->box_y0 = (float)clip_top;
+                    transform->box_x1 = (float)clip_right;
+                    transform->box_y1 = (float)clip_bottom;
+                    int bounds_width, bounds_height;
+                    er_transform_aabb(vector_x,
+                                      vector_y,
+                                      vector_width,
+                                      vector_height,
+                                      transform->a,
+                                      transform->b,
+                                      transform->c,
+                                      transform->d,
+                                      transform->translate_x,
+                                      transform->translate_y,
+                                      &clip_left,
+                                      &clip_top,
+                                      &bounds_width,
+                                      &bounds_height);
+                    clip_right = clip_left + bounds_width;
+                    clip_bottom = clip_top + bounds_height;
+                }
                 int clip_x, clip_y, clip_width, clip_height;
                 if (er_get_clip_rect(&clip_x, &clip_y, &clip_width, &clip_height))
                 {
@@ -3147,7 +3213,7 @@ static ER_NOINLINE void paint_node(ERNode* node, int box_x, int box_y, int width
                 /* Slot-keyed entry: an unchanged node replays its cached edge lists instead of
                  * re-tessellating the tape (ERUI_VECTOR_EDGE_CACHE). */
                 er_vector_render_slot(
-                    node->vector_slot, vector_x, vector_y, clip_left, clip_top, clip_right, clip_bottom);
+                    node->vector_slot, vector_x, vector_y, transform, clip_left, clip_top, clip_right, clip_bottom);
             }
             node->vector_has_dirty = false; /* one-shot: consumed by this commit */
             break;

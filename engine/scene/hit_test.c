@@ -304,6 +304,8 @@ static bool node_transform_reaches_screen(const ERNode* node)
     if (!er_transform_is_invertible(
             node, (int)node->computed.x, (int)node->computed.y, (int)node->computed.width, (int)node->computed.height))
         return false;
+    if (er_node_transforms_directly(node))
+        return true; /* no capture to lose: an invertible transform always paints */
     if (node->has_last_paint)
         return !node->last_paint_untransformed;
     return er_transform_source_fits((int)node->animated.width, (int)node->animated.height);

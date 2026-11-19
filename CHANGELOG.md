@@ -15,6 +15,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: `fontFamily` with an imported font. `build --aot` bakes each font at the sizes its text uses and
   puts it in the package.
 - Flow B board examples reserve room for a package's fonts (`ERB_FONT_COUNT`).
+- A rotated or scaled `<Svg>` is drawn through its transform, without the transform buffer, so it works
+  at any size and with banding.
 
 ### Changed
 

@@ -109,8 +109,10 @@ both axes at once. `transformOrigin` is a fractional `[x, y]` pivot in 0 to 1, d
 transform only as `Animated.Value`s on `scale`, `scaleX`, `scaleY`, `translateX`, `translateY` or
 `rotate`/`rotateZ`; a static transform, or a static entry beside an animated one, is rejected.
 
-A transformed subtree renders through the transform scratch buffer, whose size caps the largest node
-that can rotate or scale; see [Memory](../guides/memory.md).
+An `<Svg>` transforms directly: its shapes are drawn through the transform, at any size, and strokes
+and gradients turn and scale with them. Every other transformed subtree renders through the transform
+scratch buffer, whose size caps the largest node that can rotate or scale; see
+[Memory](../guides/memory.md). An `<Svg>` under a 3D transform uses the buffer too.
 
 ## Shadow
 

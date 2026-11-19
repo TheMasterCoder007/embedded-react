@@ -85,14 +85,17 @@ typedef struct
 /**
  * @brief One cached node: the pass list plus the edge pool the passes index into.
  *
- * Valid while (slot, origin_x, origin_y) still describe the node: any er_vector_store()/er_vector_free() on the
- * slot invalidates it eagerly, and a node that moved rebuilds (edges bake the screen origin in).
+ * Valid while (slot, origin_x, origin_y, detail) still describe the node: any er_vector_store()/er_vector_free()
+ * on the slot invalidates it eagerly, and an untransformed node that moved rebuilds (its edges bake the screen
+ * origin in). A transformed node's entry (detail > 0) holds layout-space edges, horizontal ones included, and
+ * replays through any matrix at any origin.
  */
 struct ERVecCache
 {
     int slot;               /**< Storage slot this entry mirrors; -1 = empty. */
     bool valid;             /**< False while recording (and after a failed recording). */
     int origin_x, origin_y; /**< Node origin the edges were built at. */
+    int detail;             /**< 0 = screen-space edges; else the flattening detail of layout-space edges. */
     uint32_t stamp;
     int pass_count;
     int edge_count;
