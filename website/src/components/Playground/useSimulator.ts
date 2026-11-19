@@ -2,10 +2,10 @@ import {useEffect, useRef, useState, type RefObject} from 'react';
 
 /** The engine's host ABI (backends/web/web_backend.h), as cwrapped functions. */
 type Engine = {
-  init: (width: number, height: number) => number;
+  init: (width: number, height: number, rotation: number) => number;
   loadSource: (pointer: number, length: number) => void;
   loadPack: (pointer: number, length: number) => number;
-  resize: (width: number, height: number) => number;
+  resize: (width: number, height: number, rotation: number) => number;
   pump: (elapsedMs: number) => void;
   touch: (phase: number, x: number, y: number) => void;
   framebuffer: () => number;
@@ -41,6 +41,8 @@ const TOUCH_UP = 2;
 
 const BYTES_PER_PIXEL = 4;
 const INT32_MAX = 2147483647;
+// The playground's panel is mounted upright.
+const ROTATION = 0;
 // How often the app's timers still run while requestAnimationFrame is throttled or stopped.
 const BACKGROUND_TICK_MS = 250;
 
@@ -66,7 +68,11 @@ function loadEngine(base: string): Promise<Engine> {
     )
     .then(module => ({
       module,
-      init: module.cwrap('er_web_init', 'number', ['number', 'number']),
+      init: module.cwrap('er_web_init', 'number', [
+        'number',
+        'number',
+        'number',
+      ]),
       loadSource: module.cwrap('er_web_load_source', null, [
         'number',
         'number',
@@ -75,12 +81,20 @@ function loadEngine(base: string): Promise<Engine> {
         'number',
         'number',
       ]),
-      resize: module.cwrap('er_web_resize', 'number', ['number', 'number']),
+      resize: module.cwrap('er_web_resize', 'number', [
+        'number',
+        'number',
+        'number',
+      ]),
       pump: module.cwrap('er_web_pump', null, ['number']),
       touch: module.cwrap('er_web_touch', null, ['number', 'number', 'number']),
       framebuffer: module.cwrap('er_web_framebuffer', 'number', []),
-      framebufferWidth: module.cwrap('er_web_fb_width', 'number', []),
-      framebufferHeight: module.cwrap('er_web_fb_height', 'number', []),
+      framebufferWidth: module.cwrap('er_web_framebuffer_width', 'number', []),
+      framebufferHeight: module.cwrap(
+        'er_web_framebuffer_height',
+        'number',
+        [],
+      ),
       clearPersist: module._er_web_clear_persist
         ? () => module._er_web_clear_persist!()
         : null,
@@ -150,8 +164,9 @@ export function useSimulator(
           image = context.createImageData(framebufferWidth, framebufferHeight);
         };
         const started = booted
-          ? engine.resize(size.current.width, size.current.height) || 1
-          : engine.init(size.current.width, size.current.height);
+          ? engine.resize(size.current.width, size.current.height, ROTATION) ||
+            1
+          : engine.init(size.current.width, size.current.height, ROTATION);
         if (!started) {
           setError('the engine failed to start');
           return;
@@ -243,7 +258,7 @@ export function useSimulator(
               newHeight === framebufferHeight
             )
               return;
-            if (engine.resize(newWidth, newHeight)) syncCanvas();
+            if (engine.resize(newWidth, newHeight, ROTATION)) syncCanvas();
           },
           clearPersist: engine.clearPersist,
         });

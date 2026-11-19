@@ -26,8 +26,8 @@ import type {
 } from './index.d.ts';
 
 const listeners = new Set<(sizes: DimensionsChange) => void>();
-
-let subscribed = false;
+// How many of them the app added. With one or more, the app follows a size change.
+let appListenerCount = 0;
 // The size last read, kept so the hook gets the same object until the size changes.
 let current: ScaledSize | null = null;
 
@@ -56,13 +56,32 @@ function onScreenChange(): void {
   }
 }
 
-function subscribe(listener: (sizes: DimensionsChange) => void): () => void {
-  if (!subscribed) {
-    NativeUI.setScreenListener?.(onScreenChange);
-    subscribed = true;
-  }
+// Hands the bridge the listener, and whether the app follows a size change.
+function tellBridge(): void {
+  NativeUI.setScreenListener?.(onScreenChange, appListenerCount > 0);
+}
+
+// The library's own listeners: they don't say the app follows a size change.
+export function onScreenSize(
+  listener: (sizes: DimensionsChange) => void,
+): () => void {
+  if (listeners.size === 0) tellBridge();
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+function subscribe(listener: (sizes: DimensionsChange) => void): () => void {
+  const remove = onScreenSize(listener);
+  let removed = false;
+  appListenerCount++;
+  if (appListenerCount === 1) tellBridge();
+  return () => {
+    if (removed) return;
+    removed = true;
+    remove();
+    appListenerCount--;
+    if (appListenerCount === 0) tellBridge();
+  };
 }
 
 export const Dimensions: typeof PublicDimensions = {
@@ -86,4 +105,9 @@ export const Dimensions: typeof PublicDimensions = {
 // The panel's size. A component that reads it renders again when the size changes.
 export function useWindowDimensions(): ScaledSize {
   return useSyncExternalStore(subscribe, currentSize);
+}
+
+// The same size for the library's own components.
+export function useScreenSize(): ScaledSize {
+  return useSyncExternalStore(onScreenSize, currentSize);
 }

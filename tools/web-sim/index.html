@@ -10,8 +10,9 @@
   app renders at exactly 240x320 (same workflow as a responsive web project). The size controls are a small
   floating, collapsible chip so they never steal render space. You can also lock to a real panel size, and
   pick how the panel behind the board is mounted (?rotation=90): the engine then presents the panel as it
-  scans, this page turns it back, and pointer touches go to the engine in panel coordinates. It runs Flow A
-  bundles (QuickJS in WASM) with hot reload. See tools/web-sim/README.md.
+  scans, this page turns it back, and pointer touches go to the engine in panel coordinates. The rotate
+  control turns the board over the panel while the app runs, so a quarter turn swaps its width and height.
+  It runs Flow A bundles (QuickJS in WASM) with hot reload. See tools/web-sim/README.md.
 -->
 <html lang="en">
   <head>
@@ -337,11 +338,24 @@
           if (newWidth === width && newHeight === height) return;
           if (resize(newWidth, newHeight, rotation)) syncCanvas();
         };
+        // A quarter turn turns the board over the panel, which stays as it is: 800×480 becomes 480×800, as on a
+        // device that rotates live. The board can't turn while it follows the window, so that locks its size.
         rotationSelect.addEventListener('change', () => {
           const previous = rotation;
+          const wasSwapped = swapped();
           rotation = +rotationSelect.value;
-          if (resize(width, height, rotation)) syncCanvas();
-          else rotationSelect.value = String((rotation = previous));
+          const turned = swapped() !== wasSwapped;
+          const newWidth = turned ? height : width;
+          const newHeight = turned ? width : height;
+          if (!resize(newWidth, newHeight, rotation)) {
+            rotationSelect.value = String((rotation = previous));
+            return;
+          }
+          if (turned) {
+            mode = 'fixed';
+            presetSelect.value = PRESETS.some(([presetWidth, presetHeight]) => presetWidth === newWidth && presetHeight === newHeight) ? `${newWidth}x${newHeight}` : 'fit';
+          }
+          syncCanvas();
         });
 
         // Debounced refit while the viewport changes (window drag, device toolbar, rotate). Driven by the

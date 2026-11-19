@@ -3851,13 +3851,25 @@ static JSValue js_set_keyboard_listener(JSContext* ctx, JSValueConst this_val, i
 /** @brief JS object whose slot 0 holds the NativeUI.setScreenListener callback; owned as the keyboard's is. */
 static JSValue s_screen_slots = JS_UNDEFINED;
 
-/** @brief JS `setScreenListener(fn)` — fn() runs after the host changes the `screen` size. */
+/** @brief Whether the app said it lays out again when the `screen` size changes. */
+static bool s_screen_followed;
+
+/**
+ * @brief JS `setScreenListener(fn, followed)` — fn() runs after the host changes the `screen` size, and
+ *        `followed` says the app lays out again when it does.
+ */
 static JSValue js_set_screen_listener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
     const bool has_listener = argc >= 1 && JS_IsFunction(ctx, argv[0]);
     JS_SetPropertyUint32(ctx, s_screen_slots, 0, has_listener ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED);
+    s_screen_followed = has_listener && argc >= 2 && JS_ToBool(ctx, argv[1]) > 0;
     return JS_UNDEFINED;
+}
+
+bool er_bridge_screen_followed(void)
+{
+    return s_screen_followed;
 }
 
 void er_bridge_screen_changed(JSContext* ctx)
@@ -5270,7 +5282,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(
         ctx, native_ui, "dismissKeyboard", JS_NewCFunction(ctx, js_dismiss_keyboard, "dismissKeyboard", 0));
     JS_SetPropertyStr(
-        ctx, native_ui, "setScreenListener", JS_NewCFunction(ctx, js_set_screen_listener, "setScreenListener", 1));
+        ctx, native_ui, "setScreenListener", JS_NewCFunction(ctx, js_set_screen_listener, "setScreenListener", 2));
     JS_SetPropertyStr(ctx, native_ui, "keyboardFrame", JS_NewCFunction(ctx, js_keyboard_frame, "keyboardFrame", 0));
     JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 5));
     /* Expose the bridge-side vector caps so the JS layer can warn when an <Svg> exceeds them — the bridge
@@ -5360,6 +5372,7 @@ void er_bridge_install(JSContext* ctx)
     /* The screen listener's slot; same ownership trick. */
     JSValue screen_slots = JS_NewObject(ctx);
     s_screen_slots = screen_slots;
+    s_screen_followed = false;
     JS_SetPropertyStr(ctx, native_ui, "__er_screen_slots", screen_slots);
 
     /* JS_SetPropertyStr takes ownership of native_ui; no separate free needed. */

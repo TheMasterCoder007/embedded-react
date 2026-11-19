@@ -19,7 +19,10 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 import type {Dimensions as DimensionsModule} from '../index';
 
 let bridgeListener: (() => void) | undefined;
+// What the bridge was last told about the app following a size change.
+let bridgeFollowed: boolean | undefined;
 let Dimensions: typeof DimensionsModule;
+let onScreenSize: typeof import('../Dimensions.mts').onScreenSize;
 
 /** Changes the mocked panel's size, the way the host tells the bridge. */
 function setScreen(width: number, height: number) {
@@ -29,15 +32,17 @@ function setScreen(width: number, height: number) {
 
 beforeEach(async () => {
   bridgeListener = undefined;
+  bridgeFollowed = undefined;
   vi.unstubAllGlobals();
   vi.stubGlobal('screen', {width: 240, height: 320});
   vi.stubGlobal('NativeUI', {
-    setScreenListener: (listener: () => void) => {
+    setScreenListener: (listener: () => void, followed?: boolean) => {
       bridgeListener = listener;
+      bridgeFollowed = followed;
     },
   });
   vi.resetModules();
-  ({Dimensions} = await import('../Dimensions.mts'));
+  ({Dimensions, onScreenSize} = await import('../Dimensions.mts'));
 });
 
 describe('Dimensions', () => {
@@ -82,6 +87,29 @@ describe('Dimensions', () => {
     setScreen(240, 320);
 
     expect(calls).toBe(2);
+  });
+
+  it('tells the bridge the app follows while it listens', () => {
+    const first = Dimensions.addEventListener('change', () => {});
+    const second = Dimensions.addEventListener('change', () => {});
+    expect(bridgeFollowed).toBe(true);
+
+    first.remove();
+    first.remove();
+    expect(bridgeFollowed).toBe(true);
+
+    second.remove();
+    expect(bridgeFollowed).toBe(false);
+  });
+
+  it("doesn't count the library's own listeners", () => {
+    let calls = 0;
+    onScreenSize(() => calls++);
+
+    setScreen(320, 240);
+
+    expect(calls).toBe(1);
+    expect(bridgeFollowed).toBe(false);
   });
 
   it('refuses an event it does not have', () => {

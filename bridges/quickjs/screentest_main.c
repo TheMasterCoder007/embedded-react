@@ -117,6 +117,7 @@ static void test_live_size(void)
     CHECK(er_runtime_init(&config), "er_runtime_init");
     CHECK(er_runtime_load_source(LISTENING_APP, strlen(LISTENING_APP), "App.js"), "the app loads");
 
+    CHECK(!er_runtime_follows_screen_size(), "a listener alone doesn't say the app follows");
     CHECK(er_runtime_set_screen_size(PANEL_WIDTH, PANEL_HEIGHT), "the size it has");
     CHECK(changes_are(""), "is no change");
 
@@ -136,8 +137,14 @@ static void test_live_size(void)
     CHECK(er_set_display_rotation(ER_ROTATION_90, PANEL_WIDTH, PANEL_HEIGHT), "the panel turns again");
     CHECK(er_runtime_set_screen_size(0, 0), "and the size follows");
 
+    /* An app that says it follows, until a reset. */
+    static const char follow[] = "NativeUI.setScreenListener(() => {}, true);\n";
+    CHECK(er_runtime_load_source(follow, strlen(follow), "App.js"), "the app says it follows");
+    CHECK(er_runtime_follows_screen_size(), "and the host hears it");
+
     /* A reset comes back at the new size. */
     CHECK(er_runtime_reset(), "er_runtime_reset");
+    CHECK(!er_runtime_follows_screen_size(), "a reset forgets who followed");
     static const char check[] = "if (screen.width !== 240 || screen.height !== 320) throw new Error('reset');\n";
     CHECK(er_runtime_load_source(check, strlen(check), "App.js"), "a reset keeps the size");
     er_runtime_shutdown();

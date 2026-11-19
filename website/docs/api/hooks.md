@@ -371,11 +371,15 @@ The React Native way to read the same size, for code shared with a phone app. Bo
 `'screen'` are the same size.
 
 The firmware can change the size while the app runs, for a panel that rotates live
-(`er_runtime_set_screen_size()`), and so can a simulator resize. The app keeps its state: the root
+(`er_runtime_set_screen_size()`). The app keeps its state: the root
 takes the new size, a component that reads `useWindowDimensions()` renders again, and
 `Dimensions.addEventListener('change', handler)` calls `handler({window, screen})`. It returns a
 subscription with `remove()`. A value read from `screen` or `Dimensions.get()` outside a render is
 not read again, so size a layout that has to follow the turn from the hook.
+
+The browser simulator does the same on a resize for an app that listens to `Dimensions` or reads
+`useWindowDimensions()`. An app that doesn't picked its layout from `screen` as it started, so the
+simulator starts it again at the new size.
 
 **Flow B:** both are worked out at boot exactly as `screen` is, so a breakpoint written with either
 one behaves the same. The firmware changes the size with `erb_set_screen_size()`: what reads the size, `screen`

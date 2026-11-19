@@ -120,6 +120,15 @@ extern "C"
     void er_bridge_screen_changed(JSContext* ctx);
 
     /**
+     * @brief Whether the app lays out again when the `screen` size changes: it passed `followed` to
+     *        NativeUI.setScreenListener, as the library does while the app listens to `Dimensions` or reads
+     *        `useWindowDimensions()`.
+     *
+     * @return false for an app that only read `screen` as it started.
+     */
+    bool er_bridge_screen_followed(void);
+
+    /**
      * @brief The engine clock as 64 bits (`er_now_ms64`), so it keeps counting past the 32-bit wrap at
      *        ~49.7 days of uptime.
      *

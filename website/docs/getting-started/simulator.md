@@ -31,9 +31,10 @@ the way a specific display will show it, open the **gear button** in the bottom-
 - **Size** offers common panel resolutions (800×480, 1024×600, 480×320, 320×240, 240×320) or a
   custom width and height. **Lock** pins the canvas to that size.
 - **Frame** draws a device bezel around a locked canvas. It is cosmetic only.
-- **Rotate** puts a panel mounted at 90, 180 or 270 degrees behind the canvas, for a display that
-  scans against the way it is installed. The app keeps the canvas size and stays upright; the
-  engine presents to the panel and takes touches in its coordinates, as it does on the board.
+- **Rotate** turns the app 90, 180 or 270 degrees on the panel, for a display that scans against the
+  way it is installed. The app stays upright, and a quarter turn swaps its width and height: 800×480
+  becomes 480×800, and the canvas locks to that size. The engine presents to the panel and takes
+  touches in its coordinates, as it does on the board.
 
 You can also set the size and rotation from the URL, which is handy for bookmarks:
 

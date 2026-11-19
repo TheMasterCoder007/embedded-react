@@ -20,6 +20,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - A rotated or scaled `<Image>` is sampled through its transform, without the transform buffer.
 - Flow B: a `transform` takes constant and state-driven entries, alone or beside animated ones, and
   `transformOrigin` is supported.
+- Flow A: `er_runtime_follows_screen_size()` says whether the running app lays out again on a size change.
 
 ### Changed
 
@@ -28,6 +29,14 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `ErAssetsStorage` holds fonts only.
 - Flow B: the font-size check reports against the family a text uses.
 - Flow B: a package with more fonts than the firmware reserves reports both counts.
+
+### Fixed
+
+- The website playground starts again.
+- The browser simulator's rotate control turns the app on the panel, so a quarter turn swaps its width and
+  height.
+- The browser simulator starts an app again when its size changes, so a layout picked from `screen` follows
+  the new size. An app that listens to `Dimensions` or reads `useWindowDimensions()` still resizes live.
 
 ## [0.24.1] - 2026-11-18
 ### Added
