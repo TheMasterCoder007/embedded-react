@@ -397,6 +397,17 @@ bool er_runtime_native_post(int native, const int32_t* arguments);
 bool er_runtime_set_screen_size(int width, int height);
 
 /**
+ * @brief Whether the running app lays out again on er_runtime_set_screen_size(): it listens to `Dimensions` or
+ *        reads `useWindowDimensions()`.
+ *
+ * An app that only read `screen` as it started keeps the layout it picked then. A simulator that changes the
+ * size asks this first, and starts such an app again at the new size.
+ *
+ * @return false for an app that doesn't follow, and before er_runtime_init().
+ */
+bool er_runtime_follows_screen_size(void);
+
+/**
  * @brief Tears the runtime back to a clean slate for a reload: frees the JS context, resets the engine
  *        scene (er_reset), and brings up a fresh context with the bridge + globals reinstalled.
  *

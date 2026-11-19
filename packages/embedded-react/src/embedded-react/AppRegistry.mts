@@ -25,7 +25,7 @@ import {createElement, Fragment} from 'react';
 import type {ComponentType} from 'react';
 import {createRoot} from '../renderer.mts';
 import {AlertHost} from './Alert.mts';
-import {Dimensions} from './Dimensions.mts';
+import {onScreenSize} from './Dimensions.mts';
 
 let registered: {appKey: string; Component: ComponentType} | null = null;
 // The mounted root is created ONCE and reused on every subsequent registration. On a full reload, the
@@ -61,7 +61,7 @@ export const AppRegistry = {
       const mounted = createRoot({width: screen.width, height: screen.height});
       root = mounted;
       // The root follows the screen. This all runs in one batch, so the app never draws at the old size.
-      Dimensions.addEventListener('change', ({window}) =>
+      onScreenSize(({window}) =>
         mounted.setContainerProps({width: window.width, height: window.height}),
       );
     }

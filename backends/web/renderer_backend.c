@@ -179,7 +179,7 @@ void er_web_load_source(const char* source, int length)
     if (!source || length <= 0)
         return;
 
-    /* Keep a private copy so a hot reload (er_web_reset) can re-run the same app. */
+    /* Keep a private copy so a hot reload (er_web_reset) or a resize can re-run the same app. */
     char* copy = malloc((size_t)length + 1U);
     if (!copy)
         return;
@@ -332,15 +332,25 @@ int er_web_resize(int screen_width, int screen_height, int rotation)
         return 0;
     }
 
+    const bool size_changed = screen_width != s_width || screen_height != s_height;
     free(s_rgba);
     s_rgba = rgba;
     s_width = screen_width;
     s_height = screen_height;
 
-    /* The app keeps running and lays out at the new size, as it does on a device that rotates live. */
+    /* An app that follows the size lays out again with its state kept, as on a device that rotates live.
+       Any other app picked its layout from `screen` as it started, so it starts again at the new size. */
     if (s_app_loaded)
     {
-        er_runtime_set_screen_size(screen_width, screen_height);
+        if (size_changed)
+        {
+            const bool follows = er_runtime_follows_screen_size();
+            er_runtime_set_screen_size(screen_width, screen_height);
+            if (!follows)
+            {
+                er_web_reset();
+            }
+        }
     }
     else
     {

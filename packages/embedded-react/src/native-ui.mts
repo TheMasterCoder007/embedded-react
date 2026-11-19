@@ -86,8 +86,8 @@ export interface NativeUIBridge {
   setKeyboardConfig(config: KeyboardConfig | null): void;
   dismissKeyboard(): void;
 
-  // Runs after the host changes the `screen` size.
-  setScreenListener?(listener: () => void): void;
+  // Runs after the host changes the `screen` size. `followed` says the app lays out again when it does.
+  setScreenListener?(listener: () => void, followed?: boolean): void;
 
   maxVectorOps: number;
   maxVectorPaints: number;

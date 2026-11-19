@@ -19,7 +19,7 @@
 // app, shows the first one. With nothing queued the host renders no nodes.
 import {createElement, useSyncExternalStore} from 'react';
 import {Modal, Text, View} from './components.mts';
-import {useWindowDimensions} from './Dimensions.mts';
+import {useScreenSize} from './Dimensions.mts';
 import {Pressable} from './Pressable.mts';
 import type {Alert as PublicAlert, AlertButton, TextStyle} from './index.d.ts';
 
@@ -95,7 +95,7 @@ const hasText = (value: unknown) =>
 
 export function AlertHost() {
   const alert = useSyncExternalStore(subscribe, currentAlert);
-  const {width, height} = useWindowDimensions();
+  const {width, height} = useScreenSize();
   if (!alert) return null;
 
   const sheetWidth = Math.min(SHEET_MAX_WIDTH, width - SHEET_MARGIN * 2);

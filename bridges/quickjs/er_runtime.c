@@ -1181,6 +1181,11 @@ bool er_runtime_set_screen_size(int width, int height)
     return true;
 }
 
+bool er_runtime_follows_screen_size(void)
+{
+    return s_ctx && er_bridge_screen_followed();
+}
+
 bool er_runtime_gc_accounting_ok(void)
 {
     return s_gc_accounting_ok;

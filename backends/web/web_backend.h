@@ -60,7 +60,7 @@ extern "C"
      * @brief Evaluates a Flow A app bundle (esbuild output) in the QuickJS runtime, replacing any running
      *        app.
      *
-     * A private copy is kept so er_web_reset() (hot reload) can re-run it. On a JS error
+     * A private copy is kept so er_web_reset() (hot reload) and er_web_resize() can re-run it. On a JS error
      * an on-screen redbox is shown. The bytes are UTF-8 source text, not bytecode.
      *
      * @param[in] source  App bundle source (UTF-8; not required to be NUL-terminated).
@@ -101,12 +101,13 @@ extern "C"
     const uint8_t* er_web_compile_bytecode(const char* source, int length, int* out_length, int strip);
 
     /**
-     * @brief Changes the board size or rotation while the app runs (responsive preview).
+     * @brief Changes the board size or rotation at runtime (responsive preview).
      *
-     * Resizes the framebuffer + present buffer, then gives the loaded app the new screen size through
-     * er_runtime_set_screen_size(): it lays out again with its state kept, as on a device that rotates
-     * live. With no app loaded, er_web_demo_scene() is rebuilt. The host must resize its canvas to the board
-     * and its panel image to er_web_framebuffer_width/height.
+     * Resizes the framebuffer + present buffer. An app that follows the size (er_runtime_follows_screen_size())
+     * lays out again with its state kept, as on a device that rotates live. Any other app starts again at the
+     * new size, as er_web_reset() does, and reads the new `screen` the way it does at boot. A new rotation
+     * alone leaves the app running. With no app loaded, er_web_demo_scene() is rebuilt. The host must resize
+     * its canvas to the board and its panel image to er_web_framebuffer_width/height.
      *
      * @param[in] screen_width  New board (app) width in pixels (> 0).
      * @param[in] screen_height  New board (app) height in pixels (> 0).
