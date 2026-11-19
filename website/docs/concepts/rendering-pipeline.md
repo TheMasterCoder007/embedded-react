@@ -64,8 +64,8 @@ node you can rotate or scale.
 
 An `<Svg>` and an `<Image>` are the exceptions. The vector rasteriser applies the transform to the
 shapes, and the image scaler samples the asset through it, so a rotated or scaled `<Svg>` or `<Image>`
-uses no buffer, has no size cap and works with banding. A tiled image, or one with rounded corners,
-still uses the buffer.
+uses no buffer, has no size cap and works with banding. A tiled image, one with rounded corners, and
+either node under a 3D transform still use the buffer.
 
 **Present.** The backend gets the damaged rows. A full-framebuffer backend flushes those
 rectangles to the panel, one transfer window per rectangle on drivers that support it. A banded

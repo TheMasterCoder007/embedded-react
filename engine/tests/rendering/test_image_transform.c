@@ -19,9 +19,9 @@
  *
  * The first half drives the sampler: a quarter turn lands every pixel, a scale fades the edges, the resize
  * modes place the image where the untransformed renderer does, the tint applies per sample, an RGB565 asset
- * samples as its ARGB8888 twin does and nothing is written outside the clip. The second half drives a node larger than
- * the transform buffer through the compositor: it turns, an idle commit repaints nothing, a partial repaint matches a
- * full one, and the cases left on the buffer stay there.
+ * samples as its ARGB8888 twin does, extreme matrices stay in bounds and nothing is written outside the clip. The
+ * second half drives a node larger than the transform buffer through the compositor: it turns, an idle commit repaints
+ * nothing, a partial repaint matches a full one, and the cases left on the buffer stay there.
  */
 
 #include "er_limits.h"
@@ -313,6 +313,69 @@ static int check_rgb565(void)
     return EXIT_SUCCESS;
 }
 
+/** @brief Extreme and broken matrices draw inside the clip or not at all, and read nothing out of range. */
+static int check_extremes(void)
+{
+    static const float k_matrices[][6] = {
+        /* Lopsided: one axis squashed to nothing, turned and not. */
+        {1.0f, 0.0f, 0.0f, 500000.0f, -20.0f, -9000000.0f},
+        {0.7f, 400000.0f, -0.7f, 400000.0f, -20.0f, -9000000.0f},
+        {30000.0f, 0.0f, 0.0f, 1.0f, -1200000.0f, -20.0f},
+        {30000.0f, -30000.0f, 30000.0f, 30000.0f, 0.0f, 0.0f},
+        /* Past the sampler's range, and far off screen. */
+        {1.0e9f, 0.0f, 0.0f, 1.0e9f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f, 1.0f, 3.0e9f, -3.0e9f},
+        {1.0e-9f, 0.0f, 0.0f, 1.0e-9f, 5.0f, 5.0f},
+        {1.0f, 1.0e30f, 1.0e30f, 1.0f, 1.0e30f, 1.0e30f},
+    };
+    const ERImageProps props = image_props("picture", ER_RESIZE_STRETCH);
+    const int clip_x0 = 8, clip_y0 = 8, clip_x1 = RASTER_SIDE - 8, clip_y1 = RASTER_SIDE - 8;
+    for (size_t matrix = 0; matrix < sizeof(k_matrices) / sizeof(k_matrices[0]); matrix++)
+    {
+        clear_frame();
+        er_image_render_transformed(&props,
+                                    0,
+                                    0,
+                                    PICTURE_WIDTH,
+                                    PICTURE_HEIGHT,
+                                    k_matrices[matrix][0],
+                                    k_matrices[matrix][1],
+                                    k_matrices[matrix][2],
+                                    k_matrices[matrix][3],
+                                    k_matrices[matrix][4],
+                                    k_matrices[matrix][5],
+                                    clip_x0,
+                                    clip_y0,
+                                    clip_x1,
+                                    clip_y1);
+        for (int row = 0; row < RASTER_SIDE; row++)
+            for (int column = 0; column < RASTER_SIDE; column++)
+                if (get_pixel(column, row) != 0U
+                    && (column < clip_x0 || column >= clip_x1 || row < clip_y0 || row >= clip_y1))
+                    return fail("an extreme matrix wrote outside its clip");
+    }
+    /* A huge clip is cut to the screen's range. */
+    clear_frame();
+    er_image_render_transformed(&props,
+                                0,
+                                0,
+                                PICTURE_WIDTH,
+                                PICTURE_HEIGHT,
+                                1.0f,
+                                0.0f,
+                                0.0f,
+                                1.0f,
+                                0.0f,
+                                0.0f,
+                                -2000000000,
+                                0,
+                                2000000000,
+                                RASTER_SIDE);
+    if (ink_count() != PICTURE_WIDTH * PICTURE_HEIGHT)
+        return fail("a huge clip changed what an identity matrix draws");
+    return EXIT_SUCCESS;
+}
+
 /** @brief Nothing is written outside the clip, and the part inside matches an unclipped render. */
 static int check_clip(void)
 {
@@ -523,7 +586,8 @@ int main(void)
 
     if (check_quarter_turn() != EXIT_SUCCESS || check_scale_fades_edges() != EXIT_SUCCESS
         || check_resize_modes() != EXIT_SUCCESS || check_tint() != EXIT_SUCCESS || check_rgb565() != EXIT_SUCCESS
-        || check_clip() != EXIT_SUCCESS || check_node_larger_than_buffer() != EXIT_SUCCESS)
+        || check_extremes() != EXIT_SUCCESS || check_clip() != EXIT_SUCCESS
+        || check_node_larger_than_buffer() != EXIT_SUCCESS)
         return EXIT_FAILURE;
 #endif
 

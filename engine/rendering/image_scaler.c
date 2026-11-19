@@ -37,9 +37,12 @@
 #define SAMPLE_WEIGHT_SHIFT 24
 #define SAMPLE_WEIGHT_ONE 256u
 #define SAMPLE_WEIGHT_HALF ((int64_t)1 << 23)
-/** @brief The largest step per screen pixel the sampler takes. Past it the image is thinner than a pixel, and
- *         below it every position on a row fits the fixed-point range. */
-#define SAMPLE_STEP_MAX 4096.0f
+/** @brief The largest step per screen pixel the sampler takes. An image or a crop is at most 32767 across, so past
+ *         this it is thinner than a pixel on screen and nothing is drawn. */
+#define SAMPLE_STEP_MAX 32768.0f
+/** @brief The largest position a row may start from. With the step and the clip bounded, every position stepped
+ *         from it fits the fixed-point range. */
+#define SAMPLE_POSITION_MAX 1073741824.0f
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -1133,6 +1136,11 @@ void er_image_render_transformed(const ERImageProps* props,
     if (!(fabsf(inverse_a) < SAMPLE_STEP_MAX && fabsf(inverse_b) < SAMPLE_STEP_MAX
           && fabsf(source_step_x) < SAMPLE_STEP_MAX && fabsf(source_step_y) < SAMPLE_STEP_MAX))
         return;
+    /* No screen is wider, and the column count bounds how far a position is stepped. */
+    if (clip_x0 < -ER_PAINT_RECT_MAX)
+        clip_x0 = -ER_PAINT_RECT_MAX;
+    if (clip_x1 > ER_PAINT_RECT_MAX)
+        clip_x1 = ER_PAINT_RECT_MAX;
 
     const int64_t step_u = (int64_t)(inverse_a * SAMPLE_FIXED_ONE);
     const int64_t step_v = (int64_t)(inverse_b * SAMPLE_FIXED_ONE);
@@ -1153,10 +1161,17 @@ void er_image_render_transformed(const ERImageProps* props,
 
         /* Positions are stepped from column 0, whatever the clip, so a partial repaint lands on the same
          * samples as a full one. The half pixel aligns the source as the untransformed scaler does. */
+        const float row_source_x = (float)placement.source_x + (row_u + 0.5f) * ratio_x - 0.5f;
+        const float row_source_y = (float)placement.source_y + (row_v + 0.5f) * ratio_y - 0.5f;
+        /* A row that lands on the image starts in range. Checked all the same, as the casts below are
+         * undefined past it. Written to fail on NaN. */
+        if (!(fabsf(row_u) < SAMPLE_POSITION_MAX && fabsf(row_v) < SAMPLE_POSITION_MAX
+              && fabsf(row_source_x) < SAMPLE_POSITION_MAX && fabsf(row_source_y) < SAMPLE_POSITION_MAX))
+            continue;
         const int64_t base_u = to_fixed(row_u);
         const int64_t base_v = to_fixed(row_v);
-        const int64_t base_source_x = to_fixed((float)placement.source_x + (row_u + 0.5f) * ratio_x - 0.5f);
-        const int64_t base_source_y = to_fixed((float)placement.source_y + (row_v + 0.5f) * ratio_y - 0.5f);
+        const int64_t base_source_x = to_fixed(row_source_x);
+        const int64_t base_source_y = to_fixed(row_source_y);
 
         /* The columns wholly inside the image: full coverage and every tap in the crop. They take the lean
          * loop; the few either side take the edge one. */
