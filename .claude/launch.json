@@ -59,15 +59,6 @@
         "cd website && exec npx docusaurus serve --port 3401 --no-open"
       ],
       "port": 3401
-    },
-    {
-      "name": "marine-sim",
-      "runtimeExecutable": "sh",
-      "runtimeArgs": [
-        "-c",
-        "cd /Users/cory/github/spyder/templates/ColorLCD_Embedded_React_Template/App && exec node /Users/cory/github/opensource/embedded-react/packages/embedded-react/cli.mts dev --port 3338"
-      ],
-      "port": 3338
     }
   ]
 }
