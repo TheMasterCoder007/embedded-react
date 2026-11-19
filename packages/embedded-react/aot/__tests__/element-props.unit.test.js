@@ -446,7 +446,7 @@ describe('declared style keys', () => {
     const taken = new Set(
       ELEMENT_TAGS.flatMap(tag => [...elementSpec(tag).styleKeys]),
     );
-    expect([...taken].sort()).toEqual([...STYLE_KEYS, 'transform'].sort());
+    expect([...taken].sort()).toEqual([...STYLE_KEYS].sort());
   });
 });
 

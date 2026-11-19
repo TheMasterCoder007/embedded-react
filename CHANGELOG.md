@@ -18,6 +18,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - A rotated or scaled `<Svg>` is drawn through its transform, without the transform buffer, so it works
   at any size and with banding.
 - A rotated or scaled `<Image>` is sampled through its transform, without the transform buffer.
+- Flow B: a `transform` takes constant and state-driven entries, alone or beside animated ones, and
+  `transformOrigin` is supported.
 
 ### Changed
 

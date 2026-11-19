@@ -102,12 +102,16 @@ style={{transform: [{rotate: '45deg'}, {scale: pulse}], transformOrigin: [0.5, 1
 ```
 
 `transform` is an array of `{scale}`, `{scaleX}`, `{scaleY}`, `{translateX}`, `{translateY}`,
-`{rotate}`, `{rotateX}`, `{rotateY}`, `{rotateZ}` or `{perspective}`. Rotations are CSS angle strings
-(`'45deg'`, `'0.5rad'`). Every axis except `perspective` can be an `Animated.Value`; `scale` binds
+`{rotate}`, `{rotateX}`, `{rotateY}`, `{rotateZ}` or `{perspective}`. A rotation is a CSS angle string
+(`'45deg'`, `'0.5rad'`) or a number of degrees. Every axis except `perspective` can be an `Animated.Value`; `scale` binds
 both axes at once. `transformOrigin` is a fractional `[x, y]` pivot in 0 to 1, default the centre.
-`rotateX`/`rotateY`/`perspective` need a build with `ERUI_3D_TRANSFORMS`. **Flow B** takes a
-transform only as `Animated.Value`s on `scale`, `scaleX`, `scaleY`, `translateX`, `translateY` or
-`rotate`/`rotateZ`; a static transform, or a static entry beside an animated one, is rejected.
+`rotateX`/`rotateY`/`perspective` need a build with `ERUI_3D_TRANSFORMS`.
+
+**Flow B** takes each entry as a constant, a state-driven value or an `Animated.Value`, mixed freely
+in one array. A state-driven angle is written `` `${turn}deg` `` or as a number of degrees, and a
+ternary of angle strings works too. The array itself is written in place, so state goes inside an
+entry. An `Animated.Value` drives `scale`, `scaleX`, `scaleY`, `translateX`, `translateY` and
+`rotate`/`rotateZ`. `transformOrigin` is a constant.
 
 An `<Svg>` transforms directly: its shapes are drawn through the transform, at any size, and strokes
 and gradients turn and scale with them. An `<Image>` transforms directly too: its asset is sampled
@@ -164,11 +168,11 @@ reference rather than an inline object.
 
 The AOT compiler rejects a style key it cannot lower. Beyond the limits above, Flow B does not accept
 `aspectRatio`, `alignContent`, `overflow`, `pointerEvents`, `borderStyle`, the per-side
-border widths and colors, `transformOrigin`, `fontStyle`, `textAlign` or
+border widths and colors, `fontStyle`, `textAlign` or
 `textDecorationLine`. `fontFamily` must be an imported font, or a ternary of them.
 
 It also rejects a key the engine does not draw on that element, which Flow A ignores without a word.
-The layout keys and `transform` work everywhere. `backgroundColor`, the borders and `opacity` work on
+The layout keys, `transform` and `transformOrigin` work everywhere. `backgroundColor`, the borders and `opacity` work on
 `View`, `ScrollView`, `Pressable`, `TouchableOpacity` and `Modal`, and on `TextInput` without the
 per-corner radii. `backgroundImage` works on the first five. `borderRadius`, the per-corner radii and `opacity` work on `Image`. `color`,
 `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` and `opacity` work on `Text`;

@@ -1053,6 +1053,20 @@ const SCENARIOS: Scenario[] = [
     taps: '80,174 80,174',
     settle: 500,
   },
+  {
+    name: 'transform',
+    file: fixture('transform'),
+    screen: PORTRAIT,
+    flowA: true,
+  },
+  // Turn twice, with the slide run to its end, then the size.
+  {
+    name: 'transform-turned',
+    file: fixture('transform'),
+    screen: PORTRAIT,
+    taps: '52,248 52,248 160,248',
+    flowA: true,
+  },
   {name: 'drag', file: fixture('drag'), screen: PORTRAIT},
   // A tap on the knob: a grant and a release with no travel.
   {name: 'drag-tap', file: fixture('drag'), screen: PORTRAIT, taps: '50,86'},

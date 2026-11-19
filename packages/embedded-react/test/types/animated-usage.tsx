@@ -88,6 +88,16 @@ export function AnimatedUsage() {
         style={{opacity: value, transform: [{rotate: spin}]}}
       />
       <Dial value={spin} />
+      <View
+        style={{
+          transform: [
+            {rotate: '45deg'},
+            {rotateZ: 90},
+            {rotateX: 10},
+            {rotateY: '0.5rad'},
+          ],
+        }}
+      />
     </View>
   );
 }

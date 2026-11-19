@@ -221,6 +221,9 @@ list row; work it out for the whole list in a `useMemo` instead.
   `letterSpacing` and the enums `flexDirection`, `flexWrap`, `alignItems`, `alignSelf`, `justifyContent`,
   `position` and `display`. `flex`, `flexBasis`, `left`/`top`/`right`/`bottom` and `fontWeight` must
   be constants.
+- A `transform` takes constant, state-driven and animated entries in one array:
+  ``transform: [{translateX: 10}, {rotate: `${turn}deg`}, {scale: pulse}]``. The array is written in
+  place, and `transformOrigin` must be a constant.
 - A state-driven enum style (`display`, `flexDirection` and the like) must be a string literal or a
   ternary of literals. `display: page === 'home' ? 'flex' : 'none'` compiles; `visible={bool}` takes
   any boolean.
@@ -286,6 +289,8 @@ has ASCII plus what `assets.config.js` adds. The build warns about any character
   no `viewBox` and no `<G>`, and its children must be literal shape elements.
 - An `<Svg>` cannot sit directly under a state-driven `&&` or ternary, or in a row of a state list:
   put the condition on a wrapping `<View>`.
+- An `<Svg>`'s own style takes a state-driven `transform`. Any other state-driven style goes on a
+  wrapping `<View>`.
 - A state-driven `<Path d>` is not supported. Use `<Arc>`, `<Circle>`, `<Rect>` and `<Line>` for
   geometry that moves; they take `Math.sin`/`Math.cos` in their props.
 - By default one `<Svg>` node holds at most 16 shapes, and the engine 8 vector nodes at once

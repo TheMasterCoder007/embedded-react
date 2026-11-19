@@ -66,7 +66,7 @@ export const EVENT_TYPES: Record<string, string> = {
   onScroll: 'ER_EVENT_SCROLL',
 };
 
-/** Style keys every node lays out by, and `transform`, which every node draws through. */
+/** Style keys every node lays out by, and the transform every node draws through. */
 const LAYOUT_STYLE = [
   'width',
   'height',
@@ -108,6 +108,7 @@ const LAYOUT_STYLE = [
   'bottom',
   'zIndex',
   'transform',
+  'transformOrigin',
 ];
 
 /** The shadow a View, ScrollView, Pressable or Modal casts. */
@@ -691,7 +692,7 @@ export function checkStyleKey(
   key: string,
   node: t.Node,
 ): void {
-  if (key !== 'transform' && !isStyleKey(key)) return;
+  if (!isStyleKey(key)) return;
   if (spec.styleKeys?.has(key)) return;
 
   const drawn = [...(spec.styleKeys ?? [])].filter(
