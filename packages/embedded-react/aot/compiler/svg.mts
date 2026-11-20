@@ -1989,6 +1989,30 @@ function viewBoxScale(size: unknown, view: number): IrTapeValue | null {
 }
 
 /**
+ * The square root of a scale, which is never negative.
+ *
+ * @param scale  The scale: a number, or a value worked out at boot.
+ *
+ * @returns Its square root.
+ */
+function squareRoot(scale: IrTapeValue): IrTapeValue {
+  if (scale.kind === 'number') return tapeNumber(Math.sqrt(scale.value));
+  if (scale.kind !== 'float') {
+    throw aotError('AOT: a drawing scaled at boot has a scale it cannot read');
+  }
+
+  return {
+    kind: 'float',
+    value: {
+      kind: 'floatMath',
+      mathFunction: 'sqrt',
+      callArguments: [scale.value],
+      type: FLOAT,
+    },
+  };
+}
+
+/**
  * A viewBox drawing sized at boot: drawn in the viewBox's units and scaled once, from the real size, as a drawing
  * state drives is rebuilt. So it takes one layout on every panel, where baking it would take one layout per size.
  *
@@ -2039,6 +2063,7 @@ function emitSvgScaled(
     [VOP_CUBIC]: 'ER_VECTOR_OP_CUBIC',
     [VOP_ARC]: 'ER_VECTOR_OP_ARC',
   };
+  const sideRadius = tapeChain(squareRoot(scaleX), ['*', squareRoot(scaleY)]);
   // A stroke scales by the two sides' mean, as flattenSvg's does.
   const sideStroke = tapeChain(tapeChain(sideX, ['+', sideY]), [
     '*',
@@ -2112,7 +2137,19 @@ function emitSvgScaled(
       fillGradient: {index: paint.fillGradient, when: null},
       strokeGradient: {index: paint.strokeGradient, when: null},
     })),
-    gradients: gradients.map(drawingGradientOf),
+    // Gradients are placed in the viewBox's units too, so they scale with the tape: a radius by the sides'
+    // geometric mean, as flattenSvg's, and a conic's start angle not at all.
+    gradients: gradients.map(gradient => ({
+      ...drawingGradientOf(gradient),
+      ax: along(gradient.ax || 0, sideX),
+      ay: along(gradient.ay || 0, sideY),
+      bx: along(gradient.bx || 0, sideX),
+      by: along(gradient.by || 0, sideY),
+      r:
+        gradient.type === GRADIENT_CONIC
+          ? tapeNumber(gradient.r || 0)
+          : along(gradient.r || 0, sideRadius),
+    })),
   };
   output.vectors.push({kind: 'drawing', vector});
 

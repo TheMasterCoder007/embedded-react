@@ -1,5 +1,5 @@
 // Polygons, polylines, gradients a fill or stroke names, and opacity: two static drawings, which
-// svg-elements-source draws from a file, and one state drives.
+// svg-elements-source draws from a file, one state drives, and one stretched to the screen's width at boot.
 import {useState} from 'react';
 import {
   View,
@@ -105,6 +105,23 @@ export function App() {
           />
         </Svg>
       </View>
+      <Svg viewBox="0 0 200 50" width={screen.width - 16} height={40}>
+        <LinearGradient id="ramp">
+          <Stop offset={0} stopColor="#e04030" />
+          <Stop offset={1} stopColor="#3060d0" />
+        </LinearGradient>
+        <RadialGradient
+          id="spot"
+          cx={170}
+          cy={25}
+          r={24}
+          gradientUnits="userSpaceOnUse">
+          <Stop offset={0} stopColor="#ffffff" />
+          <Stop offset={1} stopColor="#102040" />
+        </RadialGradient>
+        <Rect x={4} y={4} width={136} height={42} fill="url(#ramp)" />
+        <Circle cx={170} cy={25} r={22} fill="url(#spot)" />
+      </Svg>
     </View>
   );
 }
