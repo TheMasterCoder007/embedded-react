@@ -322,6 +322,8 @@ export interface VectorArtifact {
   height: number;
   /** SVG features the baker could not represent; when any are listed, the file is baked as a PNG instead. */
   dropped?: string[];
+  /** The images its tape draws, each with its PNG's path. */
+  images?: {name: string; png: string}[];
 }
 
 /** An <Svg source> file that used features the vector baker cannot represent, baked as a PNG. */

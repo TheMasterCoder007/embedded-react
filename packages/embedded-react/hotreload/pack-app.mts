@@ -61,7 +61,8 @@ export async function packAppContainer({
   const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mts');
   const {emitAssetPack} = await import('../assets/emit-pack.mts');
   const {emitContainer} = await import('../assets/emit-container.mts');
-  const {registerSvgVectorLoader} = await import('../assets/svg-loader.mts');
+  const {imageAssetName, registerSvgVectorLoader} =
+    await import('../assets/svg-loader.mts');
   const {compileToBytecode} = await import('../qjsc-wasm.mts');
 
   const assetName = (filePath: string) =>
@@ -122,7 +123,7 @@ export async function packAppContainer({
         });
       }
       build.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
-        const name = assetName(args.path);
+        const name = imageAssetName(args.path);
         images.set(name, args.path);
         return {
           contents: `module.exports = ${JSON.stringify(name)};`,

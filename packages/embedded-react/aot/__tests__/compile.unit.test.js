@@ -577,6 +577,16 @@ import logo from './assets/logo.png';
       /two images are named "icon" \(\.\/portrait\/icon\.png and \.\/landscape\/icon\.png\)[\s\S]*App\.jsx:3:1/,
     );
   });
+  it('rejects an image named like one embedded in an .svg file', () => {
+    expect(() =>
+      compilePackage(
+        `import { Image } from 'embedded-react';\nimport logo from './svg-image-00ab12.png';\nexport function App() { return (<Image source={logo} />); }`,
+        'demo',
+      ),
+    ).toThrow(
+      /\.\/svg-image-00ab12\.png starts with "svg-image-", which is kept for images embedded in \.svg files[\s\S]*App\.jsx:2:1/,
+    );
+  });
 });
 
 describe('AOT handler follow-ons', () => {

@@ -23,6 +23,7 @@ import {parse} from '@babel/parser';
 import {readFileSync, existsSync} from 'node:fs';
 import {posix, resolve} from 'node:path';
 import {aotError, locateError} from './diagnostics.mts';
+import {IMAGE_PREFIX} from '../../src/embedded-react/svg-ops.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {inferItemStruct} from './list-items.mts';
 import {flattenTree, isObjectTree} from './records.mts';
@@ -1402,6 +1403,7 @@ function collectAssetImports(
   extension: RegExp,
   plural: string,
   one: string,
+  reservedPrefix?: string,
 ): Map<string, AssetImport> {
   const byLocal = new Map<string, AssetImport>();
   const pathOf = new Map<string, string>(); // name → the file it names
@@ -1419,6 +1421,14 @@ function collectAssetImports(
     if (!extension.test(importPath)) continue;
 
     const name = importPath.split(/[\\/]/).pop()!.replace(extension, '');
+    if (reservedPrefix && name.startsWith(reservedPrefix)) {
+      const error = aotError(
+        `AOT: ${importPath} starts with "${reservedPrefix}", which is kept for images embedded in .svg files`,
+        'rename the file.',
+      );
+      locateError(error, statement.loc?.start);
+      throw error;
+    }
     const first = pathOf.get(name);
     if (first !== undefined && normalized(first) !== normalized(importPath)) {
       const error = aotError(
@@ -1450,7 +1460,13 @@ function collectAssetImports(
 export const collectImageImports = (
   program: t.Program,
 ): Map<string, AssetImport> =>
-  collectAssetImports(program, IMAGE_EXT_RE, 'images', 'an image');
+  collectAssetImports(
+    program,
+    IMAGE_EXT_RE,
+    'images',
+    'an image',
+    IMAGE_PREFIX,
+  );
 
 /**
  * Collects font imports — `import Manrope from './fonts/Manrope-Light.ttf'` → Map (local → { name, importPath }).
@@ -1545,10 +1561,18 @@ export async function bakeSvgArtifacts(
 
     // Rasterize an SVG the vector baker cannot fully draw to a PNG, so it renders as an Image instead of dropping.
     const svgText = readFileSync(svgPath, 'utf8');
-    const {fonts: rasterFonts, ...artifact} = await svgToVector(
-      svgText,
-      svgFontSearch(svgPath, importedFonts(source, baseDirectory)),
-    );
+    let baked: Awaited<ReturnType<typeof svgToVector>>;
+    try {
+      baked = await svgToVector(
+        svgText,
+        svgFontSearch(svgPath, importedFonts(source, baseDirectory)),
+      );
+    } catch (error) {
+      throw new Error(
+        `AOT: ${svgImport.name}.svg: ${(error as Error).message}`,
+      );
+    }
+    const {fonts: rasterFonts, ...artifact} = baked;
     if (artifact.dropped && artifact.dropped.length) {
       console.warn(
         `embedded-react: ${svgImport.name}.svg uses unsupported SVG feature(s) [${artifact.dropped.join(', ')}] — ` +

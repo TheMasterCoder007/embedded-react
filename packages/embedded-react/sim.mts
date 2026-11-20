@@ -33,7 +33,7 @@ import {resolveFontJobs} from './assets/font-config.mts';
 import type {AssetsConfig} from './assets/font-config.mts';
 import {analyzeFontSizes, fontSizeSignature} from './assets/font-sizes.mts';
 import {textSignature} from './assets/glyph-coverage.mts';
-import {registerSvgVectorLoader} from './assets/svg-loader.mts';
+import {imageAssetName, registerSvgVectorLoader} from './assets/svg-loader.mts';
 import {transformPersist} from './persist-transform.mts';
 import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
@@ -195,7 +195,7 @@ const buildContext = await context({
           }
         });
         pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
-          const name = assetName(args.path);
+          const name = imageAssetName(args.path);
           images.set(name, args.path);
           return {
             contents: `module.exports = ${JSON.stringify(name)};`,

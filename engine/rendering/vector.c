@@ -42,6 +42,9 @@
  *
  * A dashed shape (ER_VECTOR_OP_DASH) has its stroke cut along each subpath's length before the outline is
  * built: every dash is stroked as an open path of its own, so it takes the paint's cap at both ends.
+ *
+ * An image (ER_VECTOR_OP_IMAGE) is rasterized as the parallelogram its pixels map to, and each covered pixel
+ * samples the image instead of a paint, so it takes the same edges, masks and transform as a shape.
  */
 
 #include "vector.h"
@@ -49,6 +52,7 @@
 #include "vector_cache.h" /* ERVecEdge + the cache entry layout (record/replay share it with vector_cache.c) */
 
 #include "arc.h"               /* er_arc_fill_sector — the shared analytic core (ERUI_VECTOR_ANALYTIC_ARC) */
+#include "image_registry.h"    /* image_registry_get — ER_VECTOR_OP_IMAGE */
 #include "renderer_internal.h" /* er_blit_fill, er_blit_blend */
 
 #include <math.h>
@@ -150,6 +154,10 @@
 
 #define VEC_MOVE_OP_SIZE 3
 #define VEC_MASK_OP_SIZE 3
+#define VEC_IMAGE_OP_SIZE 9
+#define VEC_IMAGE_ID_DIGITS 6
+#define VEC_IMAGE_WEIGHT_ONE 256U   /**< A bilinear tap's whole weight. */
+#define VEC_IMAGE_PAINT 0xFFFFFFFFU /**< Any opaque colour: rasterize skips a transparent one. */
 #define VEC_ARC_OP_SIZE 7
 #define VEC_POINT_ARGS 2
 #define VEC_DASH_ARGS 2
@@ -541,6 +549,72 @@ static int rule_inside(int winding, int even_odd)
     return even_odd ? (winding & 1) : (winding != 0);
 }
 
+/** @brief Scales a premultiplied-ARGB pixel by an 8-bit coverage (all four channels), rounding to nearest. */
+static inline uint32_t vgrad_scale(uint32_t pixel, uint32_t coverage)
+{
+    const uint32_t alpha = (((pixel >> 24) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    const uint32_t red = (((pixel >> 16) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    const uint32_t green = (((pixel >> 8) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    const uint32_t blue = ((pixel & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Images
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/* The image an ER_VECTOR_OP_IMAGE fills its parallelogram with, while that is rasterized. */
+typedef struct
+{
+    const ImageEntry* entry; /**< NULL when no image is being drawn. */
+    float a, b, c, d, e, f;  /**< Layout pixels to image pixels. */
+    uint32_t alpha;          /**< 0 to 255. */
+} VecImageFill;
+
+static VecImageFill s_image_fill;
+
+/** @brief One image pixel as premultiplied ARGB8888. */
+static inline uint32_t vimg_fetch(const ImageEntry* image, int x, int y)
+{
+    const size_t pixel_index = (size_t)y * (size_t)image->width + (size_t)x;
+    if (image->format == ER_IMAGE_RGB565)
+    {
+        const uint32_t pixel = ((const uint16_t*)image->pixels)[pixel_index];
+        const uint32_t red5 = (pixel >> 11) & 0x1FU, green6 = (pixel >> 5) & 0x3FU, blue5 = pixel & 0x1FU;
+        return 0xFF000000U | (((red5 << 3) | (red5 >> 2)) << 16) | (((green6 << 2) | (green6 >> 4)) << 8)
+               | ((blue5 << 3) | (blue5 >> 2));
+    }
+    return ((const uint32_t*)image->pixels)[pixel_index];
+}
+
+/** @brief Mixes two premultiplied pixels; @p weight (0 to 256) goes to @p to. */
+static inline uint32_t vimg_mix(uint32_t from, uint32_t to, uint32_t weight)
+{
+    const uint32_t keep = VEC_IMAGE_WEIGHT_ONE - weight;
+    const uint32_t alpha_green =
+        (((from >> 8) & 0x00FF00FFU) * keep + ((to >> 8) & 0x00FF00FFU) * weight) & 0xFF00FF00U;
+    const uint32_t red_blue = (((from & 0x00FF00FFU) * keep + (to & 0x00FF00FFU) * weight) >> 8) & 0x00FF00FFU;
+    return alpha_green | red_blue;
+}
+
+/** @brief Samples an image bilinearly at a point in its pixels, its edge pixels held past the edge. */
+static uint32_t vimg_sample(const ImageEntry* image, float image_x, float image_y)
+{
+    const float last_x = (float)(image->width - 1), last_y = (float)(image->height - 1);
+    image_x -= 0.5f;
+    image_y -= 0.5f;
+    image_x = image_x > 0.0f ? (image_x < last_x ? image_x : last_x) : 0.0f; /* NaN to 0 */
+    image_y = image_y > 0.0f ? (image_y < last_y ? image_y : last_y) : 0.0f;
+    const int x0 = (int)image_x, y0 = (int)image_y;
+    const int x1 = x0 < image->width - 1 ? x0 + 1 : x0;
+    const int y1 = y0 < image->height - 1 ? y0 + 1 : y0;
+    const uint32_t weight_x = (uint32_t)((image_x - (float)x0) * (float)VEC_IMAGE_WEIGHT_ONE);
+    const uint32_t weight_y = (uint32_t)((image_y - (float)y0) * (float)VEC_IMAGE_WEIGHT_ONE);
+    const uint32_t top = vimg_mix(vimg_fetch(image, x0, y0), vimg_fetch(image, x1, y0), weight_x);
+    const uint32_t bottom = vimg_mix(vimg_fetch(image, x0, y1), vimg_fetch(image, x1, y1), weight_x);
+    return vimg_mix(top, bottom, weight_y);
+}
+
 #if ERUI_GRADIENT
 /* Vector gradient fill. Reuses gradient.c's always-compiled colour helpers, forward-declared here
  * to keep this TU decoupled from the node internals that gradient.h would pull in. */
@@ -566,16 +640,6 @@ static void build_grad_lut(const ERVectorGradient* gradient)
         s_gradient_lut[entry_index] =
             er_gradient_premul(er_gradient_eval_stops(gradient->stops, gradient->stop_count, position));
     }
-}
-
-/** @brief Scales a premultiplied-ARGB pixel by an 8-bit coverage (all four channels), rounding to nearest. */
-static inline uint32_t vgrad_scale(uint32_t pixel, uint32_t coverage)
-{
-    const uint32_t alpha = (((pixel >> 24) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
-    const uint32_t red = (((pixel >> 16) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
-    const uint32_t green = (((pixel >> 8) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
-    const uint32_t blue = ((pixel & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
-    return (alpha << 24) | (red << 16) | (green << 8) | blue;
 }
 
 /** @brief True if a gradient type is supported in this build (radial gated on ERUI_GRADIENT_RADIAL). */
@@ -684,6 +748,32 @@ static void flush_row(int x0, int pixel_count, int row_y, int clip_x0)
  */
 static void emit_row(uint32_t color, const ERVectorGradient* gradient, int row_y, int clip_x0, int low, int high)
 {
+    if (s_image_fill.entry)
+    {
+        const VecImageFill* fill = &s_image_fill;
+        const int pixel_count = high - low;
+        for (int offset = 0; offset < pixel_count; offset++)
+        {
+            float coverage = s_cover[low + offset];
+            s_cover[low + offset] = 0.0f;
+            if (coverage <= 0.0f)
+            {
+                s_row[offset] = 0U;
+                continue;
+            }
+            if (coverage > 1.0f)
+                coverage = 1.0f;
+            float sample_x = (float)(clip_x0 + low + offset) + 0.5f, sample_y = (float)row_y + 0.5f;
+            if (s_transform)
+                point_to_layout(&sample_x, &sample_y);
+            const float image_x = fill->a * sample_x + fill->c * sample_y + fill->e;
+            const float image_y = fill->b * sample_x + fill->d * sample_y + fill->f;
+            s_row[offset] = vgrad_scale(vimg_sample(fill->entry, image_x, image_y),
+                                        (uint32_t)(coverage * (float)fill->alpha + 0.5f));
+        }
+        flush_row(low, pixel_count, row_y, clip_x0);
+        return;
+    }
 #if ERUI_GRADIENT
     if (gradient)
     {
@@ -2104,10 +2194,10 @@ static float paint_margin(const ERVectorPaint* paint)
     return margin;
 }
 
-/** @brief Whether a tape value ends a shape's run of path ops: the next shape, or a mask op. */
+/** @brief Whether a tape value ends a shape's run of path ops: the next shape, a mask op or an image. */
 static inline bool ends_shape(float opcode)
 {
-    return opcode == ER_VECTOR_OP_SHAPE || opcode == ER_VECTOR_OP_MASK;
+    return opcode == ER_VECTOR_OP_SHAPE || opcode == ER_VECTOR_OP_MASK || opcode == ER_VECTOR_OP_IMAGE;
 }
 
 /**
@@ -2785,6 +2875,91 @@ static int mask_define(const float* ops,
     return op_index;
 }
 
+/**
+ * @brief Reads an ER_VECTOR_OP_IMAGE and draws its image under the masks in force.
+ *
+ * @param[in] op_index  Index of the op.
+ * @param[in] clip      The clip box in the space the geometry is built in, for skipping an image outside it.
+ *
+ * @return The tape index just past the op.
+ */
+static int image_draw(const float* ops,
+                      int op_index,
+                      int op_count,
+                      int origin_x,
+                      int origin_y,
+                      const VecClip* clip,
+                      int clip_x0,
+                      int clip_y0,
+                      int clip_x1,
+                      int clip_y1)
+{
+    if (op_index + VEC_IMAGE_OP_SIZE > op_count)
+        return op_count;
+    const float* arguments = ops + op_index + 1;
+    op_index += VEC_IMAGE_OP_SIZE;
+#if ERUI_VECTOR_EDGE_CACHE
+    /* A replay has no tape to find the image in. */
+    if (s_recording)
+        s_recording_failed = true;
+#endif
+    const float id = arguments[0], alpha = arguments[1];
+    const float a = arguments[2], b = arguments[3], c = arguments[4], d = arguments[5];
+    const float e = arguments[6] + (float)origin_x, f = arguments[7] + (float)origin_y;
+    const float determinant = a * d - b * c;
+    if (!(id >= 0.0f && id <= (float)ER_VECTOR_IMAGE_ID_MAX) || (float)(int)id != id || !(alpha > 0.0f) || !isfinite(a)
+        || !isfinite(b) || !isfinite(c) || !isfinite(d) || !isfinite(e) || !isfinite(f)
+        || !(fabsf(determinant) > VEC_DEGENERATE_EPSILON))
+        return op_index;
+
+    static const char digits[] = "0123456789abcdef";
+    char name[sizeof(ER_VECTOR_IMAGE_PREFIX) + VEC_IMAGE_ID_DIGITS];
+    memcpy(name, ER_VECTOR_IMAGE_PREFIX, sizeof(ER_VECTOR_IMAGE_PREFIX) - 1);
+    for (int digit = 0; digit < VEC_IMAGE_ID_DIGITS; digit++)
+        name[sizeof(ER_VECTOR_IMAGE_PREFIX) - 1 + digit] =
+            digits[((unsigned)id >> (4 * (VEC_IMAGE_ID_DIGITS - 1 - digit))) & 0xFU];
+    name[sizeof(ER_VECTOR_IMAGE_PREFIX) - 1 + VEC_IMAGE_ID_DIGITS] = '\0';
+    const ImageEntry* image = image_registry_get(name);
+    if (!image || image->width <= 0 || image->height <= 0)
+        return op_index;
+
+    /* Its corners, in layout pixels. */
+    const float width = (float)image->width, height = (float)image->height;
+    const float corner_x[4] = {e, a * width + e, a * width + c * height + e, c * height + e};
+    const float corner_y[4] = {f, b * width + f, b * width + d * height + f, d * height + f};
+    float low_x = VEC_UNBOUNDED, low_y = VEC_UNBOUNDED, high_x = -VEC_UNBOUNDED, high_y = -VEC_UNBOUNDED;
+    for (int corner = 0; corner < 4; corner++)
+    {
+        low_x = fminf(low_x, corner_x[corner]);
+        low_y = fminf(low_y, corner_y[corner]);
+        high_x = fmaxf(high_x, corner_x[corner]);
+        high_y = fmaxf(high_y, corner_y[corner]);
+    }
+    if (high_x < clip->x0 - 1.0f || low_x > clip->x1 + 1.0f || high_y < clip->y0 - 1.0f || low_y > clip->y1 + 1.0f)
+        return op_index;
+
+    s_point_count = 0;
+    s_subpath_count = 0;
+    sub_begin(corner_x[0], corner_y[0]);
+    for (int corner = 1; corner < 4; corner++)
+        pt_add(corner_x[corner], corner_y[corner]);
+    s_edge_y_top = (float)clip_y0;
+    s_edge_y_bottom = (float)clip_y1;
+    fill_build();
+
+    s_image_fill.entry = image;
+    s_image_fill.a = d / determinant;
+    s_image_fill.b = -b / determinant;
+    s_image_fill.c = -c / determinant;
+    s_image_fill.d = a / determinant;
+    s_image_fill.e = -(s_image_fill.a * e + s_image_fill.c * f);
+    s_image_fill.f = -(s_image_fill.b * e + s_image_fill.d * f);
+    s_image_fill.alpha = alpha >= 1.0f ? ER_CHANNEL_MAX : (uint32_t)(alpha * ER_CHANNEL_MAX_FLOAT + 0.5f);
+    rasterize(s_edges, s_edge_count, VEC_IMAGE_PAINT, NULL, 0, clip_x0, clip_y0, clip_x1, clip_y1);
+    s_image_fill.entry = NULL;
+    return op_index;
+}
+
 /** @brief Walks an op-tape and paints it — er_vector_render's body, shared with the recording path. */
 static void render_tape(const float* ops,
                         int op_count,
@@ -2832,6 +3007,12 @@ static void render_tape(const float* ops,
                                    origin_y,
                                    clip_top,
                                    clip_bottom);
+            continue;
+        }
+        if (ops[op_index] == ER_VECTOR_OP_IMAGE)
+        {
+            op_index = image_draw(
+                ops, op_index, op_count, origin_x, origin_y, &build_clip, clip_left, clip_top, clip_right, clip_bottom);
             continue;
         }
         if (ops[op_index] != ER_VECTOR_OP_SHAPE)
@@ -3106,17 +3287,21 @@ void er_vector_dash_offset(float offset)
 }
 
 #if ERUI_VECTOR_EDGE_CACHE
-/** @brief Whether a tape has a dashed shape that follows the node's dash offset, which a cached edge list cannot. */
-static bool tape_follows_dash_offset(const float* ops, int op_count)
+/**
+ * @brief Whether a tape draws something a cached edge list cannot: a dashed shape that follows the node's dash
+ *        offset, or an image.
+ */
+static bool tape_skips_cache(const float* ops, int op_count)
 {
-    static const uint8_t argument_counts[] = {1, 2, 2, 4, 6, 6, 0, 2, 2, 2};
+    static const uint8_t argument_counts[] = {1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8};
     int op_index = 0;
     while (op_index < op_count)
     {
         const float opcode = ops[op_index];
-        if (!(opcode >= ER_VECTOR_OP_SHAPE && opcode <= ER_VECTOR_OP_DASH_OFFSET))
+        if (!(opcode >= ER_VECTOR_OP_SHAPE && opcode <= ER_VECTOR_OP_IMAGE))
             return false;
-        if (opcode == ER_VECTOR_OP_DASH_OFFSET && op_index + VEC_DASH_ARGS < op_count && ops[op_index + 2] != 0.0f)
+        if (opcode == ER_VECTOR_OP_IMAGE
+            || (opcode == ER_VECTOR_OP_DASH_OFFSET && op_index + VEC_DASH_ARGS < op_count && ops[op_index + 2] != 0.0f))
             return true;
         op_index += 1 + argument_counts[(int)opcode];
     }
@@ -3164,8 +3349,8 @@ void er_vector_render_slot(int slot,
         box_corners_update();
     }
 #if ERUI_VECTOR_EDGE_CACHE
-    /* A drawing whose dashes move with the node's offset is rebuilt each time. */
-    const bool follows_offset = tape_follows_dash_offset(ops, op_count);
+    /* A drawing whose dashes move with the node's offset, or that has an image, is rebuilt each time. */
+    const bool follows_offset = tape_skips_cache(ops, op_count);
     const ERVecCache* hit = follows_offset ? 0 : er_vector_cache_lookup(slot, origin_x, origin_y, detail);
     const bool replayed = hit
                           && replay_cache(hit,

@@ -3024,6 +3024,37 @@ export function App() {
     );
   });
 
+  it('puts the images an <Svg source> embeds in the package, and scales their op with the drawing', () => {
+    const artifact = {
+      ops: [10, 0xab12, 1, 2, 0, 0, 2, 3, 4],
+      paints: [],
+      width: 10,
+      height: 10,
+      images: [{name: 'svg-image-00ab12', png: '/tmp/svg-image-00ab12.png'}],
+    };
+    const source = `
+import {View, Svg} from 'embedded-react';
+import badge from './badge.svg';
+export function App() {
+  return (
+    <View>
+      <Svg source={badge} width={20} height={30} />
+    </View>
+  );
+}`;
+    const result = compilePackage(source, 'app', {
+      ...SCREEN,
+      svgArtifacts: {badge: artifact},
+    });
+    expect(result.images).toContainEqual({
+      name: 'svg-image-00ab12',
+      importPath: '/tmp/svg-image-00ab12.png',
+    });
+    expect(tapesOf(result.program)[0].floats).toEqual([
+      10, 0xab12, 1, 4, 0, 0, 6, 6, 12,
+    ]);
+  });
+
   it('writes setKeyboardConfig as the keyboard table', () => {
     const source = `
 import {View, setKeyboardConfig} from 'embedded-react';

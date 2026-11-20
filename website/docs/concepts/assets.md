@@ -108,8 +108,9 @@ draw, so a board that shrinks the registry should keep it at or above its asset 
 
 An `.svg` import is baked at build time into a compact vector op-tape the engine's rasterize
 draws directly, with a raster fallback for files that use features it cannot represent. Text in
-the file is baked to outlines from a font file named after its `font-family`, and `clip-path`,
-`mask` and dashed strokes are drawn by the rasteriser. Pass it to
+the file is baked to outlines from a font file named after its `font-family`; `clip-path`,
+`mask`, dashed strokes, `<use>`, `<symbol>` and `<pattern>` are drawn by the rasteriser; and an
+embedded `<image>` becomes an image asset drawn among the shapes. Pass it to
 `<Svg source={…}>`. Shapes that change at runtime use the `<Svg>` element's own children
 (`<Path>`, `<Circle>`, `<Arc>`) instead, and dials, gauges, and progress rings have their own native
 `<Dial>` node that is far cheaper than a re-tessellated arc. The [components reference](../api/components.md)

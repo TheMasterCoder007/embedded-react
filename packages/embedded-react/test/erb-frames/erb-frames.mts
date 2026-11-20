@@ -1433,6 +1433,12 @@ const SCENARIOS: Scenario[] = [
     file: fixture('svg-dash-source'),
     screen: PORTRAIT,
   },
+  // A .svg file's symbols, patterns and embedded image.
+  {
+    name: 'svg-sampler-source',
+    file: fixture('svg-sampler-source'),
+    screen: PORTRAIT,
+  },
   {name: 'hooks', file: fixture('hooks'), screen: PORTRAIT},
   {
     name: 'hooks-taps',

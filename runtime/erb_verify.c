@@ -1629,7 +1629,7 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
             return fail(error, ERB_ERROR_TAPE, "tape floats, paints or gradients out of range");
         }
         /* The ops parse with their argument counts. */
-        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u, 2u, 2u, 2u};
+        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u, 2u, 2u, 2u, 8u};
         uint32_t float_index = 0;
         /* The masks in force, the shapes across them, and the shapes the last mask op still takes. */
         uint32_t mask_groups = 0, mask_shapes = 0, mask_owed = 0;
@@ -1639,7 +1639,7 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
         while (float_index < float_count)
         {
             const float opcode_value = erb_f32(table + floats + float_index * sizeof(float));
-            if (!(opcode_value >= ER_VECTOR_OP_SHAPE && opcode_value <= ER_VECTOR_OP_DASH_OFFSET)
+            if (!(opcode_value >= ER_VECTOR_OP_SHAPE && opcode_value <= ER_VECTOR_OP_IMAGE)
                 || (float)(int)opcode_value != opcode_value
                 || float_index + 1u + operand_counts[(int)opcode_value] > float_count)
             {
@@ -1665,6 +1665,15 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
                 if (!in_shape || (opcode == (int)ER_VECTOR_OP_DASH && ++dashes > ER_VECTOR_DASH_MAX))
                 {
                     return fail(error, ERB_ERROR_TAPE, "dash");
+                }
+            }
+            else if (opcode == (int)ER_VECTOR_OP_IMAGE)
+            {
+                in_shape = false;
+                const float id = erb_f32(table + floats + (float_index + 1u) * sizeof(float));
+                if (mask_owed > 0u || !(id >= 0.0f && id <= (float)ER_VECTOR_IMAGE_ID_MAX) || (float)(int)id != id)
+                {
+                    return fail(error, ERB_ERROR_TAPE, "image");
                 }
             }
             else if (opcode == (int)ER_VECTOR_OP_MASK)

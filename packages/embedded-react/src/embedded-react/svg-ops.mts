@@ -168,6 +168,12 @@ export const VOP_CLOSE = 6;
 export const VOP_MASK = 7;
 export const VOP_DASH = 8;
 export const VOP_DASH_OFFSET = 9;
+export const VOP_IMAGE = 10;
+
+// What an image in a tape is registered under, before its id in six hex digits — MUST match the engine's
+// ER_VECTOR_IMAGE_PREFIX and ER_VECTOR_IMAGE_ID_MAX (er_scene.h).
+export const IMAGE_PREFIX = 'svg-image-';
+export const IMAGE_ID_MAX = 0xffffff;
 
 // Mask kinds and limits — MUST match the engine's ER_VECTOR_MASK_* (er_scene.h).
 export const MASK_NONE = 0;
@@ -181,7 +187,7 @@ export const MASK_SHAPES_MAX = 16;
 export const DASH_MAX = 8;
 
 /** How many values follow each opcode. */
-const OP_OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2, 2, 2];
+export const OP_OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8];
 
 // Control-point ratio for approximating a quarter (circular or elliptical) arc with one cubic:
 // 4/3 * (sqrt(2) - 1). Used by rounded-rect corners.
@@ -1269,7 +1275,7 @@ export function tapeShapeCount(ops: readonly number[]): number {
   return shapes;
 }
 
-/** The box around a tape's points (SHAPE, MASK and dash ops skipped), or null for a tape with none. */
+/** The box around a tape's points (SHAPE, MASK, dash and image ops skipped), or null for a tape with none. */
 export function tapeBounds(ops: readonly number[]): TapeBounds | null {
   let minX = Infinity;
   let minY = Infinity;
@@ -1292,7 +1298,8 @@ export function tapeBounds(ops: readonly number[]): TapeBounds | null {
       opcode !== VOP_SHAPE &&
       opcode !== VOP_MASK &&
       opcode !== VOP_DASH &&
-      opcode !== VOP_DASH_OFFSET
+      opcode !== VOP_DASH_OFFSET &&
+      opcode !== VOP_IMAGE
     ) {
       for (let operand = 1; operand < operands; operand += 2)
         add(ops[index + operand], ops[index + operand + 1]);
@@ -1934,6 +1941,18 @@ function scaleTape(
       scaled.push(ops[index++], ops[index++]); // kind and shape count
     else if (opcode === VOP_DASH || opcode === VOP_DASH_OFFSET)
       scaled.push(ops[index++] * strokeScale, ops[index++] * strokeScale);
+    else if (opcode === VOP_IMAGE)
+      // Id and alpha, then the matrix from its pixels: each row scales with its axis.
+      scaled.push(
+        ops[index++],
+        ops[index++],
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+      );
     else if (opcode === VOP_MOVE || opcode === VOP_LINE)
       scaled.push(ops[index++] * scaleX, ops[index++] * scaleY);
     else if (opcode === VOP_QUAD)

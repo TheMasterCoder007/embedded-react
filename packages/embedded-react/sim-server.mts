@@ -44,7 +44,8 @@ const {analyzeFontSizes, fontSizeSignature, warnFontSizes} =
   await import('./assets/font-sizes.mts');
 const {textSignature, warnMissingGlyphs} =
   await import('./assets/glyph-coverage.mts');
-const {registerSvgVectorLoader} = await import('./assets/svg-loader.mts');
+const {imageAssetName, registerSvgVectorLoader} =
+  await import('./assets/svg-loader.mts');
 const {transformPersist, shouldPersist} =
   await import('./persist-transform.mts');
 const {loadAppFile, loadDependencyFile} =
@@ -226,9 +227,10 @@ function createBundle({
           pluginBuild.onLoad(
             {filter: /\.(png|jpe?g|webp|gif|bmp)$/i},
             loadArgs => {
-              images.set(assetName(loadArgs.path), loadArgs.path);
+              const name = imageAssetName(loadArgs.path);
+              images.set(name, loadArgs.path);
               return {
-                contents: `module.exports = ${JSON.stringify(assetName(loadArgs.path))};`,
+                contents: `module.exports = ${JSON.stringify(name)};`,
                 loader: 'js',
               };
             },

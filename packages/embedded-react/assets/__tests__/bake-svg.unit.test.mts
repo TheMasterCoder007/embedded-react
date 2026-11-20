@@ -291,11 +291,11 @@ describe('svgToVector — dropped-feature detection (raster-fallback trigger)', 
     expect(artifact.dropped).toEqual([]);
   });
 
-  it('flags unsupported visual elements (image/use) but not metadata/defs/gradients', async () => {
+  it('flags unsupported visual elements but not metadata/defs/gradients', async () => {
     const artifact = await svgToVector(
-      '<svg viewBox="0 0 10 10"><title>t</title><defs></defs><rect width="10" height="10"/><image href="a.png"/></svg>',
+      '<svg viewBox="0 0 10 10"><title>t</title><defs></defs><rect width="10" height="10"/><foreignObject/></svg>',
     );
-    expect(artifact.dropped).toEqual(['image']); // title/defs ignored; rect baked; image recorded
+    expect(artifact.dropped).toEqual(['foreignObject']); // title/defs ignored; rect baked; foreignObject recorded
   });
 
   it('flags a filter/mask/clip-path applied to an otherwise-bakeable shape', async () => {

@@ -48,7 +48,7 @@ import {analyzeFontSizes, warnFontSizes} from './assets/font-sizes.mts';
 import {warnMissingGlyphs} from './assets/glyph-coverage.mts';
 import {emitAssetPack} from './assets/emit-pack.mts';
 import {emitContainer} from './assets/emit-container.mts';
-import {registerSvgVectorLoader} from './assets/svg-loader.mts';
+import {imageAssetName, registerSvgVectorLoader} from './assets/svg-loader.mts';
 import {findCompileBin, compileBinHelp} from './compile-bin.mts';
 import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
@@ -99,7 +99,7 @@ const assetPlugin: Plugin = {
         : loadDependencyFile(args.path),
     );
     pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
-      const name = basename(args.path).replace(/\.[^.]+$/, '');
+      const name = imageAssetName(args.path);
       images.set(name, args.path);
       return {
         contents: `module.exports = ${JSON.stringify(name)};`,

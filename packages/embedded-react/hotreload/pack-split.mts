@@ -156,7 +156,7 @@ function makeAssetPlugin({
   return {
     name: 'embedded-react-assets',
     async setup(build) {
-      const {registerSvgVectorLoader} =
+      const {imageAssetName, registerSvgVectorLoader} =
         await import('../assets/svg-loader.mts');
       const {shouldPersist, transformPersist} =
         await import('../persist-transform.mts');
@@ -183,7 +183,7 @@ function makeAssetPlugin({
         }
       });
       build.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
-        const name = assetName(args.path);
+        const name = imageAssetName(args.path);
         images.set(name, args.path);
         return {
           contents: `module.exports = ${JSON.stringify(name)};`,

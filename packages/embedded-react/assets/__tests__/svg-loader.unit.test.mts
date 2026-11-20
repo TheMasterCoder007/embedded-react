@@ -26,7 +26,8 @@ import {
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {registerSvgVectorLoader} from '../svg-loader.mts';
+import {PNG} from 'pngjs';
+import {imageAssetName, registerSvgVectorLoader} from '../svg-loader.mts';
 
 // `assets` (optional) = a Map the loader registers raster-fallback PNGs into (name -> png path), mirroring a
 // real bundler's image collection. When omitted, the loader has no raster fallback (vector-only).
@@ -120,19 +121,53 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
 
   it('warns when an unsupported SVG has no raster fallback, and still bakes the vector subset', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // No `assets` map → no raster fallback available; the <image> is dropped, the <rect> still bakes.
+    // No `assets` map → no raster fallback available; the <foreignObject> is dropped, the <rect> still bakes.
     const artifact = await bundleWithSvg(
-      '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="lime"/><image href="a.png"/></svg>',
+      '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="lime"/><foreignObject/></svg>',
     );
     const warned = warn.mock.calls.some(
       call =>
         /unsupported SVG feature/.test(String(call[0])) &&
-        /image/.test(String(call[0])),
+        /foreignObject/.test(String(call[0])),
     );
     warn.mockRestore();
     const art = evalArtifact(artifact);
     expect(art.kind).toBe('vector'); // degrades to the vector subset (the rect)
-    expect(warned).toBe(true); // but the dropped <image> is surfaced, not silent
+    expect(warned).toBe(true); // but the dropped <foreignObject> is surfaced, not silent
+  });
+
+  it('registers the images an SVG embeds, and keeps their files out of the bundle', async () => {
+    const assets = new Map();
+    const png = new PNG({width: 1, height: 1});
+    png.data.set([0, 0, 255, 255]);
+    const url = `data:image/png;base64,${PNG.sync.write(png).toString('base64')}`;
+    const artifact = evalArtifact(
+      await bundleWithSvg(
+        `<svg viewBox="0 0 10 10"><image href="${url}" width="10" height="10"/></svg>`,
+        {assets},
+      ),
+    );
+    expect(artifact.kind).toBe('vector');
+    expect(artifact.images).toBeUndefined();
+    const [[name, path]] = [...assets];
+    expect(name).toMatch(/^svg-image-[0-9a-f]{6}$/);
+    expect(existsSync(path)).toBe(true);
+    expect(artifact.ops[1]).toBe(parseInt(name.slice(-6), 16));
+  });
+
+  it("names an imported image by its file, and keeps the embedded images' prefix for them", () => {
+    expect(imageAssetName('/app/assets/wx_sun.png')).toBe('wx_sun');
+    expect(() => imageAssetName('/app/assets/svg-image-00ab12.png')).toThrow(
+      /svg-image-00ab12\.png starts with "svg-image-", which is kept for images embedded in \.svg files/,
+    );
+  });
+
+  it('fails the build on a reference outside the file', async () => {
+    await expect(
+      bundleWithSvg(
+        '<svg viewBox="0 0 10 10"><image href="photo.png" width="10" height="10"/></svg>',
+      ),
+    ).rejects.toThrow(/icon\.svg: it references "photo\.png"/);
   });
 
   const LABEL =
