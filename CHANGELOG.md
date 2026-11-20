@@ -60,7 +60,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Fixed
 
 - RP2040 example: the Flow B firmware starts again. A heap that began 4 bytes off an 8-byte boundary left
-  the framebuffer 4 bytes short at boot.
+  the framebuffer 4 bytes short at boot. The link check now counts that and malloc's own room.
+- Svg: a path closed after its shape ran out of points no longer reads past the point pool.
 - The website playground starts again.
 - The browser simulator's rotate control turns the app on the panel, so a quarter turn swaps its width and
   height.

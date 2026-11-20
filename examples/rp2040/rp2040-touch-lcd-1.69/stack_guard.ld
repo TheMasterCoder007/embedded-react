@@ -3,8 +3,10 @@
 ASSERT(__end__ <= __StackOneBottom - __stack_guard_bytes,
        "static RAM (.data + .bss) reaches into the stack guard: shrink the ERUI_* pools in CMakeLists.txt")
 
-/* The heap runs from the end of static data up to the guard, and the framebuffer is malloc'd from it at boot. */
-ASSERT(__end__ + __framebuffer_bytes <= __StackOneBottom - __stack_guard_bytes,
+/* The heap runs from the end of static data, rounded up to 8 bytes as main.c's _sbrk starts it, up to the guard,
+   and the framebuffer is malloc'd from it at boot with malloc's own room on top. A lower bound: it cannot see what
+   else is malloc'd before the framebuffer. */
+ASSERT(ALIGN(__end__, 8) + __framebuffer_bytes + __heap_reserve_bytes <= __StackOneBottom - __stack_guard_bytes,
        "the framebuffer doesn't fit beside static RAM: shrink the ERUI_* pools or ERB_ARENA_BYTES")
 
 /* The package slots start above the firmware, so the firmware must end below them. */
