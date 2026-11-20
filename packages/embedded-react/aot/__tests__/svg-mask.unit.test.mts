@@ -49,6 +49,14 @@ describe('<ClipPath> and <Mask> in Flow B', () => {
     ).not.toThrow();
   });
 
+  it('compiles an empty clip, which hides what it clips', () => {
+    expect(() =>
+      compile(
+        '<ClipPath id="none"></ClipPath><Rect width={9} height={9} clipPath="url(#none)" />',
+      ),
+    ).not.toThrow();
+  });
+
   it('compiles one scaled by a viewBox to the screen', () => {
     const source = app(
       `${CLIP}<Rect width={100} height={100} clipPath="url(#c)" />`,

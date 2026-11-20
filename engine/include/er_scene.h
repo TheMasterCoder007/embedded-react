@@ -201,7 +201,7 @@ extern "C"
      *
      * ER_VECTOR_OP_MASK takes the next `count` shapes out of the drawing and makes a mask of them. It adds to
      * the masks already in force, and a shape after it is drawn only where every one of them lets it through.
-     * ER_VECTOR_MASK_NONE (with a count of 0) lifts them all.
+     * ER_VECTOR_MASK_NONE (with a count of 0) lifts them all. A mask of no shapes lets nothing through.
      *   ER_VECTOR_MASK_CLIP       inside any of its shapes' fills, by each paint's fill rule
      *   ER_VECTOR_MASK_LUMINANCE  its shapes painted in order; the luminance of the result, times its alpha
      *   ER_VECTOR_MASK_ALPHA      its shapes painted in order; the alpha of the result

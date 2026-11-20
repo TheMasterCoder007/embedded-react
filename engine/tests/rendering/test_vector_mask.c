@@ -251,6 +251,15 @@ static int check_clip(void)
     if (memcmp(s_framebuffer, reference, sizeof(reference)) != 0)
         return fail("a square clipped to a rectangle is not that rectangle");
 
+    /* A clip of no shapes shows nothing. */
+    tape_begin();
+    tape_mask(ER_VECTOR_MASK_CLIP, 0);
+    tape_rect(0, 10, 10, 120, 120, false);
+    render();
+    for (int pixel = 0; pixel < RASTER_SIDE * RASTER_SIDE; pixel++)
+        if (s_framebuffer[pixel] != 0U)
+            return fail("a clip of no shapes let its shape through");
+
     /* A clip edge that falls inside a pixel leaves it partly drawn. */
     tape_begin();
     tape_mask(ER_VECTOR_MASK_CLIP, 1);

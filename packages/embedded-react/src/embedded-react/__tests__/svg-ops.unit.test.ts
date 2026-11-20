@@ -1011,6 +1011,16 @@ describe('clips and masks', () => {
     warn.mockRestore();
   });
 
+  it('keeps an empty <ClipPath> as a clip of no shapes, which hides its element', () => {
+    const {ops} = flattenSvg({
+      children: [
+        element('ClipPath', {id: 'none'}),
+        square({clipPath: 'url(#none)'}),
+      ],
+    });
+    expect(ops.slice(0, 4)).toEqual([MASK, CLIP, 0, SHAPE]);
+  });
+
   it('writes only the masks that change between shapes', () => {
     const ops = [];
     const writer = new MaskWriter(ops);

@@ -1661,7 +1661,7 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
                 const float shapes = erb_f32(table + floats + (float_index + 2u) * sizeof(float));
                 if (mask_owed > 0u || !(kind >= (float)ER_VECTOR_MASK_NONE && kind <= (float)ER_VECTOR_MASK_ALPHA)
                     || (float)(int)kind != kind || !(shapes >= 0.0f && shapes <= (float)ER_VECTOR_MASK_SHAPES_MAX)
-                    || (float)(int)shapes != shapes || ((int)kind == ER_VECTOR_MASK_NONE) != ((int)shapes == 0))
+                    || (float)(int)shapes != shapes || ((int)kind == ER_VECTOR_MASK_NONE && (int)shapes != 0))
                 {
                     return fail(error, ERB_ERROR_TAPE, "mask");
                 }
