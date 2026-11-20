@@ -201,6 +201,7 @@ extern "C"
      *   ER_VECTOR_OP_DASH   dash gap                add a dash and the gap after it to this shape's stroke
      *   ER_VECTOR_OP_DASH_OFFSET offset scale       how far into its dashes this shape's stroke starts
      *   ER_VECTOR_OP_IMAGE  id alpha a b c d e f    draw a registered image
+     *   ER_VECTOR_OP_REPEAT count columns rows cut x y ux uy vx vy   repeat the shapes after it in tiles
      *
      * A shape with an ER_VECTOR_OP_DASH in its run is stroked in dashes that follow the path's length, each
      * one capped by the paint's cap. Up to ER_VECTOR_DASH_MAX of them make the pattern, which repeats. The
@@ -217,6 +218,14 @@ extern "C"
      * ER_VECTOR_OP_IMAGE draws the image registered as ER_VECTOR_IMAGE_PREFIX followed by `id` in six lowercase
      * hex digits, in order with the shapes around it and under the masks in force. The matrix (a b c d e f)
      * maps its pixels to the tape, and `alpha` (0 to 1) fades it. An image that is not registered draws nothing.
+     *
+     * ER_VECTOR_OP_REPEAT takes the next `count` shapes and images as a tile and draws them `columns` by `rows`
+     * times: where they are, and moved by `column * (ux, uy) + row * (vx, vy)` for every other column and row. Each
+     * shape's copies are drawn together, as one shape, before the next shape's. With `cut` 1, each copy is drawn
+     * only inside its own tile: the parallelogram at (x, y), moved the same way, with sides (ux, uy) and (vx, vy).
+     * A drawing's repeats copy at most ER_VECTOR_REPEAT_MAX shapes and images in all, each counted as `count` times
+     * its copies. One past that, or with a `columns` or `rows` that is not a whole number from 1, draws its tile once,
+     * where it is.
      */
 #define ER_VECTOR_OP_SHAPE 0.0f
 #define ER_VECTOR_OP_MOVE 1.0f
@@ -229,8 +238,10 @@ extern "C"
 #define ER_VECTOR_OP_DASH 8.0f
 #define ER_VECTOR_OP_DASH_OFFSET 9.0f
 #define ER_VECTOR_OP_IMAGE 10.0f
+#define ER_VECTOR_OP_REPEAT 11.0f
 
-#define ER_VECTOR_DASH_MAX 8 /**< Dash and gap pairs in one shape's pattern. */
+#define ER_VECTOR_DASH_MAX 8       /**< Dash and gap pairs in one shape's pattern. */
+#define ER_VECTOR_REPEAT_MAX 16384 /**< Shapes and images a drawing's repeat ops copy in all. */
 
 #define ER_VECTOR_IMAGE_PREFIX "svg-image-" /**< Starts the name an image op's image is registered under. */
 #define ER_VECTOR_IMAGE_ID_MAX 0xFFFFFF     /**< The largest image id: six hex digits, exact in a float. */

@@ -1629,17 +1629,20 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
             return fail(error, ERB_ERROR_TAPE, "tape floats, paints or gradients out of range");
         }
         /* The ops parse with their argument counts. */
-        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u, 2u, 2u, 2u, 8u};
+        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u, 2u, 2u, 2u, 8u, 10u};
         uint32_t float_index = 0;
         /* The masks in force, the shapes across them, and the shapes the last mask op still takes. */
         uint32_t mask_groups = 0, mask_shapes = 0, mask_owed = 0;
+        /* The shapes and images the last repeat op still takes, and the copies the tape's repeats may still make. */
+        uint32_t repeat_owed = 0;
+        float repeat_left = (float)ER_VECTOR_REPEAT_MAX;
         /* Whether a shape has begun, and the dashes in its pattern. */
         bool in_shape = false;
         uint32_t dashes = 0;
         while (float_index < float_count)
         {
             const float opcode_value = erb_f32(table + floats + float_index * sizeof(float));
-            if (!(opcode_value >= ER_VECTOR_OP_SHAPE && opcode_value <= ER_VECTOR_OP_IMAGE)
+            if (!(opcode_value >= ER_VECTOR_OP_SHAPE && opcode_value <= ER_VECTOR_OP_REPEAT)
                 || (float)(int)opcode_value != opcode_value
                 || float_index + 1u + operand_counts[(int)opcode_value] > float_count)
             {
@@ -1656,6 +1659,10 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
                 if (mask_owed > 0u)
                 {
                     mask_owed--;
+                }
+                else if (repeat_owed > 0u)
+                {
+                    repeat_owed--;
                 }
                 in_shape = true;
                 dashes = 0;
@@ -1675,13 +1682,36 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
                 {
                     return fail(error, ERB_ERROR_TAPE, "image");
                 }
+                if (repeat_owed > 0u)
+                {
+                    repeat_owed--;
+                }
+            }
+            else if (opcode == (int)ER_VECTOR_OP_REPEAT)
+            {
+                in_shape = false;
+                const float pieces = erb_f32(table + floats + (float_index + 1u) * sizeof(float));
+                const float columns = erb_f32(table + floats + (float_index + 2u) * sizeof(float));
+                const float rows = erb_f32(table + floats + (float_index + 3u) * sizeof(float));
+                const float cut = erb_f32(table + floats + (float_index + 4u) * sizeof(float));
+                if (mask_owed > 0u || repeat_owed > 0u || !(pieces >= 0.0f && pieces <= (float)float_count)
+                    || (float)(int)pieces != pieces || !(columns >= 1.0f && columns <= (float)ER_VECTOR_REPEAT_MAX)
+                    || (float)(int)columns != columns || !(rows >= 1.0f && rows <= (float)ER_VECTOR_REPEAT_MAX)
+                    || (float)(int)rows != rows || pieces * columns * rows > repeat_left
+                    || (cut != 0.0f && cut != 1.0f))
+                {
+                    return fail(error, ERB_ERROR_TAPE, "repeat");
+                }
+                repeat_owed = (uint32_t)pieces;
+                repeat_left -= pieces * columns * rows;
             }
             else if (opcode == (int)ER_VECTOR_OP_MASK)
             {
                 in_shape = false;
                 const float kind = erb_f32(table + floats + (float_index + 1u) * sizeof(float));
                 const float shapes = erb_f32(table + floats + (float_index + 2u) * sizeof(float));
-                if (mask_owed > 0u || !(kind >= (float)ER_VECTOR_MASK_NONE && kind <= (float)ER_VECTOR_MASK_ALPHA)
+                if (mask_owed > 0u || repeat_owed > 0u
+                    || !(kind >= (float)ER_VECTOR_MASK_NONE && kind <= (float)ER_VECTOR_MASK_ALPHA)
                     || (float)(int)kind != kind || !(shapes >= 0.0f && shapes <= (float)ER_VECTOR_MASK_SHAPES_MAX)
                     || (float)(int)shapes != shapes || ((int)kind == ER_VECTOR_MASK_NONE && (int)shapes != 0))
                 {
@@ -1708,6 +1738,10 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
         if (mask_owed > 0u)
         {
             return fail(error, ERB_ERROR_TAPE, "mask without its shapes");
+        }
+        if (repeat_owed > 0u)
+        {
+            return fail(error, ERB_ERROR_TAPE, "repeat without its shapes");
         }
         for (uint32_t paint_index = 0; paint_index < paint_count; paint_index++)
         {

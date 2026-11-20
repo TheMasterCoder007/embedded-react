@@ -729,12 +729,13 @@ element with a `filter` is drawn as an image among them.
   down. A `<symbol>` takes the use's `width` and `height` as its viewport, fits its `viewBox` into it by
   `preserveAspectRatio`, and is cut to it unless its `overflow` is `visible`. A `<use>` that contains
   itself falls back to a raster.
-- **A `<pattern>` fill** is cut into tiles at build time: each tile's shapes are copied across the shape
-  it fills, under a clip of that shape, and the shape's stroke is drawn over them. `patternUnits`,
-  `patternContentUnits`, `patternTransform`, `viewBox` and `href` to another pattern are honoured, and
-  `fill-opacity` fades the tiles. A tile whose shapes reach past it takes a clip of its own, which costs
-  more tape. Every copy counts toward the tape, so keep tiles large against the shape. A file falls back to
-  a raster for a pattern on a stroke, a gradient or a pattern inside a pattern, or more than 1024 tiles.
+- **A `<pattern>` fill** is baked as one tile, which the device repeats across the shape it fills, under a
+  clip of that shape, and the shape's stroke is drawn over them. `patternUnits`, `patternContentUnits`,
+  `patternTransform`, `viewBox` and `href` to another pattern are honoured, and `fill-opacity` fades the
+  tiles. A pattern costs about one tile of tape however many tiles it covers. A tile whose shapes reach past
+  it has each copy cut to it, which counts as one more clip on the shape. A file falls back to a raster for a
+  pattern on a stroke, a gradient or a pattern inside a pattern, or when its patterns repeat more than 16,384
+  shapes in all (each tile's shapes times its tiles).
 - **An `<image>`** embedded as a `data:` URL (PNG, JPEG or GIF) is registered as an image asset and drawn
   in place, in order with the shapes around it, under any clip on it, fitted by `preserveAspectRatio`.
   It is sampled with a bilinear filter. An image in a `<clipPath>` is ignored, as in a browser; one in a

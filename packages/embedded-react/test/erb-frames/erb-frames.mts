@@ -1451,6 +1451,18 @@ const SCENARIOS: Scenario[] = [
     file: fixture('svg-sampler-source'),
     screen: PORTRAIT,
   },
+  // A .svg file's patterns: cut, turned, skewed, faded, sized by the shape's box, and left to overflow.
+  {
+    name: 'svg-pattern-source',
+    file: fixture('svg-pattern-source'),
+    screen: PORTRAIT,
+  },
+  // Fine patterns over large shapes, each one repeated tile.
+  {
+    name: 'svg-pattern-grid-source',
+    file: fixture('svg-pattern-grid-source'),
+    screen: PORTRAIT,
+  },
   // A .svg file's filters, drawn as images under or in place of its shapes.
   {
     name: 'svg-filter-source',

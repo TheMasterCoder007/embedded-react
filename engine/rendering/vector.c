@@ -45,6 +45,9 @@
  *
  * An image (ER_VECTOR_OP_IMAGE) is rasterized as the parallelogram its pixels map to, and each covered pixel
  * samples the image instead of a paint, so it takes the same edges, masks and transform as a shape.
+ *
+ * A repeated tile (ER_VECTOR_OP_REPEAT) has each of its shapes flattened once. Every copy's edges are that
+ * shape's moved on their way into the edge list, and a shape's copies are rasterized together while they fit.
  */
 
 #include "vector.h"
@@ -155,6 +158,7 @@
 #define VEC_MOVE_OP_SIZE 3
 #define VEC_MASK_OP_SIZE 3
 #define VEC_IMAGE_OP_SIZE 9
+#define VEC_REPEAT_OP_SIZE 11
 #define VEC_IMAGE_ID_DIGITS 6
 #define VEC_IMAGE_WEIGHT_ONE 256U   /**< A bilinear tap's whole weight. */
 #define VEC_IMAGE_PAINT 0xFFFFFFFFU /**< Any opaque colour: rasterize skips a transparent one. */
@@ -207,6 +211,9 @@ static float s_node_dash_offset; /**< The dash offset of the node being rendered
 static ERVecEdge s_edges[ERUI_VECTOR_MAX_EDGES];
 static int s_edge_count;
 static bool s_edge_truncated; /**< The current build dropped an edge on the pool cap (recording aborts). */
+static float s_edge_shift_x, s_edge_shift_y; /**< Added to every edge before the transform: a repeated copy's move. */
+static bool s_edge_batched; /**< The pool may fill with copies the caller rasterizes first: no warning when it does. */
+static int s_repeat_left;   /**< Shapes and images the drawing's repeat ops may still copy (ER_VECTOR_REPEAT_MAX). */
 
 /* The transform of the node being rendered, or NULL. Geometry is then built in layout space and edge_add
  * maps each edge to the screen. */
@@ -455,6 +462,10 @@ static inline void point_to_layout(float* x, float* y)
  */
 static void edge_add(float x0, float y0, float x1, float y1)
 {
+    x0 += s_edge_shift_x;
+    y0 += s_edge_shift_y;
+    x1 += s_edge_shift_x;
+    y1 += s_edge_shift_y;
     if (VEC_EDGES_IN_LAYOUT())
     {
         if (x0 == x1 && y0 == y1)
@@ -475,7 +486,8 @@ static void edge_add(float x0, float y0, float x1, float y1)
         return;
     if (s_edge_count >= ERUI_VECTOR_MAX_EDGES)
     {
-        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_MAX_EDGES", ERUI_VECTOR_MAX_EDGES);
+        if (!s_edge_batched)
+            ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_MAX_EDGES", ERUI_VECTOR_MAX_EDGES);
         s_edge_truncated = true;
         return;
     }
@@ -1361,11 +1373,9 @@ static void recorded_edges_to_screen(void)
 }
 #endif /* ERUI_VECTOR_EDGE_CACHE */
 
-/** @brief Builds closed fill edges from every subpath (into s_edges, honoring s_edge_y_top/s_edge_y_bottom). */
-static void fill_build(void)
+/** @brief Adds closed fill edges from every subpath to s_edges, honoring s_edge_y_top/s_edge_y_bottom. */
+static void fill_edges(void)
 {
-    s_edge_count = 0;
-    s_edge_truncated = false;
     for (int subpath_index = 0; subpath_index < s_subpath_count; subpath_index++)
     {
         const VecSub* subpath = &s_subpaths[subpath_index];
@@ -1382,6 +1392,14 @@ static void fill_build(void)
                  s_point_x[subpath->start],
                  s_point_y[subpath->start]);
     }
+}
+
+/** @brief Builds closed fill edges from every subpath (into s_edges, honoring s_edge_y_top/s_edge_y_bottom). */
+static void fill_build(void)
+{
+    s_edge_count = 0;
+    s_edge_truncated = false;
+    fill_edges();
 }
 
 /** @brief Builds closed edges from every subpath and rasterizes the fill (recording it when armed). */
@@ -2058,11 +2076,9 @@ static void dash_subpath(const VecSub* subpath, float period, float stroke_width
         dash_stroke(&first, unit_x, unit_y, stroke_width, cap, join, miter);
 }
 
-/** @brief Builds stroke outline edges for every subpath (into s_edges, honoring s_edge_y_top/s_edge_y_bottom). */
-static void stroke_build(float stroke_width, int cap, int join, float miter)
+/** @brief Adds stroke outline edges for every subpath to s_edges, honoring s_edge_y_top/s_edge_y_bottom. */
+static void stroke_edges(float stroke_width, int cap, int join, float miter)
 {
-    s_edge_count = 0;
-    s_edge_truncated = false;
     const float period = dash_period();
     for (int subpath_index = 0; subpath_index < s_subpath_count; subpath_index++)
     {
@@ -2073,6 +2089,14 @@ static void stroke_build(float stroke_width, int cap, int join, float miter)
         else
             stroke_subpath(&s_subpaths[subpath_index], stroke_width, cap, join, miter);
     }
+}
+
+/** @brief Builds stroke outline edges for every subpath (into s_edges, honoring s_edge_y_top/s_edge_y_bottom). */
+static void stroke_build(float stroke_width, int cap, int join, float miter)
+{
+    s_edge_count = 0;
+    s_edge_truncated = false;
+    stroke_edges(stroke_width, cap, join, miter);
 }
 
 /** @brief Builds stroke geometry for all subpaths and rasterizes it (recording it when armed). */
@@ -2194,10 +2218,11 @@ static float paint_margin(const ERVectorPaint* paint)
     return margin;
 }
 
-/** @brief Whether a tape value ends a shape's run of path ops: the next shape, a mask op or an image. */
+/** @brief Whether a tape value ends a shape's run of path ops: the next shape, a mask op, an image or a repeat. */
 static inline bool ends_shape(float opcode)
 {
-    return opcode == ER_VECTOR_OP_SHAPE || opcode == ER_VECTOR_OP_MASK || opcode == ER_VECTOR_OP_IMAGE;
+    return opcode == ER_VECTOR_OP_SHAPE || opcode == ER_VECTOR_OP_MASK || opcode == ER_VECTOR_OP_IMAGE
+           || opcode == ER_VECTOR_OP_REPEAT;
 }
 
 /**
@@ -2879,6 +2904,7 @@ static int mask_define(const float* ops,
  * @brief Reads an ER_VECTOR_OP_IMAGE and draws its image under the masks in force.
  *
  * @param[in] op_index  Index of the op.
+ * @param[in] move_x,move_y  How far it is moved from where the tape puts it.
  * @param[in] clip      The clip box in the space the geometry is built in, for skipping an image outside it.
  *
  * @return The tape index just past the op.
@@ -2888,6 +2914,8 @@ static int image_draw(const float* ops,
                       int op_count,
                       int origin_x,
                       int origin_y,
+                      float move_x,
+                      float move_y,
                       const VecClip* clip,
                       int clip_x0,
                       int clip_y0,
@@ -2905,7 +2933,7 @@ static int image_draw(const float* ops,
 #endif
     const float id = arguments[0], alpha = arguments[1];
     const float a = arguments[2], b = arguments[3], c = arguments[4], d = arguments[5];
-    const float e = arguments[6] + (float)origin_x, f = arguments[7] + (float)origin_y;
+    const float e = arguments[6] + (float)origin_x + move_x, f = arguments[7] + (float)origin_y + move_y;
     const float determinant = a * d - b * c;
     if (!(id >= 0.0f && id <= (float)ER_VECTOR_IMAGE_ID_MAX) || (float)(int)id != id || !(alpha > 0.0f) || !isfinite(a)
         || !isfinite(b) || !isfinite(c) || !isfinite(d) || !isfinite(e) || !isfinite(f)
@@ -2960,6 +2988,375 @@ static int image_draw(const float* ops,
     return op_index;
 }
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Repeated tiles
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief An ER_VECTOR_OP_REPEAT's copies. */
+typedef struct
+{
+    int columns, rows;
+    bool cut;
+    float x, y;               /**< The first tile's corner, the node origin added. */
+    float column_x, column_y; /**< How far one column moves a copy. */
+    float row_x, row_y;       /**< How far one row moves a copy. */
+} VecRepeat;
+
+/** @brief The columns and rows of copies a shape's box may reach the clip from, as [first, end) ranges. */
+typedef struct
+{
+    int first_column, end_column, first_row, end_row;
+} VecReach;
+
+/**
+ * @brief Reads a repeat op's arguments after its count, and takes its copies of @p piece_count shapes from the
+ *        drawing's budget. Ones that make no lattice, or that the budget cannot cover, give one copy, uncut.
+ */
+static void repeat_read(const float* arguments, int piece_count, int origin_x, int origin_y, VecRepeat* repeat)
+{
+    const float columns = arguments[0], rows = arguments[1];
+    repeat->cut = arguments[2] != 0.0f;
+    repeat->x = arguments[3] + (float)origin_x;
+    repeat->y = arguments[4] + (float)origin_y;
+    repeat->column_x = arguments[5];
+    repeat->column_y = arguments[6];
+    repeat->row_x = arguments[7];
+    repeat->row_y = arguments[8];
+    const bool whole = columns >= 1.0f && rows >= 1.0f && columns <= (float)ER_VECTOR_REPEAT_MAX
+                       && rows <= (float)ER_VECTOR_REPEAT_MAX && (float)(int)columns == columns
+                       && (float)(int)rows == rows;
+    const float copies = whole ? (float)piece_count * columns * rows : 0.0f;
+    const bool fits = whole && copies <= (float)s_repeat_left;
+    if (whole && !fits)
+        ERUI_WARN_ONCE("embedded-react vector: a drawing repeats more than %d shapes - the rest are drawn once.\n",
+                       ER_VECTOR_REPEAT_MAX);
+    if (fits && isfinite(repeat->x) && isfinite(repeat->y) && isfinite(repeat->column_x) && isfinite(repeat->column_y)
+        && isfinite(repeat->row_x) && isfinite(repeat->row_y))
+    {
+        repeat->columns = (int)columns;
+        repeat->rows = (int)rows;
+        s_repeat_left -= (int)copies;
+        return;
+    }
+    repeat->columns = 1;
+    repeat->rows = 1;
+    repeat->cut = false;
+    repeat->column_x = repeat->column_y = repeat->row_x = repeat->row_y = 0.0f; /* 0 * NaN would move it */
+}
+
+/** @brief How far the copy at @p column, @p row is moved from the tile. */
+static inline void repeat_move(const VecRepeat* repeat, int column, int row, float* move_x, float* move_y)
+{
+    *move_x = (float)column * repeat->column_x + (float)row * repeat->row_x;
+    *move_y = (float)column * repeat->column_y + (float)row * repeat->row_y;
+}
+
+/** @brief Clamps a column or row number, worked out in float, to [0, @p limit]. */
+static inline int repeat_clamp(float value, int limit)
+{
+    if (!(value > 0.0f))
+        return 0;
+    return value < (float)limit ? (int)value : limit;
+}
+
+/**
+ * @brief The copies of a box, @p bounds (low x, low y, high x, high y), that may reach the clip. Every copy outside
+ *        them misses it; one inside may miss it too.
+ */
+static VecReach repeat_reach(const VecRepeat* repeat, const float bounds[4], const VecClip* clip)
+{
+    VecReach reach = {0, repeat->columns, 0, repeat->rows};
+    const float determinant = repeat->column_x * repeat->row_y - repeat->row_x * repeat->column_y;
+    if (!(fabsf(determinant) > VEC_DEGENERATE_EPSILON))
+        return reach;
+    /* The moves that put the box over the clip, as columns and rows. */
+    const float move_x[2] = {clip->x0 - bounds[2], clip->x1 - bounds[0]};
+    const float move_y[2] = {clip->y0 - bounds[3], clip->y1 - bounds[1]};
+    float low_column = VEC_UNBOUNDED, low_row = VEC_UNBOUNDED, high_column = -VEC_UNBOUNDED, high_row = -VEC_UNBOUNDED;
+    for (int corner = 0; corner < 4; corner++)
+    {
+        const float x = move_x[corner & 1], y = move_y[corner >> 1];
+        const float column = (repeat->row_y * x - repeat->row_x * y) / determinant;
+        const float row = (repeat->column_x * y - repeat->column_y * x) / determinant;
+        low_column = fminf(low_column, column);
+        high_column = fmaxf(high_column, column);
+        low_row = fminf(low_row, row);
+        high_row = fmaxf(high_row, row);
+    }
+    if (!(isfinite(low_column) && isfinite(high_column) && isfinite(low_row) && isfinite(high_row)))
+        return reach;
+    reach.first_column = repeat_clamp(floorf(low_column), repeat->columns);
+    reach.end_column = repeat_clamp(floorf(high_column) + 1.0f, repeat->columns);
+    reach.first_row = repeat_clamp(floorf(low_row), repeat->rows);
+    reach.end_row = repeat_clamp(floorf(high_row) + 1.0f, repeat->rows);
+    return reach;
+}
+
+/** @brief Whether a box, @p bounds (low x, low y, high x, high y), moved by @p move_x, @p move_y misses the clip. */
+static inline bool copy_misses(const float bounds[4], float move_x, float move_y, const VecClip* clip)
+{
+    return bounds[2] + move_x < clip->x0 || bounds[0] + move_x > clip->x1 || bounds[3] + move_y < clip->y0
+           || bounds[1] + move_y > clip->y1;
+}
+
+/**
+ * @brief Puts a clip of one copy's tile over what is drawn next, until mask_tile_lift.
+ *
+ * @return false, having added nothing, when there is no room for it: the copy is then drawn uncut.
+ */
+static bool mask_tile_add(const VecRepeat* repeat, float move_x, float move_y, int clip_y0, int clip_y1)
+{
+#if ERUI_VECTOR_MASK_EDGES > 0
+    if (s_mask_failed || s_mask_group_count >= ER_VECTOR_MASK_GROUPS_MAX
+        || s_mask_shape_count >= ER_VECTOR_MASK_SHAPES_MAX)
+    {
+        ERUI_WARN_ONCE("embedded-react vector: more than %d clips and masks at once with a repeated tile's own - "
+                       "its copies are drawn uncut.\n",
+                       ER_VECTOR_MASK_GROUPS_MAX);
+        return false;
+    }
+    const float x = repeat->x + move_x, y = repeat->y + move_y;
+    s_edge_y_top = (float)clip_y0;
+    s_edge_y_bottom = (float)clip_y1;
+    s_edge_count = 0;
+    s_edge_truncated = false;
+    add_quad(x,
+             y,
+             x + repeat->column_x,
+             y + repeat->column_y,
+             x + repeat->column_x + repeat->row_x,
+             y + repeat->column_y + repeat->row_y,
+             x + repeat->row_x,
+             y + repeat->row_y);
+    const int first_layer = s_mask_layer_count;
+    if (!mask_layer_add(NULL, 0, ER_CHANNEL_MAX, ER_CHANNEL_MAX))
+        return false;
+    VecMaskGroup* group = &s_mask_groups[s_mask_group_count++];
+    group->kind = ER_VECTOR_MASK_CLIP;
+    group->first_layer = (uint8_t)first_layer;
+    group->layer_count = (uint8_t)(s_mask_layer_count - first_layer);
+    s_mask_shape_count++;
+    return true;
+#else
+    (void)repeat;
+    (void)move_x;
+    (void)move_y;
+    (void)clip_y0;
+    (void)clip_y1;
+    return false;
+#endif
+}
+
+/** @brief Lifts the clip the last mask_tile_add put in force. */
+static void mask_tile_lift(void)
+{
+#if ERUI_VECTOR_MASK_EDGES > 0
+    const VecMaskGroup* group = &s_mask_groups[--s_mask_group_count];
+    if (group->layer_count > 0)
+        s_mask_edge_count = s_mask_layers[group->first_layer].start;
+    s_mask_layer_count = group->first_layer;
+    s_mask_shape_count--;
+#endif
+}
+
+/** @brief Adds the fill or stroke edges of the shape in s_subpaths to s_edges. */
+static void copy_edges(const ERVectorPaint* paint, bool stroke)
+{
+    if (stroke)
+        stroke_edges(
+            paint->stroke_width, paint->cap, paint->join, paint->miter > 0.0f ? paint->miter : VEC_DEFAULT_MITER_LIMIT);
+    else
+        fill_edges();
+}
+
+/**
+ * @brief Paints the fill or stroke of the shape in s_subpaths at each copy that reaches the clip.
+ *
+ * Uncut copies go into one edge list and are rasterized together, so ones that touch leave no seam. When the pool
+ * fills, the copies so far are rasterized and the list starts again.
+ */
+static void repeat_paint(const VecRepeat* repeat,
+                         const VecReach* reach,
+                         const float bounds[4],
+                         const ERVectorPaint* paint,
+                         bool stroke,
+                         const ERVectorGradient* gradient,
+                         const VecClip* clip,
+                         int clip_x0,
+                         int clip_y0,
+                         int clip_x1,
+                         int clip_y1)
+{
+    const uint32_t color = stroke ? paint->stroke : paint->fill;
+    const int even_odd = !stroke && paint->fill_rule == ER_VECTOR_FILL_EVENODD;
+    s_edge_count = 0;
+    s_edge_truncated = false;
+    for (int row = reach->first_row; row < reach->end_row; row++)
+    {
+        for (int column = reach->first_column; column < reach->end_column; column++)
+        {
+            float move_x, move_y;
+            repeat_move(repeat, column, row, &move_x, &move_y);
+            if (copy_misses(bounds, move_x, move_y, clip))
+                continue;
+            if (repeat->cut)
+            {
+                const bool cut = mask_tile_add(repeat, move_x, move_y, clip_y0, clip_y1);
+                s_edge_y_top = (float)clip_y0;
+                s_edge_y_bottom = (float)clip_y1;
+                s_edge_count = 0;
+                s_edge_truncated = false;
+                s_edge_shift_x = move_x;
+                s_edge_shift_y = move_y;
+                copy_edges(paint, stroke);
+                s_edge_shift_x = s_edge_shift_y = 0.0f;
+                rasterize(s_edges, s_edge_count, color, gradient, even_odd, clip_x0, clip_y0, clip_x1, clip_y1);
+                if (cut)
+                    mask_tile_lift();
+                continue;
+            }
+            const int batched = s_edge_count;
+            s_edge_y_top = (float)clip_y0;
+            s_edge_y_bottom = (float)clip_y1;
+            s_edge_shift_x = move_x;
+            s_edge_shift_y = move_y;
+            s_edge_batched = batched > 0;
+            copy_edges(paint, stroke);
+            s_edge_batched = false;
+            if (s_edge_truncated && batched > 0)
+            {
+                /* The pool filled: paint the copies before this one, then build it again on its own. */
+                s_edge_count = batched;
+                rasterize(s_edges, s_edge_count, color, gradient, even_odd, clip_x0, clip_y0, clip_x1, clip_y1);
+                s_edge_count = 0;
+                s_edge_truncated = false;
+                copy_edges(paint, stroke);
+            }
+            s_edge_shift_x = s_edge_shift_y = 0.0f;
+        }
+    }
+    if (!repeat->cut && s_edge_count > 0)
+        rasterize(s_edges, s_edge_count, color, gradient, even_odd, clip_x0, clip_y0, clip_x1, clip_y1);
+}
+
+/**
+ * @brief Reads an ER_VECTOR_OP_REPEAT and draws its tile's copies, shape by shape.
+ *
+ * @param[in] op_index  Index of the op.
+ * @param[in] clip      The clip box in the space the geometry is built in, for skipping copies outside it.
+ *
+ * @return The tape index just past the tile.
+ */
+static int repeat_draw(const float* ops,
+                       int op_index,
+                       int op_count,
+                       const ERVectorPaint* paints,
+                       int paint_count,
+                       const ERVectorGradient* gradients,
+                       int gradient_count,
+                       int origin_x,
+                       int origin_y,
+                       const VecClip* clip,
+                       int clip_x0,
+                       int clip_y0,
+                       int clip_x1,
+                       int clip_y1)
+{
+#if !ERUI_GRADIENT
+    (void)gradients;
+    (void)gradient_count;
+#endif
+    if (op_index + VEC_REPEAT_OP_SIZE > op_count)
+        return op_count;
+    const float* arguments = ops + op_index + 1;
+    op_index += VEC_REPEAT_OP_SIZE;
+#if ERUI_VECTOR_EDGE_CACHE
+    /* Its copies are not recorded: a replay has no tape to repeat. */
+    if (s_recording)
+        s_recording_failed = true;
+#endif
+    /* A count over the tape's length is cut to the shapes it has. */
+    const float count_value = arguments[0];
+    const int piece_count = !(count_value >= 0.0f) ? 0 : count_value < (float)op_count ? (int)count_value : op_count;
+    VecRepeat repeat;
+    repeat_read(arguments + 1, piece_count, origin_x, origin_y, &repeat);
+
+    for (int piece = 0; piece < piece_count && op_index < op_count; piece++)
+    {
+        if (ops[op_index] == ER_VECTOR_OP_IMAGE)
+        {
+            const int image_index = op_index;
+            op_index = (op_index + VEC_IMAGE_OP_SIZE <= op_count) ? op_index + VEC_IMAGE_OP_SIZE : op_count;
+            for (int row = 0; row < repeat.rows; row++)
+            {
+                for (int column = 0; column < repeat.columns; column++)
+                {
+                    float move_x, move_y;
+                    repeat_move(&repeat, column, row, &move_x, &move_y);
+                    const bool cut = repeat.cut && mask_tile_add(&repeat, move_x, move_y, clip_y0, clip_y1);
+                    image_draw(ops,
+                               image_index,
+                               op_count,
+                               origin_x,
+                               origin_y,
+                               move_x,
+                               move_y,
+                               clip,
+                               clip_x0,
+                               clip_y0,
+                               clip_x1,
+                               clip_y1);
+                    if (cut)
+                        mask_tile_lift();
+                }
+            }
+            continue;
+        }
+        if (ops[op_index] != ER_VECTOR_OP_SHAPE)
+            break;
+        const float paint_value = (op_index + 1 < op_count) ? ops[op_index + 1] : -1.0f;
+        op_index = (op_index + 2 < op_count) ? op_index + 2 : op_count;
+        op_index = build_subpaths(ops, op_index, op_count, origin_x, origin_y);
+        const ERVectorPaint* paint =
+            (paint_value >= 0.0f && paint_value < (float)paint_count) ? &paints[(int)paint_value] : 0;
+        if (!paint || s_point_count == 0)
+            continue;
+
+        /* The shape's box, its paint's reach included. */
+        const float margin = paint_margin(paint);
+        float bounds[4] = {VEC_UNBOUNDED, VEC_UNBOUNDED, -VEC_UNBOUNDED, -VEC_UNBOUNDED};
+        for (int point = 0; point < s_point_count; point++)
+        {
+            bounds[0] = fminf(bounds[0], s_point_x[point]);
+            bounds[1] = fminf(bounds[1], s_point_y[point]);
+            bounds[2] = fmaxf(bounds[2], s_point_x[point]);
+            bounds[3] = fmaxf(bounds[3], s_point_y[point]);
+        }
+        bounds[0] -= margin;
+        bounds[1] -= margin;
+        bounds[2] += margin;
+        bounds[3] += margin;
+        const VecReach reach = repeat_reach(&repeat, bounds, clip);
+
+        const ERVectorGradient* fill_gradient = NULL;
+        const ERVectorGradient* stroke_gradient = NULL;
+#if ERUI_GRADIENT
+        ERVectorGradient fill_resolved, stroke_resolved;
+        fill_gradient =
+            resolve_grad(paint->fill_gradient, gradients, gradient_count, origin_x, origin_y, &fill_resolved);
+        stroke_gradient =
+            resolve_grad(paint->stroke_gradient, gradients, gradient_count, origin_x, origin_y, &stroke_resolved);
+#endif
+        if (fill_gradient || ((paint->fill >> 24) & 0xFFU) != 0U)
+            repeat_paint(
+                &repeat, &reach, bounds, paint, false, fill_gradient, clip, clip_x0, clip_y0, clip_x1, clip_y1);
+        if ((stroke_gradient || ((paint->stroke >> 24) & 0xFFU) != 0U) && paint->stroke_width > 0.0f)
+            repeat_paint(
+                &repeat, &reach, bounds, paint, true, stroke_gradient, clip, clip_x0, clip_y0, clip_x1, clip_y1);
+    }
+    return op_index;
+}
+
 /** @brief Walks an op-tape and paints it — er_vector_render's body, shared with the recording path. */
 static void render_tape(const float* ops,
                         int op_count,
@@ -2986,6 +3383,7 @@ static void render_tape(const float* ops,
     const VecClip build_clip = clip_in_build_space(clip_x0, clip_y0, clip_x1, clip_y1);
 
     mask_reset();
+    s_repeat_left = ER_VECTOR_REPEAT_MAX;
     int op_index = 0;
     while (op_index < op_count)
     {
@@ -3011,8 +3409,36 @@ static void render_tape(const float* ops,
         }
         if (ops[op_index] == ER_VECTOR_OP_IMAGE)
         {
-            op_index = image_draw(
-                ops, op_index, op_count, origin_x, origin_y, &build_clip, clip_left, clip_top, clip_right, clip_bottom);
+            op_index = image_draw(ops,
+                                  op_index,
+                                  op_count,
+                                  origin_x,
+                                  origin_y,
+                                  0.0f,
+                                  0.0f,
+                                  &build_clip,
+                                  clip_left,
+                                  clip_top,
+                                  clip_right,
+                                  clip_bottom);
+            continue;
+        }
+        if (ops[op_index] == ER_VECTOR_OP_REPEAT)
+        {
+            op_index = repeat_draw(ops,
+                                   op_index,
+                                   op_count,
+                                   paints,
+                                   paint_count,
+                                   gradients,
+                                   gradient_count,
+                                   origin_x,
+                                   origin_y,
+                                   &build_clip,
+                                   clip_left,
+                                   clip_top,
+                                   clip_right,
+                                   clip_bottom);
             continue;
         }
         if (ops[op_index] != ER_VECTOR_OP_SHAPE)
@@ -3289,18 +3715,18 @@ void er_vector_dash_offset(float offset)
 #if ERUI_VECTOR_EDGE_CACHE
 /**
  * @brief Whether a tape draws something a cached edge list cannot: a dashed shape that follows the node's dash
- *        offset, or an image.
+ *        offset, an image or a repeated tile.
  */
 static bool tape_skips_cache(const float* ops, int op_count)
 {
-    static const uint8_t argument_counts[] = {1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8};
+    static const uint8_t argument_counts[] = {1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8, 10};
     int op_index = 0;
     while (op_index < op_count)
     {
         const float opcode = ops[op_index];
-        if (!(opcode >= ER_VECTOR_OP_SHAPE && opcode <= ER_VECTOR_OP_IMAGE))
+        if (!(opcode >= ER_VECTOR_OP_SHAPE && opcode <= ER_VECTOR_OP_REPEAT))
             return false;
-        if (opcode == ER_VECTOR_OP_IMAGE
+        if (opcode == ER_VECTOR_OP_IMAGE || opcode == ER_VECTOR_OP_REPEAT
             || (opcode == ER_VECTOR_OP_DASH_OFFSET && op_index + VEC_DASH_ARGS < op_count && ops[op_index + 2] != 0.0f))
             return true;
         op_index += 1 + argument_counts[(int)opcode];

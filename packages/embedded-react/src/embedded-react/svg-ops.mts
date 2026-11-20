@@ -183,6 +183,7 @@ export const VOP_MASK = 7;
 export const VOP_DASH = 8;
 export const VOP_DASH_OFFSET = 9;
 export const VOP_IMAGE = 10;
+export const VOP_REPEAT = 11;
 
 // What an image in a tape is registered under, before its id in six hex digits — MUST match the engine's
 // ER_VECTOR_IMAGE_PREFIX and ER_VECTOR_IMAGE_ID_MAX (er_scene.h).
@@ -200,8 +201,11 @@ export const MASK_SHAPES_MAX = 16;
 // Dash and gap pairs in one shape's pattern — MUST match the engine's ER_VECTOR_DASH_MAX (er_scene.h).
 export const DASH_MAX = 8;
 
+// Shapes and images a drawing's repeat ops copy in all — MUST match the engine's ER_VECTOR_REPEAT_MAX (er_scene.h).
+export const REPEAT_MAX = 16384;
+
 /** How many values follow each opcode. */
-export const OP_OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8];
+export const OP_OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8, 10];
 
 // Control-point ratio for approximating a quarter (circular or elliptical) arc with one cubic:
 // 4/3 * (sqrt(2) - 1). Used by rounded-rect corners.
@@ -1432,6 +1436,13 @@ export function tapeMaskProblem(ops: readonly number[]): string | null {
       if (shapes > MASK_SHAPES_MAX)
         return `the clips and masks on one shape hold more than ${MASK_SHAPES_MAX} shapes`;
     }
+    // A cut repeat puts a clip of each copy's tile over it.
+    if (opcode === VOP_REPEAT && ops[index + 4]) {
+      if (groups + 1 > MASK_GROUPS_MAX)
+        return `more than ${MASK_GROUPS_MAX} clips and masks apply to one shape`;
+      if (shapes + 1 > MASK_SHAPES_MAX)
+        return `the clips and masks on one shape hold more than ${MASK_SHAPES_MAX} shapes`;
+    }
     index += 1 + (OP_OPERANDS[opcode] ?? 0);
   }
   return null;
@@ -1447,7 +1458,30 @@ export function tapeShapeCount(ops: readonly number[]): number {
   return shapes;
 }
 
-/** The box around a tape's points (SHAPE, MASK, dash and image ops skipped), or null for a tape with none. */
+/** Where the tile of the repeat op at `index` ends: past the shapes and images it takes. */
+export function repeatTileEnd(ops: readonly number[], index: number): number {
+  let end = index + 1 + OP_OPERANDS[VOP_REPEAT];
+  for (let piece = 0; piece < ops[index + 1] && end < ops.length; piece++) {
+    if (ops[end] !== VOP_SHAPE && ops[end] !== VOP_IMAGE) break;
+    const shape = ops[end] === VOP_SHAPE;
+    end += 1 + (OP_OPERANDS[ops[end]] ?? 0);
+    while (
+      shape &&
+      end < ops.length &&
+      ops[end] !== VOP_SHAPE &&
+      ops[end] !== VOP_IMAGE &&
+      ops[end] !== VOP_MASK &&
+      ops[end] !== VOP_REPEAT
+    )
+      end += 1 + (OP_OPERANDS[ops[end]] ?? 0);
+  }
+  return end;
+}
+
+/**
+ * The box around a tape's points (SHAPE, MASK, dash and image ops skipped), or null for a tape with none. A repeated
+ * tile's box covers every copy.
+ */
 export function tapeBounds(ops: readonly number[]): TapeBounds | null {
   let minX = Infinity;
   let minY = Infinity;
@@ -1462,6 +1496,23 @@ export function tapeBounds(ops: readonly number[]): TapeBounds | null {
   for (let index = 0; index < ops.length;) {
     const opcode = ops[index];
     const operands = OP_OPERANDS[opcode] ?? 0;
+    if (opcode === VOP_REPEAT) {
+      const end = repeatTileEnd(ops, index);
+      const tile = tapeBounds(ops.slice(index + 1 + operands, end));
+      if (tile) {
+        const [columns, rows] = [ops[index + 2], ops[index + 3]];
+        const [columnX, columnY, rowX, rowY] = ops.slice(index + 7, index + 11);
+        for (const column of [0, columns - 1])
+          for (const row of [0, rows - 1]) {
+            const moveX = column * columnX + row * rowX;
+            const moveY = column * columnY + row * rowY;
+            add(tile.x + moveX, tile.y + moveY);
+            add(tile.x + tile.width + moveX, tile.y + tile.height + moveY);
+          }
+      }
+      index = end;
+      continue;
+    }
     if (opcode === VOP_ARC) {
       const radius = Math.abs(ops[index + 3]);
       add(ops[index + 1] - radius, ops[index + 2] - radius);
@@ -2296,6 +2347,20 @@ function scaleTape(
       scaled.push(ops[index++], ops[index++]); // kind and shape count
     else if (opcode === VOP_DASH || opcode === VOP_DASH_OFFSET)
       scaled.push(ops[index++] * strokeScale, ops[index++] * strokeScale);
+    else if (opcode === VOP_REPEAT)
+      // Count, columns, rows and cut, then the first tile's corner and its two sides.
+      scaled.push(
+        ops[index++],
+        ops[index++],
+        ops[index++],
+        ops[index++],
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+      );
     else if (opcode === VOP_IMAGE)
       // Id and alpha, then the matrix from its pixels: each row scales with its axis.
       scaled.push(

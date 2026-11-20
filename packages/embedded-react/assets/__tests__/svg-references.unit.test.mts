@@ -17,16 +17,18 @@
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {PNG} from 'pngjs';
-import {PATTERN_TILES_MAX, svgToVector} from '../bake-svg.mts';
+import {svgToVector} from '../bake-svg.mts';
+import {REPEAT_MAX} from '../../src/embedded-react/svg-ops.mts';
 
 const SHAPE = 0;
 const MOVE = 1;
 const MASK = 7;
 const IMAGE = 10;
+const REPEAT = 11;
 const CLIP = 1;
 const NONE = 0;
 const PAINT_STRIDE = 9;
-const OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8];
+const OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8, 10];
 
 const svg = (body: string): string =>
   `<svg viewBox="0 0 100 100" width="100" height="100">${body}</svg>`;
@@ -160,24 +162,46 @@ describe('svgToVector — pattern', () => {
     '<pattern id="p" width="10" height="10" patternUnits="userSpaceOnUse">' +
     '<circle cx="5" cy="5" r="3" fill="red"/></pattern>';
 
-  it('tiles a pattern across the shape it fills, under a clip of the shape', async () => {
+  /** The tape's repeat op, after its opcode. */
+  const repeatOf = (tape: readonly number[]): number[] =>
+    ops(tape)
+      .find(op => op[0] === REPEAT)!
+      .slice(1);
+
+  it('repeats one tile across the shape it fills, under a clip of the shape', async () => {
     const artifact = await svgToVector(
       svg(`${dotPattern}<rect width="40" height="20" fill="url(#p)"/>`),
     );
     expect(artifact.dropped).toEqual([]);
     expect(opcodes(artifact.ops).slice(0, 3)).toEqual([MASK, SHAPE, MOVE]);
     expect(ops(artifact.ops)[0]).toEqual([MASK, CLIP, 1]);
-    // The clip's shape, then one shape holding a dot for each of the 4 x 2 tiles.
+    // One shape of 4 x 2 tiles, uncut, from the corner at 0 0.
+    expect(repeatOf(artifact.ops)).toEqual([1, 4, 2, 0, 0, 0, 10, 0, 0, 10]);
+    // The clip's shape, then the first tile's dot.
     expect(count(artifact.ops, SHAPE)).toBe(2);
-    expect(count(artifact.ops, MOVE)).toBe(1 + 8);
+    expect(count(artifact.ops, MOVE)).toBe(2);
     const dotsPaint = ops(artifact.ops).filter(op => op[0] === SHAPE)[1][1];
     expect(artifact.paints[dotsPaint * PAINT_STRIDE]).toBe(0xffff0000);
-    const dotStarts = ops(artifact.ops)
-      .filter(op => op[0] === MOVE)
-      .slice(1)
-      .map(op => op.slice(1));
-    expect(dotStarts).toContainEqual([2, 5]);
-    expect(dotStarts).toContainEqual([32, 15]);
+    expect(ops(artifact.ops).filter(op => op[0] === MOVE)[1]).toEqual([
+      MOVE,
+      2,
+      5,
+    ]);
+  });
+
+  it('costs one tile of tape however many tiles it covers', async () => {
+    const grid = (size: number): string =>
+      svg(
+        `<pattern id="p" width="${size}" height="${size}" patternUnits="userSpaceOnUse">` +
+          `<path d="M0 0 H${size} V${size}" fill="none" stroke="black"/></pattern>` +
+          '<rect width="100" height="100" fill="url(#p)"/>',
+      );
+    const fine = await svgToVector(grid(5));
+    const coarse = await svgToVector(grid(50));
+    expect(fine.dropped).toEqual([]);
+    expect(repeatOf(fine.ops).slice(0, 4)).toEqual([1, 20, 20, 1]);
+    expect(fine.ops.length).toBe(coarse.ops.length);
+    expect(fine.ops.length).toBeLessThan(60);
   });
 
   it('places tiles across the shape’s box in objectBoundingBox units, and moves them by patternTransform', async () => {
@@ -187,15 +211,11 @@ describe('svgToVector — pattern', () => {
           '<rect x="20" y="20" width="40" height="40" fill="url(#p)"/>',
       ),
     );
-    const starts = ops(box.ops)
-      .filter(op => op[0] === MOVE)
-      .slice(1)
-      .map(op => op.slice(1));
-    expect(starts).toEqual([
-      [20, 20],
-      [40, 20],
-      [20, 40],
-      [40, 40],
+    expect(repeatOf(box.ops)).toEqual([1, 2, 2, 0, 20, 20, 20, 0, 0, 20]);
+    expect(ops(box.ops).filter(op => op[0] === MOVE)[1]).toEqual([
+      MOVE,
+      20,
+      20,
     ]);
     const moved = await svgToVector(
       svg(
@@ -203,14 +223,21 @@ describe('svgToVector — pattern', () => {
           '<rect width="2" height="2"/></pattern><rect width="20" height="10" fill="url(#p)"/>',
       ),
     );
-    const firsts = ops(moved.ops)
-      .filter(op => op[0] === MOVE)
-      .slice(1)
-      .map(op => op[1]);
-    expect(firsts).toEqual([-7, 3, 13]);
+    expect(repeatOf(moved.ops)).toEqual([1, 3, 1, 0, -7, 0, 10, 0, 0, 10]);
+    const turned = await svgToVector(
+      svg(
+        '<pattern id="p" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(90)">' +
+          '<rect width="2" height="2"/></pattern><rect width="20" height="10" fill="url(#p)"/>',
+      ),
+    );
+    const [, , , , , , columnX, columnY, rowX, rowY] = repeatOf(turned.ops);
+    expect(columnX).toBeCloseTo(0);
+    expect(columnY).toBeCloseTo(10);
+    expect(rowX).toBeCloseTo(-10);
+    expect(rowY).toBeCloseTo(0);
   });
 
-  it('clips each tile when its shapes reach past it', async () => {
+  it('cuts each copy to its tile when its shapes reach past it', async () => {
     const artifact = await svgToVector(
       svg(
         '<pattern id="p" width="10" height="10" patternUnits="userSpaceOnUse">' +
@@ -219,16 +246,12 @@ describe('svgToVector — pattern', () => {
       ),
     );
     expect(artifact.dropped).toEqual([]);
-    const masks = ops(artifact.ops)
-      .filter(op => op[0] === MASK)
-      .map(op => op.slice(1));
-    expect(masks).toEqual([
-      [CLIP, 1],
-      [CLIP, 1],
-      [NONE, 0],
-      [CLIP, 1],
-      [CLIP, 1],
-    ]);
+    expect(
+      ops(artifact.ops)
+        .filter(op => op[0] === MASK)
+        .map(op => op.slice(1)),
+    ).toEqual([[CLIP, 1]]);
+    expect(repeatOf(artifact.ops)).toEqual([1, 2, 1, 1, 0, 0, 10, 0, 0, 10]);
     const visible = await svgToVector(
       svg(
         '<pattern id="p" width="10" height="10" patternUnits="userSpaceOnUse" overflow="visible">' +
@@ -237,6 +260,7 @@ describe('svgToVector — pattern', () => {
       ),
     );
     expect(count(visible.ops, MASK)).toBe(1);
+    expect(repeatOf(visible.ops)[3]).toBe(0);
   });
 
   it('follows a pattern’s href for its tile and its shapes, and fits a viewBox to the tile', async () => {
@@ -293,14 +317,20 @@ describe('svgToVector — pattern', () => {
       ),
     );
     expect(gradient.dropped).toEqual(['gradient inside a pattern']);
-    const many = await svgToVector(
+    // 100 x 100 tiles of one shape fit alone, but two such fills repeat more shapes than the engine draws.
+    const fine =
+      '<pattern id="p" width="1" height="1" patternUnits="userSpaceOnUse"><rect width="0.5" height="0.5"/></pattern>';
+    const one = await svgToVector(
+      svg(`${fine}<rect width="100" height="100" fill="url(#p)"/>`),
+    );
+    expect(one.dropped).toEqual([]);
+    const two = await svgToVector(
       svg(
-        '<pattern id="p" width="1" height="1" patternUnits="userSpaceOnUse"><rect width="0.5" height="0.5"/></pattern>' +
-          '<rect width="100" height="100" fill="url(#p)"/>',
+        `${fine}<rect width="100" height="100" fill="url(#p)"/><rect width="100" height="100" fill="url(#p)"/>`,
       ),
     );
-    expect(many.dropped).toEqual([
-      `pattern of more than ${PATTERN_TILES_MAX} tiles`,
+    expect(two.dropped).toEqual([
+      `patterns repeating more than ${REPEAT_MAX} shapes`,
     ]);
     const nested = await svgToVector(
       svg(
@@ -405,10 +435,12 @@ describe('svgToVector — embedded images', () => {
       ops(artifact.ops)
         .filter(op => op[0] === IMAGE)
         .map(op => op.slice(7)),
-    ).toEqual([
-      [0, 0],
-      [10, 0],
-    ]);
+    ).toEqual([[0, 0]]);
+    expect(
+      ops(artifact.ops)
+        .find(op => op[0] === REPEAT)!
+        .slice(1, 5),
+    ).toEqual([1, 2, 1, 0]);
   });
 
   it('leaves an image out of a clip, and what it cannot draw to the raster fallback', async () => {

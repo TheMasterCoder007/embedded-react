@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 20u
+#define ERB_FORMAT_MINOR 21u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -69,6 +69,9 @@
 
 /** @brief The minor whose op-tapes can draw an image among their shapes (ER_VECTOR_OP_IMAGE). */
 #define ERB_FORMAT_MINOR_IMAGE 20u
+
+/** @brief The minor whose op-tapes can repeat a tile of their shapes (ER_VECTOR_OP_REPEAT). */
+#define ERB_FORMAT_MINOR_REPEAT 21u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
