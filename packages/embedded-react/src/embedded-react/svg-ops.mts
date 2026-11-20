@@ -268,6 +268,14 @@ function lerpArgb(
   );
 }
 
+/**
+ * The solid color a gradient paint carries beside it: its middle color. The engine draws it only when it drops
+ * the gradient, as a board built without radial gradients does with a radial one.
+ */
+export function gradientFallback(stops: readonly PackedStop[]): number {
+  return evalStopsAt(stops as PackedStop[], 0.5);
+}
+
 /** Gradient color at `position` (stops ascending by offset; clamps to the endpoint colors). */
 function evalStopsAt(stops: PackedStop[], position: number): number {
   if (!stops.length) return 0;
@@ -1728,7 +1736,7 @@ export function gradientSource(
   if (stops.length === 1)
     return {color: fadeColor(stops[0].color, opacity), gradient: null};
   return {
-    color: 0,
+    color: fadeColor(gradientFallback(stops), opacity),
     // Only a gradient across the box needs it.
     gradient: fadeGradient(
       placeGradient(
@@ -1905,8 +1913,10 @@ export function flattenSvg(props: SvgProps): VectorTape {
         color: fadeColor(parseColor(value as ColorInput), opacity),
         gradient: descriptor ? packGradient(descriptor, opacity) : null,
       };
-    if (descriptor)
-      return {color: 0, gradient: packGradient(descriptor, opacity)};
+    if (descriptor) {
+      const gradient = packGradient(descriptor, opacity);
+      return {color: gradientFallback(gradient.stops), gradient};
+    }
     const found = definition(id);
     if (!found || !isGradientTag(found.type)) {
       warnSvgPaint(

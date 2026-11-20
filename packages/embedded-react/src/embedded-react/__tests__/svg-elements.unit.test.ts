@@ -61,7 +61,8 @@ describe('gradients by reference', () => {
       el('Defs', {children: el('LinearGradient', {id: 'g', children: STOPS})}),
       el('Rect', {x: 10, y: 20, width: 40, height: 10, fill: 'url(#g)'}),
     );
-    expect(paintAt(paints, 0)[0]).toBe(0);
+    // The ramp's middle, drawn only by a board that drops the gradient.
+    expect(paintAt(paints, 0)[0]).toBe(0xff800080);
     expect(paintAt(paints, 0)[7]).toBe(1);
     expect(gradients).toEqual([
       {
@@ -115,6 +116,34 @@ describe('gradients by reference', () => {
       ay: 20,
       r: 20,
     });
+  });
+
+  it('carries a faded middle color beside a gradient, for a board without radial gradients', () => {
+    const {paints} = svg(
+      el('RadialGradient', {
+        id: 'r',
+        children: [
+          el('Stop', {offset: 0, stopColor: '#ffffff'}),
+          el('Stop', {offset: 0.5, stopColor: '#3060d0'}),
+          el('Stop', {offset: 1, stopColor: '#102040'}),
+        ],
+      }),
+      el('Circle', {cx: 50, cy: 50, r: 40, fill: 'url(#r)', fillOpacity: 0.5}),
+      el('Rect', {
+        width: 9,
+        height: 9,
+        fill: 'url(#r)',
+        fillGradient: {
+          type: 1,
+          stops: [
+            {color: '#ff0000', offset: 0},
+            {color: '#0000ff', offset: 1},
+          ],
+        },
+      }),
+    );
+    expect(paintAt(paints, 0)[0]).toBe(0x803060d0);
+    expect(paintAt(paints, 1)[0]).toBe(0xff800080);
   });
 
   it('paints one stop as its color, and none, or a missing gradient, as nothing', () => {

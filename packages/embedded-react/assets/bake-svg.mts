@@ -63,6 +63,7 @@ import {
   maskGroup,
   urlReference,
   fadeColor,
+  gradientFallback,
   opacityOf,
   packStops,
   tapeBounds,
@@ -1077,12 +1078,10 @@ export async function svgToVector(
     };
     const fillGradient = gradientIndex(urlRef(paint.fill), fillOpacity);
     const strokeGradient = gradientIndex(urlRef(paint.stroke), strokeOpacity);
-    /** A solid color, or a gradient of one stop's color. */
+    /** A solid color: a gradient's middle color, which the engine draws only when it drops the gradient. */
     const solid = (value: string): number => {
-      const definition = gradientDefinitions.get(urlRef(value) ?? '');
-      return definition?.stops.length === 1
-        ? definition.stops[0].color
-        : colorOf(value);
+      const stops = gradientDefinitions.get(urlRef(value) ?? '')?.stops;
+      return stops?.length ? gradientFallback(stops) : colorOf(value);
     };
     target.writer?.use(masks);
     target.ops.push(

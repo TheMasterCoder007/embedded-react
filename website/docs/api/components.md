@@ -564,7 +564,9 @@ Coordinates are numbers or percentages. With `gradientUnits="objectBoundingBox"`
 a box that is not square takes the circle of the same area, as the engine draws circles only. A stop placed
 before the one ahead of it is moved up to it. A gradient with one stop paints that colour, and one with
 none paints nothing. `fillOpacity`, `strokeOpacity` and `opacity` fade a gradient as they fade a colour.
-Up to 8 stops; Flow A resamples a longer gradient down to 8, and Flow B fails the build.
+Up to 8 stops; Flow A resamples a longer gradient down to 8, and Flow B fails the build. A board built
+without radial gradients (`ERUI_GRADIENT_RADIAL=0`, as the ESP32-S3 example is) draws a radial one as
+its middle colour, as it does a `.svg` file's.
 
 **Flow B:** in a state-driven `<Svg>`, gradients must be constant (a `fillGradient` can follow state), and
 one across a shape's box needs that shape's geometry constant: use `userSpaceOnUse` for a shape state moves.

@@ -42,6 +42,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - In an `.svg` file, an `opacity` multiplies into the one around it, `fill-opacity` and `stroke-opacity` fade a
   gradient, and a gradient with one stop paints its colour.
+- A gradient fill or stroke carries its middle colour, so a board built without radial gradients draws a
+  radial one as that colour instead of nothing.
 
 - Asset packs are now version 3: the engine reads a font's glyph tables from the pack in place, so they take
   no RAM. Older packs no longer load, so rebuild the app with this version.
