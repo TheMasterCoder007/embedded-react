@@ -98,6 +98,7 @@ import {
   packPackage,
   resourceReport,
 } from './compiler/package/assemble.mts';
+import {placeOf, readDebugFile} from './compiler/package/debug-file.mts';
 import {MAX_LAYOUTS, runCheck} from './compiler/package/checks.mts';
 import {SizeSearch} from './compiler/package/layouts.mts';
 import type {
@@ -133,6 +134,8 @@ export {
   bakeSvgTextPaths,
   nativeHeaders,
   packPackage,
+  placeOf,
+  readDebugFile,
   readModuleFile,
   readNativeFiles,
   resourceReport,
@@ -393,6 +396,9 @@ if (
   const file = packPackage(result, assetPack);
   mkdirSync(distDirectory, {recursive: true});
   writeFileSync(resolve(distDirectory, 'app.erpkg'), file.bytes);
-  console.log(`AOT: compiled demo "${demo}" -> dist/app.erpkg`);
+  writeFileSync(resolve(distDirectory, 'app.erdbg'), result.debugFile);
+  console.log(
+    `AOT: compiled demo "${demo}" -> dist/app.erpkg, its debug file dist/app.erdbg`,
+  );
   console.log(resourceReport(result, file).join('\n'));
 }

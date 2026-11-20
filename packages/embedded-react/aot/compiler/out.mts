@@ -100,6 +100,8 @@ export class Out {
   };
   /** Numbers the next inlined component instance (its storage prefix is `c<n>_`). */
   instanceCount = 0;
+  /** Each inlined instance's component and the line of its element, by storage prefix. */
+  readonly instances = new Map<string, {name: string; line: number}>();
   /** State, refs, and animated values that belong to inlined component instances. */
   readonly childStateRecords: StateRecord[] = [];
   readonly childRefs: RefRecord[] = [];

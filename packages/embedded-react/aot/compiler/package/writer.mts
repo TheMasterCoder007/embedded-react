@@ -109,6 +109,8 @@ export interface ProgramTemplateNode {
   handle: number;
   bindings: number;
   bindingCount: number;
+  /** Where its element is in the source, for the debug file. */
+  debug?: {line: number; column: number};
 }
 
 export interface ProgramTemplate {
@@ -281,6 +283,22 @@ export interface Program {
   interpolations: ProgramInterp[];
   tapes: ProgramTape[];
   keyboard: ProgramKeyboard | null;
+  /** What only the debug file holds: each state's name and slot. */
+  states?: ProgramState[];
+}
+
+/** A state as the debug file names it. */
+export interface ProgramState {
+  name: string;
+  /** Its storage name, which tells an inlined component's state from the App's. */
+  storage: string;
+  /** The component it belongs to, and the line of its element, for one inlined from another. */
+  component?: {name: string; line: number};
+  /** Worked out by the compiler, not written by the app: a filtered list, a memo's loop, an alert. */
+  hidden: boolean;
+  slot: number;
+  /** A list's row field names, in row order: a value's key, or `key?` for the flag of an optional one. */
+  fields?: string[];
 }
 
 /** The bytes of one table, for the resource report: one size for each copy stored. */

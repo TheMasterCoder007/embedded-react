@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- Flow B: every `build --aot` and `dev --aot` writes `app.erdbg` beside the package, with each state's name
+  and each node's source line, for host tools.
+- `embedded-react where <function> <offset>` prints the source line of a Flow B fault.
 
 ## [0.25.0] - 2026-11-20
 ### Added

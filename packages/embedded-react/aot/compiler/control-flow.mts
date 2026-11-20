@@ -500,6 +500,10 @@ export function emitComponent(
 
   // Each inlined instance namespaces its own hooks under a unique `c<N>_` prefix so instances stay independent.
   const prefix = `c${output.instanceCount++}_`;
+  output.instances.set(prefix, {
+    name: componentName,
+    line: element.loc?.start.line ?? 0,
+  });
 
   // Fold the child body's static consts as lowerApp does for App; they shadow same-named module consts.
   let contextNames = new Set<string>();

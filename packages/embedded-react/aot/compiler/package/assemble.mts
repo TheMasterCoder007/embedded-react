@@ -32,6 +32,7 @@ import {
 import {lowerApp} from '../lower.mts';
 import {FLAG_DEBUG, Resource, Table} from './format.mts';
 import {lowerPackage} from './lower.mts';
+import {writeDebugFile} from './debug-file.mts';
 import {writeDebug, writeProgram} from './writer.mts';
 import type {ResolvedOptions} from '../options.mts';
 import type {IrBootAssumption} from '../ir/boot.mts';
@@ -56,8 +57,10 @@ export interface PackageResult {
   /** The program section. */
   program: Uint8Array;
   buildId: number;
-  /** The debug section: in the package, or beside a release one as app.erdbg. */
+  /** The debug section, left out of a release package. */
   debug: Uint8Array;
+  /** app.erdbg, written beside the package in every build: the debug section's lines, the states and the nodes. */
+  debugFile: string;
   /** A release build: the debug flag clear, and no debug section in the package. */
   release: boolean;
   panels: ProgramPanel[];
@@ -120,7 +123,7 @@ export function compilePanel(
 }
 
 /**
- * Writes the program section for every panel, and its debug section. The asset pack holds each image and font any
+ * Writes the program section for every panel, its debug section, and the debug file. The asset pack holds each image and font any
  * panel shows, so each panel needs room to register all of them.
  *
  * @param panels  Each panel's program, in the order the package lists them.
@@ -165,6 +168,7 @@ export function assemblePackage(
     program: written.bytes,
     buildId: written.buildId,
     debug: writeDebug(programs, written.buildId, file),
+    debugFile: writeDebugFile(programs, written.buildId, file),
     release,
     panels: programs.map(program => program.panels[0]),
     tables: written.tables,
