@@ -35,7 +35,7 @@ import {bakeAssets} from './assets/index.mts';
 import {resolveFontJobs} from './assets/font-config.mts';
 import type {AssetsConfig} from './assets/font-config.mts';
 import {analyzeFontSizes} from './assets/font-sizes.mts';
-import {registerSvgVectorLoader} from './assets/svg-loader.mts';
+import {imageAssetName, registerSvgVectorLoader} from './assets/svg-loader.mts';
 import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
 
@@ -78,7 +78,7 @@ const assetPlugin: Plugin = {
         : loadDependencyFile(args.path),
     );
     pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
-      const name = basename(args.path).replace(/\.[^.]+$/, '');
+      const name = imageAssetName(args.path);
       images.set(name, args.path);
       return {
         contents: `module.exports = ${JSON.stringify(name)};`,

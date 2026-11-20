@@ -31,9 +31,24 @@ import {basename, dirname, resolve} from 'node:path';
 import type {PluginBuild} from 'esbuild';
 import {svgToVector, svgToRaster, writeRasterPng} from './bake-svg.mts';
 import {importedFonts, svgFontSearch} from './svg-text.mts';
+import {IMAGE_PREFIX} from '../src/embedded-react/svg-ops.mts';
 
 const assetName = (filePath: string) =>
   basename(filePath).replace(/\.[^.]+$/, '');
+
+/**
+ * The asset name of an imported image: its file name. The prefix the images an .svg embeds are named with is
+ * kept for them, so an imported image can never stand in for one.
+ */
+export function imageAssetName(filePath: string): string {
+  const name = assetName(filePath);
+  if (name.startsWith(IMAGE_PREFIX))
+    throw new Error(
+      `embedded-react: the image ${basename(filePath)} starts with "${IMAGE_PREFIX}", which is kept for images ` +
+        `embedded in .svg files. Rename the file.`,
+    );
+  return name;
+}
 
 /**
  * Registers a `.svg` onLoad on an esbuild build.

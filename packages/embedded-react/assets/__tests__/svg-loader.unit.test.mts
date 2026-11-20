@@ -27,7 +27,7 @@ import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {PNG} from 'pngjs';
-import {registerSvgVectorLoader} from '../svg-loader.mts';
+import {imageAssetName, registerSvgVectorLoader} from '../svg-loader.mts';
 
 // `assets` (optional) = a Map the loader registers raster-fallback PNGs into (name -> png path), mirroring a
 // real bundler's image collection. When omitted, the loader has no raster fallback (vector-only).
@@ -153,6 +153,13 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
     expect(name).toMatch(/^svg-image-[0-9a-f]{6}$/);
     expect(existsSync(path)).toBe(true);
     expect(artifact.ops[1]).toBe(parseInt(name.slice(-6), 16));
+  });
+
+  it("names an imported image by its file, and keeps the embedded images' prefix for them", () => {
+    expect(imageAssetName('/app/assets/wx_sun.png')).toBe('wx_sun');
+    expect(() => imageAssetName('/app/assets/svg-image-00ab12.png')).toThrow(
+      /svg-image-00ab12\.png starts with "svg-image-", which is kept for images embedded in \.svg files/,
+    );
   });
 
   it('fails the build on a reference outside the file', async () => {
