@@ -89,6 +89,21 @@ describe('the new <Svg> elements in Flow B', () => {
     ).not.toThrow();
   });
 
+  it('takes the fallback color from a fillGradient beside a url, as Flow A does', () => {
+    const words = (program: Uint8Array, word: number): boolean =>
+      Buffer.from(program).includes(
+        Buffer.from(new Uint32Array([word]).buffer),
+      );
+    const {program} = compile(
+      `<LinearGradient id="grey"><Stop stopColor="#ffffff" /><Stop offset={1} stopColor="#000000" /></LinearGradient>
+      <Rect width={50} height={50} fill="url(#grey)" stroke={on ? "#fff" : "#000"}
+        fillGradient={{type: 2, ax: 25, ay: 25, r: 25, stops: [{offset: 0, color: '#ff0000'}, {offset: 1, color: '#0000ff'}]}} />`,
+      STATE,
+    );
+    expect(words(program, 0xff800080)).toBe(true);
+    expect(words(program, 0xff808080)).toBe(false);
+  });
+
   it('refuses a gradient across a shape state moves', () => {
     expect(() =>
       compile(

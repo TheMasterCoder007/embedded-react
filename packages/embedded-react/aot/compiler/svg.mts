@@ -28,6 +28,7 @@ import {
   fadeColor,
   flattenSvg,
   GRAD_MAX_STOPS,
+  gradientFallback,
   gradientSource,
   isGradientTag,
   opacityOf,
@@ -618,8 +619,13 @@ function checkSvgGradients(root: SvgElement): void {
     }
 
     for (const name of inClip ? [] : ['fill', 'stroke']) {
+      // A gradient descriptor beside it wins, so the url is not read, as in Flow A.
       const value = element.props[name];
-      if (typeof value !== 'string' || !value.trim().startsWith('url(')) {
+      if (
+        typeof value !== 'string' ||
+        !value.trim().startsWith('url(') ||
+        element.props[`${name}Gradient`] != null
+      ) {
         continue;
       }
 
@@ -690,6 +696,35 @@ function fadePaintColor(color: IrPaintColor, opacity: number): IrPaintColor {
     throw aotError('AOT: this color cannot take an opacity');
   };
   return {kind: 'state', value: fade(color.value)};
+}
+
+/**
+ * The color a gradient descriptor's paint carries for a board that drops the gradient, as Flow A's: its middle
+ * color, worked out now when its stops are constant, and otherwise its first stop's.
+ *
+ * @param descriptor  The gradient, its stops faded.
+ *
+ * @returns The color.
+ */
+function descriptorFallback(descriptor: ShapeGradient): IrPaintColor {
+  const stops = descriptor.gradient.stops;
+  if (!stops.length) return {kind: 'static', argb: 0};
+  const constant = stops.map(stop =>
+    stop.color.kind === 'static' ? tapeLiteral(stop.offset) : null,
+  );
+  if (constant.every(offset => offset != null)) {
+    return {
+      kind: 'static',
+      argb: gradientFallback(
+        stops.map((stop, index) => ({
+          color: (stop.color as {argb: number}).argb,
+          offset: constant[index]!,
+        })),
+      ),
+    };
+  }
+
+  return stops[0].color;
 }
 
 /**
@@ -1118,6 +1153,34 @@ function lowerShapePaint(
   const opacity = opacityOf(attributes.opacity);
   const fillOpacity = opacity * opacityOf(attributes.fillOpacity);
   const strokeOpacity = opacity * opacityOf(attributes.strokeOpacity);
+  // A gradient descriptor, faded by its opacity, wins over a `url(#id)`, as in Flow A.
+  const descriptorOf = (
+    descriptor: string,
+    fade: number,
+  ): ShapeGradient | null => {
+    const lowered = lowerGradientAttr(
+      attributes[descriptor] as GradientAttr | undefined,
+      scope,
+      environment,
+      descriptor,
+    );
+    return lowered
+      ? {
+          ...lowered,
+          gradient: {
+            ...lowered.gradient,
+            stops: lowered.gradient.stops.map(stop => ({
+              ...stop,
+              color: fadePaintColor(stop.color, fade),
+            })),
+          },
+        }
+      : null;
+  };
+  const descriptors = {
+    fill: descriptorOf('fillGradient', fillOpacity),
+    stroke: descriptorOf('strokeGradient', strokeOpacity),
+  };
   const sources: Record<string, PaintSource> = {};
   const color = (
     name: 'fill' | 'stroke',
@@ -1135,7 +1198,10 @@ function lowerShapePaint(
       );
     }
 
+    // Beside a gradient, the color is the one the engine draws if it drops the gradient.
     const id = urlReference(attributeValue);
+    const descriptor = descriptors[name];
+    if (id != null && descriptor) return descriptorFallback(descriptor);
     if (id != null) {
       sources[name] = referenced(id, name, fade);
       return {kind: 'static', argb: sources[name].color};
@@ -1167,36 +1233,15 @@ function lowerShapePaint(
     join: JOIN_MAP[attributes.strokeLinejoin as string] ?? 0,
     fillRule: attributes.fillRule === 'evenodd' ? 1 : 0,
   };
-  // A gradient descriptor wins over a `url(#id)`, as in Flow A; either is faded by its opacity.
-  const gradientOf = (
-    descriptor: string,
-    name: 'fill' | 'stroke',
-    fade: number,
-  ): ShapeGradient | null => {
-    const lowered = lowerGradientAttr(
-      attributes[descriptor] as GradientAttr | undefined,
-      scope,
-      environment,
-      descriptor,
-    );
-    if (lowered) {
-      return {
-        ...lowered,
-        gradient: {
-          ...lowered.gradient,
-          stops: lowered.gradient.stops.map(stop => ({
-            ...stop,
-            color: fadePaintColor(stop.color, fade),
-          })),
-        },
-      };
-    }
-
+  const gradientOf = (name: 'fill' | 'stroke'): ShapeGradient | null => {
     const placed = sources[name]?.gradient;
-    return placed ? {gradient: drawingGradientOf(placed), when: null} : null;
+    return (
+      descriptors[name] ??
+      (placed ? {gradient: drawingGradientOf(placed), when: null} : null)
+    );
   };
-  const fillGradient = gradientOf('fillGradient', 'fill', fillOpacity);
-  const strokeGradient = gradientOf('strokeGradient', 'stroke', strokeOpacity);
+  const fillGradient = gradientOf('fill');
+  const strokeGradient = gradientOf('stroke');
 
   return {paint, fillGradient, strokeGradient};
 }

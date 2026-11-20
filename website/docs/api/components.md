@@ -591,8 +591,9 @@ What an `.svg` file and an inline `<Svg>` each draw. Inline props are the file's
 | `<Arc>`                                                                  | No                                            | Yes, not a standard element                                 |
 | `text`, `tspan`                                                          | Yes, see [Text](#text)                        | As `<SvgText>`, see [Text](#text)                           |
 | `defs`                                                                   | Yes                                           | Yes                                                         |
-| `linearGradient`: `x1`, `y1`, `x2`, `y2`, `gradientUnits`                | Yes, and `gradientTransform`                  | Yes                                                         |
-| `radialGradient`: `cx`, `cy`, `r`, `gradientUnits`                       | Yes, and `gradientTransform`                  | Yes                                                         |
+| `linearGradient`: `x1`, `y1`, `x2`, `y2`, `gradientUnits`                | Yes                                           | Yes                                                         |
+| `radialGradient`: `cx`, `cy`, `r`, `gradientUnits`                       | Yes                                           | Yes                                                         |
+| `gradientTransform` on a gradient                                        | Yes                                           | No                                                          |
 | `stop`: `offset`, `stop-color`, `stop-opacity`                           | Yes                                           | Yes                                                         |
 | `clipPath`, `mask`                                                       | Yes, and `transform` on a `clipPath`          | Yes, see [Clips and masks](#clips-and-masks)                |
 | `use`, `symbol`, `pattern`, `image` (a `data:` URL)                      | Yes, see [In an `.svg` file](#in-an-svg-file) | No                                                          |
