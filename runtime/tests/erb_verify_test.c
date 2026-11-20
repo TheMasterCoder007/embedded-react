@@ -750,12 +750,86 @@ static void test_tape_images(void)
     EXPECT(ERB_ERROR_TAPE, "a dash after an image, outside a shape");
 }
 
+static void test_tape_repeats(void)
+{
+    /* A tile of two repeated 3 by 2, cut: an image, then a shape of one point. */
+    const float repeated[] = {11.0f, 2.0f, 3.0f, 2.0f, 1.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f, 10.0f, 10.0f, 43794.0f,
+                              1.0f,  2.0f, 0.0f, 0.0f, 2.0f, 5.0f, 5.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f};
+    float tape[64];
+    memcpy(tape, repeated, sizeof(repeated));
+    set_tape(tape, 25u);
+    EXPECT(ERB_OK, "a tile of an image and a shape, repeated");
+    set_tape(tape, 20u);
+    EXPECT(ERB_ERROR_TAPE, "a repeat the tape ends before the shapes of");
+    set_tape(tape, 8u);
+    EXPECT(ERB_ERROR_TAPE, "a repeat cut short");
+    tape[1] = 1.5f;
+    set_tape(tape, 25u);
+    EXPECT(ERB_ERROR_TAPE, "a repeat of a shape and a half");
+    tape[1] = 2.0f;
+    tape[2] = 0.0f;
+    set_tape(tape, 25u);
+    EXPECT(ERB_ERROR_TAPE, "a repeat of no columns");
+    tape[2] = 2.5f;
+    set_tape(tape, 25u);
+    EXPECT(ERB_ERROR_TAPE, "a repeat of part of a column");
+    tape[2] = 3.0f;
+    tape[3] = (float)(ER_VECTOR_REPEAT_MAX / 4);
+    set_tape(tape, 25u);
+    EXPECT(ERB_ERROR_TAPE, "more copies than the engine draws");
+    /* Two repeats that fit alone, but not together. */
+    const float half[] = {11.0f,
+                          1.0f,
+                          (float)ER_VECTOR_REPEAT_MAX / 2.0f,
+                          1.0f,
+                          0.0f,
+                          0.0f,
+                          0.0f,
+                          1.0f,
+                          0.0f,
+                          0.0f,
+                          1.0f,
+                          0.0f,
+                          0.0f,
+                          1.0f,
+                          0.0f,
+                          0.0f};
+    float both[48];
+    memcpy(both, half, sizeof(half));
+    memcpy(both + 16, half, sizeof(half));
+    set_tape(both, 32u);
+    EXPECT(ERB_OK, "two repeats as many copies as the engine draws");
+    memcpy(both + 32, half, sizeof(half));
+    both[34] = 1.0f;
+    set_tape(both, 48u);
+    EXPECT(ERB_ERROR_TAPE, "three repeats more copies than the engine draws");
+    tape[3] = 2.0f;
+    tape[4] = 2.0f;
+    set_tape(tape, 25u);
+    EXPECT(ERB_OK, "a tile whose copies are drawn apart");
+    tape[4] = 3.0f;
+    set_tape(tape, 25u);
+    EXPECT(ERB_ERROR_TAPE, "an unknown kind of repeat");
+    /* A clip of no shapes where the tile's shape should be. */
+    const float mask_in_tile[] = {
+        11.0f, 1.0f, 2.0f, 1.0f, 0.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f, 10.0f, 7.0f, 1.0f, 0.0f};
+    set_tape(mask_in_tile, 14u);
+    EXPECT(ERB_ERROR_TAPE, "a mask op among a repeat's shapes");
+    const float tile_in_mask[] = {
+        7.0f, 1.0f, 1.0f, 11.0f, 0.0f, 2.0f, 1.0f, 0.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f, 10.0f};
+    set_tape(tile_in_mask, 14u);
+    EXPECT(ERB_ERROR_TAPE, "a repeat among a mask's shapes");
+    set_tape(tile_in_mask + 3, 11u);
+    EXPECT(ERB_OK, "a repeat of no shapes");
+}
+
 static void test_tapes(void)
 {
     test_tape_masks();
     test_tape_dashes();
     test_tape_images();
-    base()->tape_floats[0] = 11.0f;
+    test_tape_repeats();
+    base()->tape_floats[0] = 12.0f;
     EXPECT(ERB_ERROR_TAPE, "an unknown vector op");
     base()->tape_floats[1] = 3.0f;
     EXPECT(ERB_ERROR_TAPE, "a shape naming no paint");

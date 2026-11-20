@@ -46,13 +46,14 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   gradient, and a gradient with one stop paints its colour.
 - A gradient fill or stroke carries its middle colour, so a board built without radial gradients draws a
   radial one as that colour instead of nothing.
+- A `<pattern>` fill in an `.svg` file is one tile that the device repeats, so a fine pattern fits the tape.
 
 - Asset packs are now version 3: the engine reads a font's glyph tables from the pack in place, so they take
   no RAM. Older packs no longer load, so rebuild the app with this version.
 - `ErAssetsStorage` holds fonts only.
 - Flow B: the font-size check reports against the family a text uses.
 - Flow B: a package with more fonts than the firmware reserves reports both counts.
-- Flow B packages are now format minor 20 and engine ABI 3. Firmware built before this version does not
+- Flow B packages are now format minor 21 and engine ABI 3. Firmware built before this version does not
   load them.
 - An `.svg` file that references something outside itself fails the build.
 

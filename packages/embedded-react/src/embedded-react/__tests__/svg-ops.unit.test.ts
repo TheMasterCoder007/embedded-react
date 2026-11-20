@@ -48,6 +48,7 @@ const ARC = 5;
 const CLOSE = 6;
 const DASH = 8;
 const DASH_OFFSET = 9;
+const REPEAT = 11;
 
 const el = (type, props) => ({type, props});
 
@@ -1117,6 +1118,78 @@ describe('clips and masks', () => {
     ]);
     expect(tapeBounds(ops)).toEqual({x: 1, y: 2, width: 8, height: 6});
     expect(tapeBounds([MASK, 0, 0])).toBeNull();
+  });
+
+  it('scales a repeated tile with its corner and sides, bounds every copy, and counts its cut as a clip', () => {
+    // A tile of one shape, 3 by 2 copies, cut, from corner 1 2 with sides 4 0 and 1 5; then a shape outside it.
+    const tile = [
+      REPEAT,
+      1,
+      3,
+      2,
+      1,
+      1,
+      2,
+      4,
+      0,
+      1,
+      5,
+      SHAPE,
+      0,
+      MOVE,
+      1,
+      2,
+      LINE,
+      3,
+      4,
+    ];
+    const ops = [...tile, SHAPE, 1, MOVE, 0, 0];
+    const scaled = scaleVectorArtifact(
+      {ops, paints: new Array(2 * PAINT_STRIDE).fill(0), width: 10, height: 10},
+      20,
+      30,
+    );
+    expect(scaled.ops).toEqual([
+      REPEAT,
+      1,
+      3,
+      2,
+      1,
+      2,
+      6,
+      8,
+      0,
+      2,
+      15,
+      SHAPE,
+      0,
+      MOVE,
+      2,
+      6,
+      LINE,
+      6,
+      12,
+      SHAPE,
+      1,
+      MOVE,
+      0,
+      0,
+    ]);
+    // The last copy moves the tile by 2 * (4, 0) + (1, 5).
+    expect(tapeBounds(tile)).toEqual({x: 1, y: 2, width: 11, height: 7});
+    expect(tapeBounds(ops)).toEqual({x: 0, y: 0, width: 12, height: 9});
+
+    const group = maskGroup(CLIP, [SHAPE, 0, MOVE, 0, 0], 1).ops;
+    const masks = [...group, ...group, ...group];
+    expect(tapeMaskProblem([...masks, ...tile])).toBeNull();
+    expect(tapeMaskProblem([...masks, ...group, ...tile])).toMatch(
+      /more than 4 clips and masks/,
+    );
+    for (const kind of [0, 2]) {
+      const uncut = tile.slice();
+      uncut[4] = kind;
+      expect(tapeMaskProblem([...masks, ...group, ...uncut])).toBeNull();
+    }
   });
 });
 

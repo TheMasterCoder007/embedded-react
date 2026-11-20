@@ -24,11 +24,11 @@
 // AND gradient fill/stroke (linear/radial/conic via url() refs; presentation attrs + inline style +
 // inheritance). <text> and <tspan> bake to glyph outlines from a font file (svg-text.mts). `clip-path` and
 // `mask` bake to mask ops over the shapes they apply to. <use> and <symbol> expand in place, a <pattern> fill
-// tiles its shapes under a clip of the shape it fills, and an <image> embedded as a data: URL becomes an image
-// op the caller registers, and so does an element with a `filter`: it is drawn to an image at build time, or only
-// what its filter draws under it is, with the element left a vector on top. Features the op-tape can't represent
-// (<foreignObject>, …) are recorded in `dropped` so the caller can rasterize the whole SVG as a fallback image
-// instead. A reference to anything outside the file fails. Primitives are emitted as line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
+// bakes one tile that the engine repeats under a clip of the shape it fills, and an <image> embedded as a data:
+// URL becomes an image op the caller registers, and so does an element with a `filter`: it is drawn to an image at
+// build time, or only what its filter draws under it is, with the element left a vector on top. Features the
+// op-tape can't represent (<foreignObject>, …) are recorded in `dropped` so the caller can rasterize the whole SVG
+// as a fallback image instead. A reference to anything outside the file fails. Primitives are emitted as line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
 import {parse} from 'svgson';
 import type {INode} from 'svgson';
 import {mkdirSync, writeFileSync} from 'node:fs';
@@ -48,8 +48,13 @@ import {
   VOP_DASH,
   VOP_DASH_OFFSET,
   VOP_IMAGE,
+  VOP_REPEAT,
   OP_OPERANDS,
   DASH_MAX,
+  REPEAT_MAX,
+  REPEAT_MERGED,
+  REPEAT_CUT,
+  REPEAT_APART,
   dashPattern,
   CAP,
   JOIN,
@@ -176,8 +181,6 @@ const RGBA_BYTES = 4;
 const ALPHA_BYTE = 3;
 /** A <mask>'s box when it gives none: a tenth past its element's on every side. */
 const MASK_REGION_DEFAULT = {x: -0.1, y: -0.1, width: 1.2, height: 1.2};
-/** The most tiles one pattern fill is cut into; past it the file falls back to a raster. */
-export const PATTERN_TILES_MAX = 1024;
 /** How far content may stray past its viewport and still count as inside it. */
 const OVERFLOW_EPSILON = 1e-6;
 
@@ -953,6 +956,8 @@ export async function svgToVector(
     'filter',
   ]);
   const dropped = new Set<string>();
+  // The shapes the file's patterns have repeated so far, which the engine bounds by REPEAT_MAX.
+  let repeatedShapes = 0;
   const usedFonts = new Set<opentype.Font>();
   const maskDefinitions = collectMasks(root);
 
@@ -1440,8 +1445,9 @@ export async function svgToVector(
   };
 
   /**
-   * Fills a shape with a pattern: its tiles' shapes, under a clip of the shape. Tiles whose shapes stay inside them
-   * are drawn as one shape per shape of the tile; shapes that reach past their tile take a clip of it, per tile.
+   * Fills a shape with a pattern, under a clip of the shape: one tile's shapes, which the engine repeats across the
+   * shape's box. Shapes that reach past their tile have each copy cut to its tile, or drawn copy by copy when the
+   * pattern's overflow is visible.
    */
   const bakePattern = (
     pattern: INode,
@@ -1511,10 +1517,6 @@ export async function svgToVector(
       Math.ceil((Math.max(...reached.map(([, y]) => y)) - tileY) / tileHeight) -
         firstRow,
     );
-    if (!(columns * rows <= PATTERN_TILES_MAX)) {
-      dropped.add(`pattern of more than ${PATTERN_TILES_MAX} tiles`);
-      return;
-    }
 
     // Whether its shapes reach past a tile.
     const contentPaint = resolvePaint(patternAttributes, DEFAULT_PAINT);
@@ -1522,9 +1524,19 @@ export async function svgToVector(
     walk(pattern, content, contentPaint, [], measure);
     const contentBox = tapeBounds(measure.ops);
     if (!contentBox) return;
-    const overflows =
-      !overflowVisible(patternAttributes) &&
-      reachesPast(contentBox, measure.reach ?? 0, tileWidth, tileHeight);
+    // Copies that stay in their tiles are drawn together; ones that reach past are cut to their tiles, or with
+    // overflow visible drawn one after another, as they may overlap.
+    const reaches = reachesPast(
+      contentBox,
+      measure.reach ?? 0,
+      tileWidth,
+      tileHeight,
+    );
+    const repeatKind = !reaches
+      ? REPEAT_MERGED
+      : overflowVisible(patternAttributes)
+        ? REPEAT_APART
+        : REPEAT_CUT;
 
     // The first tile's shapes, in place; the others are copies of them moved along the pattern's axes.
     const placed = mul(matrix, patternMatrix);
@@ -1547,6 +1559,12 @@ export async function svgToVector(
       tile,
     );
     const pieces = tapePieces(tile.ops);
+    if (!pieces.length) return;
+    repeatedShapes += pieces.length * columns * rows;
+    if (!(repeatedShapes <= REPEAT_MAX)) {
+      dropped.add(`patterns repeating more than ${REPEAT_MAX} shapes`);
+      return;
+    }
 
     // The fill's opacity fades everything in it.
     const fade =
@@ -1563,28 +1581,6 @@ export async function svgToVector(
       for (const piece of pieces) if ('image' in piece) piece.image[2] *= fade;
     }
 
-    const copy = (
-      piece: (typeof pieces)[number],
-      column: number,
-      row: number,
-    ): number[] => {
-      const stepX = (column - firstColumn) * tileWidth;
-      const stepY = (row - firstRow) * tileHeight;
-      const shiftX = placed[0] * stepX + placed[2] * stepY;
-      const shiftY = placed[1] * stepX + placed[3] * stepY;
-      if ('image' in piece) {
-        const image = piece.image.slice();
-        image[7] += shiftX;
-        image[8] += shiftY;
-        return image;
-      }
-      return transformOps(piece.path, [1, 0, 0, 1, shiftX, shiftY]);
-    };
-    const tiles: Array<[number, number]> = [];
-    for (let row = firstRow; row < firstRow + rows; row++)
-      for (let column = firstColumn; column < firstColumn + columns; column++)
-        tiles.push([column, row]);
-
     const fillMasks = [
       ...masks,
       maskGroup(
@@ -1597,27 +1593,26 @@ export async function svgToVector(
         1,
       ),
     ];
-    if (!overflows) {
-      target.writer?.use(fillMasks);
-      for (const piece of pieces) {
-        if (!('image' in piece)) target.ops.push(...piece.head);
-        for (const [column, row] of tiles)
-          target.ops.push(...copy(piece, column, row));
-      }
-      return;
-    }
-    for (const [column, row] of tiles) {
-      const tileClip = quadShape(
-        clipPaint('nonzero'),
-        boxCorners(tileAt(column, row), tileWidth, tileHeight),
+    target.writer?.use(fillMasks);
+    // The first tile's corner and sides, which the engine moves each copy along.
+    const [cornerX, cornerY] = pt(tileAt(firstColumn, firstRow), 0, 0);
+    target.ops.push(
+      VOP_REPEAT,
+      pieces.length,
+      columns,
+      rows,
+      repeatKind,
+      cornerX,
+      cornerY,
+      placed[0] * tileWidth,
+      placed[1] * tileWidth,
+      placed[2] * tileHeight,
+      placed[3] * tileHeight,
+    );
+    for (const piece of pieces)
+      target.ops.push(
+        ...('image' in piece ? piece.image : [...piece.head, ...piece.path]),
       );
-      target.writer?.use([...fillMasks, maskGroup(MASK_CLIP, tileClip, 1)]);
-      for (const piece of pieces)
-        target.ops.push(
-          ...('image' in piece ? [] : piece.head),
-          ...copy(piece, column, row),
-        );
-    }
   };
 
   // The elements a <use> is expanding, so one that contains itself stops.
