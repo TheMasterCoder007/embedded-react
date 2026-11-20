@@ -198,6 +198,30 @@ describe('debug file', () => {
       ),
     ).toThrow(/this version reads format/);
   });
+
+  it('refuses a file whose shape is wrong, naming what is wrong', () => {
+    const good = JSON.parse(compilePackage(APP, 'app', OPTIONS).debugFile);
+    const broken = (change: (file: any) => void): string => {
+      const copy = structuredClone(good);
+      change(copy);
+      return JSON.stringify(copy);
+    };
+    expect(() =>
+      readDebugFile(JSON.stringify({format: DEBUG_FILE_FORMAT, panels: [{}]})),
+    ).toThrow(/malformed debug file \(no buildId\)/);
+    expect(() => readDebugFile(broken(file => (file.panels = [{}])))).toThrow(
+      /malformed debug file \(panel 0 has no size\)/,
+    );
+    expect(() =>
+      readDebugFile(broken(file => (file.panels[0].functions[1].lines = [{}]))),
+    ).toThrow(/panel 0, function 1/);
+    expect(() =>
+      readDebugFile(broken(file => delete file.panels[0].states[0].slot)),
+    ).toThrow(/panel 0, state 0/);
+    expect(() =>
+      readDebugFile(broken(file => (file.panels[0].templates[0].nodes = [1]))),
+    ).toThrow(/panel 0, template 0/);
+  });
 });
 
 describe('placeOf', () => {

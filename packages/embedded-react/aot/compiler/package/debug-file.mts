@@ -241,7 +241,80 @@ export function writeDebugFile(
 }
 
 /**
- * Reads a debug file, refusing one this version can't read.
+ * What is wrong with a parsed debug file's shape, so a tool can say so instead of failing as it reads it.
+ *
+ * @param debugFile  The parsed file, its format already checked.
+ *
+ * @returns The first fault found, or null for none.
+ */
+function shapeFault(debugFile: DebugFile): string | null {
+  const isNumber = (value: unknown): boolean =>
+    typeof value === 'number' && Number.isFinite(value);
+  const isString = (value: unknown): boolean => typeof value === 'string';
+  const isList = (value: unknown): value is unknown[] => Array.isArray(value);
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+  if (!isNumber(debugFile.buildId)) return 'no buildId';
+  if (!isString(debugFile.file)) return 'no file';
+  for (const [panelIndex, panel] of debugFile.panels.entries()) {
+    const where = `panel ${panelIndex}`;
+    if (!isRecord(panel) || !isNumber(panel.width) || !isNumber(panel.height)) {
+      return `${where} has no size`;
+    }
+    if (!isList(panel.functions) || !isList(panel.states)) {
+      return `${where} has no functions or states`;
+    }
+    if (!isList(panel.templates)) return `${where} has no templates`;
+    for (const [functionIndex, programFunction] of panel.functions.entries()) {
+      if (
+        !isRecord(programFunction) ||
+        !isString(programFunction.name) ||
+        !isList(programFunction.lines) ||
+        !programFunction.lines.every(
+          line =>
+            isRecord(line) &&
+            isNumber(line.offset) &&
+            isNumber(line.line) &&
+            isNumber(line.column),
+        )
+      ) {
+        return `${where}, function ${functionIndex}`;
+      }
+    }
+    for (const [stateIndex, state] of panel.states.entries()) {
+      if (
+        !isRecord(state) ||
+        !isString(state.name) ||
+        !isString(state.storage) ||
+        !isString(state.type) ||
+        !isNumber(state.slot) ||
+        !isNumber(state.offset)
+      ) {
+        return `${where}, state ${stateIndex}`;
+      }
+    }
+    for (const [templateIndex, template] of panel.templates.entries()) {
+      if (
+        !isRecord(template) ||
+        !isString(template.kind) ||
+        !isList(template.nodes) ||
+        !template.nodes.every(
+          node =>
+            isRecord(node) &&
+            isString(node.type) &&
+            (node.line === null || isNumber(node.line)),
+        )
+      ) {
+        return `${where}, template ${templateIndex}`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Reads a debug file, refusing one this version can't read or whose shape is wrong.
  *
  * @param text  app.erdbg's text.
  *
@@ -260,6 +333,12 @@ export function readDebugFile(text: string): DebugFile {
     throw new Error(
       `a debug file of format ${parsed?.format ?? 'unknown'}, but this version reads format ${DEBUG_FILE_FORMAT}: ` +
         'build the app again with this version',
+    );
+  }
+  const fault = shapeFault(parsed);
+  if (fault) {
+    throw new Error(
+      `a malformed debug file (${fault}): build the app again to write a new app.erdbg`,
     );
   }
   return parsed;
