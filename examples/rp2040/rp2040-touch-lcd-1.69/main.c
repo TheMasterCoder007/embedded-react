@@ -196,12 +196,20 @@ static void stack_guard_install(void)
     mpu_hw->ctrl = M0PLUS_MPU_CTRL_PRIVDEFENA_BITS | M0PLUS_MPU_CTRL_ENABLE_BITS;
 }
 
+#define HEAP_ALIGNMENT 8U /**< newlib's malloc chunk alignment. */
+
 /** @brief malloc's heap: grows from the end of .bss up to the stack guard, and fails there instead of
  *  faulting in it. Replaces the SDK's weak _sbrk, which stops at the stack itself. */
 void* _sbrk(int increment)
 {
     extern char end;
-    static char* heap_end = &end;
+    static char* heap_end;
+    /* Starts 8-aligned: newlib's malloc otherwise aligns the first chunk itself, and loses those bytes when the
+     * page it then rounds the heap up to does not fit below the guard. */
+    if (!heap_end)
+    {
+        heap_end = (char*)(((uintptr_t)&end + HEAP_ALIGNMENT - 1U) & ~(uintptr_t)(HEAP_ALIGNMENT - 1U));
+    }
     char* const limit = (char*)s_stack_low - STACK_GUARD_BYTES;
     if (increment > limit - heap_end)
     {

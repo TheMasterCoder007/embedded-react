@@ -195,6 +195,7 @@ target_link_libraries(embedded-react-watch
 # stack_guard.ld fails the link if .data/.bss ever grow into that guard.
 set(ER_STACK_GUARD_BYTES 2048)
 math(EXPR ER_FRAMEBUFFER_BYTES "240 * 280 * 2") # malloc'd at boot, so the link checks it fits: see stack_guard.ld
+set(ER_HEAP_RESERVE_BYTES 64) # malloc's chunk header and smallest chunk beside the framebuffer, with room to spare
 target_compile_definitions(embedded-react-watch PRIVATE
     PICO_STACK_SIZE=0x1000
     STACK_GUARD_BYTES=${ER_STACK_GUARD_BYTES}U
@@ -205,6 +206,7 @@ target_compile_definitions(embedded-react-watch PRIVATE
 target_link_options(embedded-react-watch PRIVATE
     "LINKER:--defsym=__stack_guard_bytes=${ER_STACK_GUARD_BYTES}"
     "LINKER:--defsym=__framebuffer_bytes=${ER_FRAMEBUFFER_BYTES}"
+    "LINKER:--defsym=__heap_reserve_bytes=${ER_HEAP_RESERVE_BYTES}"
     "LINKER:--defsym=__package_slots_offset=${ER_PACKAGE_SLOT_A_OFFSET}"
     "${CMAKE_CURRENT_LIST_DIR}/stack_guard.ld"
 )

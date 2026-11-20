@@ -2687,9 +2687,14 @@ static int build_subpaths(const float* ops, int op_index, int op_count, int orig
         {
             if (s_subpath_count > 0)
             {
-                s_subpaths[s_subpath_count - 1].closed = 1;
-                current_x = s_point_x[s_subpaths[s_subpath_count - 1].start];
-                current_y = s_point_y[s_subpaths[s_subpath_count - 1].start];
+                VecSub* subpath = &s_subpaths[s_subpath_count - 1];
+                subpath->closed = 1;
+                /* A subpath begun with the point pool full has no points to go back to. */
+                if (subpath->count > 0)
+                {
+                    current_x = s_point_x[subpath->start];
+                    current_y = s_point_y[subpath->start];
+                }
             }
         }
         else
