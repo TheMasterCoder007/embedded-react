@@ -299,11 +299,12 @@ describe('svgToVector — dropped-feature detection (raster-fallback trigger)', 
     expect(artifact.dropped).toEqual(['foreignObject']); // title/defs ignored; rect baked; foreignObject recorded
   });
 
-  it('flags a filter/mask/clip-path applied to an otherwise-bakeable shape', async () => {
+  it('flags a filter on the whole drawing', async () => {
     const artifact = await svgToVector(
-      '<svg viewBox="0 0 10 10"><rect width="10" height="10" filter="url(#f)"/></svg>',
+      '<svg viewBox="0 0 10 10" filter="url(#f)"><filter id="f"><feGaussianBlur stdDeviation="1"/></filter>' +
+        '<rect width="10" height="10"/></svg>',
     );
-    expect(artifact.dropped).toContain('filter');
+    expect(artifact.dropped).toEqual(['filter']);
   });
 
   it('bakes a dashed stroke into the tape, scaled like the stroke', async () => {

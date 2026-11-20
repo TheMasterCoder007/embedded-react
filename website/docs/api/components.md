@@ -443,12 +443,12 @@ import gauge from './gauge.svg';
 </Svg>
 ```
 
-| Prop              | Type              | Notes                                                                                                                                                                                                            |
-| ----------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`          | imported `.svg`   | Baked at build time to a vector tape, [text](#text), clips, masks, [patterns and images](#in-an-svg-file) included (or a raster, if the file uses filters). Scaled to the render box; shape children are ignored |
-| `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source`                                  |
-| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then                                          |
-| paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                                                               |
+| Prop              | Type              | Notes                                                                                                                                                                                                                    |
+| ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `source`          | imported `.svg`   | Baked at build time to a vector tape, [text](#text), clips, masks, [patterns, images and filters](#in-an-svg-file) included (or a raster, for what it cannot draw). Scaled to the render box; shape children are ignored |
+| `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source`                                          |
+| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then                                                  |
+| paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                                                                       |
 
 **Paint props**, on `<Svg>`, `<G>` and every shape: `fill` and `stroke` (a colour, or `url(#id)` naming a
 [gradient](#gradients)), `fillOpacity`, `strokeOpacity` and `opacity` (0 to 1), `strokeWidth`, `strokeLinecap`
@@ -578,34 +578,35 @@ fails the build, where Flow A paints nothing for the reference and skips the res
 What an `.svg` file and an inline `<Svg>` each draw. Inline props are the file's attributes in camelCase
 (`stroke-width` is `strokeWidth`). A file may also give any paint attribute in a `style` attribute.
 
-| Element or attribute                                                     | In a file                                     | Inline                                                      |
-| ------------------------------------------------------------------------ | --------------------------------------------- | ----------------------------------------------------------- |
-| `svg`: `width`, `height`, `viewBox`                                      | Yes                                           | Yes                                                         |
-| `g`                                                                      | Yes, moved by `transform`                     | Yes, moved by `x`, `y`, `translateX`, `translateY`, `scale` |
-| `path`: `d`                                                              | Yes                                           | Yes                                                         |
-| `rect`: `x`, `y`, `width`, `height`, `rx`, `ry`                          | Yes                                           | Yes                                                         |
-| `circle`: `cx`, `cy`, `r`                                                | Yes                                           | Yes                                                         |
-| `ellipse`: `cx`, `cy`, `rx`, `ry`                                        | Yes                                           | Yes                                                         |
-| `line`: `x1`, `y1`, `x2`, `y2`                                           | Yes                                           | Yes                                                         |
-| `polygon`, `polyline`: `points`                                          | Yes                                           | Yes                                                         |
-| `<Arc>`                                                                  | No                                            | Yes, not a standard element                                 |
-| `text`, `tspan`                                                          | Yes, see [Text](#text)                        | As `<SvgText>`, see [Text](#text)                           |
-| `defs`                                                                   | Yes                                           | Yes                                                         |
-| `linearGradient`: `x1`, `y1`, `x2`, `y2`, `gradientUnits`                | Yes                                           | Yes                                                         |
-| `radialGradient`: `cx`, `cy`, `r`, `gradientUnits`                       | Yes                                           | Yes                                                         |
-| `gradientTransform` on a gradient                                        | Yes                                           | No                                                          |
-| `stop`: `offset`, `stop-color`, `stop-opacity`                           | Yes                                           | Yes                                                         |
-| `clipPath`, `mask`                                                       | Yes, and `transform` on a `clipPath`          | Yes, see [Clips and masks](#clips-and-masks)                |
-| `use`, `symbol`, `pattern`, `image` (a `data:` URL)                      | Yes, see [In an `.svg` file](#in-an-svg-file) | No                                                          |
-| `filter`, `foreignObject` and other elements                             | The whole file falls back to a raster         | No                                                          |
-| `fill`, `stroke`: a colour or `url(#id)`                                 | Yes, and `url(#id)` naming a `pattern`        | Yes                                                         |
-| `fill-opacity`, `stroke-opacity`, `opacity`                              | Yes                                           | Yes                                                         |
-| `stroke-width`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit` | Yes                                           | Yes                                                         |
-| `fill-rule`, `clip-rule`                                                 | Yes                                           | Yes                                                         |
-| `stroke-dasharray`, `stroke-dashoffset`                                  | Yes                                           | Yes, and an animated `strokeDashoffset`                     |
-| `clip-path`, `mask`: `url(#id)`                                          | Yes                                           | Yes                                                         |
-| `transform` on a shape                                                   | Yes                                           | No; `<SvgText>` takes one                                   |
-| `fillGradient`, `strokeGradient`                                         | No                                            | Yes, including a conic gradient                             |
+| Element or attribute                                                     | In a file                                             | Inline                                                      |
+| ------------------------------------------------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------- |
+| `svg`: `width`, `height`, `viewBox`                                      | Yes                                                   | Yes                                                         |
+| `g`                                                                      | Yes, moved by `transform`                             | Yes, moved by `x`, `y`, `translateX`, `translateY`, `scale` |
+| `path`: `d`                                                              | Yes                                                   | Yes                                                         |
+| `rect`: `x`, `y`, `width`, `height`, `rx`, `ry`                          | Yes                                                   | Yes                                                         |
+| `circle`: `cx`, `cy`, `r`                                                | Yes                                                   | Yes                                                         |
+| `ellipse`: `cx`, `cy`, `rx`, `ry`                                        | Yes                                                   | Yes                                                         |
+| `line`: `x1`, `y1`, `x2`, `y2`                                           | Yes                                                   | Yes                                                         |
+| `polygon`, `polyline`: `points`                                          | Yes                                                   | Yes                                                         |
+| `<Arc>`                                                                  | No                                                    | Yes, not a standard element                                 |
+| `text`, `tspan`                                                          | Yes, see [Text](#text)                                | As `<SvgText>`, see [Text](#text)                           |
+| `defs`                                                                   | Yes                                                   | Yes                                                         |
+| `linearGradient`: `x1`, `y1`, `x2`, `y2`, `gradientUnits`                | Yes                                                   | Yes                                                         |
+| `radialGradient`: `cx`, `cy`, `r`, `gradientUnits`                       | Yes                                                   | Yes                                                         |
+| `gradientTransform` on a gradient                                        | Yes                                                   | No                                                          |
+| `stop`: `offset`, `stop-color`, `stop-opacity`                           | Yes                                                   | Yes                                                         |
+| `clipPath`, `mask`                                                       | Yes, and `transform` on a `clipPath`                  | Yes, see [Clips and masks](#clips-and-masks)                |
+| `use`, `symbol`, `pattern`, `image` (a `data:` URL)                      | Yes, see [In an `.svg` file](#in-an-svg-file)         | No                                                          |
+| `filter`                                                                 | As an image, see [In an `.svg` file](#in-an-svg-file) | No                                                          |
+| `foreignObject` and other elements                                       | The whole file falls back to a raster                 | No                                                          |
+| `fill`, `stroke`: a colour or `url(#id)`                                 | Yes, and `url(#id)` naming a `pattern`                | Yes                                                         |
+| `fill-opacity`, `stroke-opacity`, `opacity`                              | Yes                                                   | Yes                                                         |
+| `stroke-width`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit` | Yes                                                   | Yes                                                         |
+| `fill-rule`, `clip-rule`                                                 | Yes                                                   | Yes                                                         |
+| `stroke-dasharray`, `stroke-dashoffset`                                  | Yes                                                   | Yes, and an animated `strokeDashoffset`                     |
+| `clip-path`, `mask`: `url(#id)`                                          | Yes                                                   | Yes                                                         |
+| `transform` on a shape                                                   | Yes                                                   | No; `<SvgText>` takes one                                   |
+| `fillGradient`, `strokeGradient`                                         | No                                                    | Yes, including a conic gradient                             |
 
 ### Clips and masks
 
@@ -721,7 +722,8 @@ limit fails the build; set `ER_AOT_VECTOR_TAPE_MAX` to match a board that change
 
 ### In an `.svg` file
 
-A file's `<use>` and `<symbol>`, `<pattern>` fills and embedded `<image>`s are drawn as vectors too.
+A file's `<use>` and `<symbol>`, `<pattern>` fills and embedded `<image>`s are drawn as vectors too, and an
+element with a `filter` is drawn as an image among them.
 
 - **`<use>`** draws what it references in its place, moved by its `x` and `y`, with its own paint passed
   down. A `<symbol>` takes the use's `width` and `height` as its viewport, fits its `viewBox` into it by
@@ -737,6 +739,17 @@ A file's `<use>` and `<symbol>`, `<pattern>` fills and embedded `<image>`s are d
   in place, in order with the shapes around it, under any clip on it, fitted by `preserveAspectRatio`.
   It is sampled with a bilinear filter. An image in a `<clipPath>` is ignored, as in a browser; one in a
   `<mask>`, or an embedded SVG, falls back to a raster.
+- **A `filter`** is drawn at build time to an image at the file's own size, cut to what it draws, and placed
+  where the element is, so the rest of the file stays a vector. When the filter ends by drawing the element
+  unchanged over what it made, as a glow, `feDropShadow` or a design tool's drop shadow does, the image holds
+  only what lies under the element, and the element is drawn over it as a vector. Any other filter, such as a
+  blur, puts the whole element in the image. A filter on the `<svg>` itself, or on a shape in a `<mask>` or
+  `<pattern>`, falls back to a raster; in a `<clipPath>` it is ignored, as in a browser.
+
+  The device draws no filter itself. A blur reads the rows around each row, which the rasteriser does not
+  keep, so it would need a buffer the size of the element and the blur's work on every frame. An image costs
+  flash only: 4 bytes a pixel, so a wide shadow costs more than its shape. Drawn larger than the file's size,
+  the image is scaled up and softens while the vector parts stay sharp.
 
 A file that references anything outside itself, such as `<image href="photo.png">` or
 `<use href="icons.svg#star">`, fails the build with the reference.
