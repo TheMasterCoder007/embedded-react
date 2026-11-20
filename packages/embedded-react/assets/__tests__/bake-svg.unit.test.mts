@@ -38,6 +38,8 @@ const QUAD = 3;
 const CUBIC = 4;
 const ARC = 5;
 const CLOSE = 6;
+const DASH = 8;
+const DASH_OFFSET = 9;
 const RED = 0xffff0000;
 const GREEN = 0xff008000;
 
@@ -52,6 +54,8 @@ function opcodes(ops) {
     [CUBIC]: 6,
     [ARC]: 6,
     [CLOSE]: 0,
+    [DASH]: 2,
+    [DASH_OFFSET]: 2,
   };
   const codes = [];
   let cursor = 0;
@@ -301,19 +305,58 @@ describe('svgToVector — dropped-feature detection (raster-fallback trigger)', 
     expect(artifact.dropped).toContain('filter');
   });
 
-  it('flags a dashed stroke (op-tape bakes solid → raster fallback renders the dashes)', async () => {
+  it('bakes a dashed stroke into the tape, scaled like the stroke', async () => {
     const artifact = await svgToVector(
-      '<svg viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="black" stroke-dasharray="2 1"/></svg>',
+      '<svg viewBox="0 0 10 10" width="20" height="20"><line x1="0" y1="5" x2="10" y2="5" stroke="black" ' +
+        'stroke-dasharray="2 1" stroke-dashoffset="1.5"/></svg>',
     );
-    expect(artifact.dropped).toContain('stroke-dasharray');
-    // inherited from a <g> too
-    const gradient = await svgToVector(
-      '<svg viewBox="0 0 10 10"><g stroke="red" stroke-dasharray="3"><line x1="0" y1="0" x2="9" y2="9"/></g></svg>',
+    expect(artifact.dropped).toEqual([]);
+    expect(artifact.ops.slice(0, 8)).toEqual([
+      SHAPE,
+      0,
+      DASH,
+      4,
+      2,
+      DASH_OFFSET,
+      3,
+      0,
+    ]);
+    // inherited from a <g>, an odd count repeated to make pairs
+    const group = await svgToVector(
+      '<svg viewBox="0 0 10 10"><g stroke="red" stroke-dasharray="3,1,2"><line x1="0" y1="0" x2="9" y2="9"/></g></svg>',
     );
-    expect(gradient.dropped).toContain('stroke-dasharray');
+    expect(group.dropped).toEqual([]);
+    expect(group.ops.slice(2, 11)).toEqual([
+      DASH,
+      3,
+      1,
+      DASH,
+      2,
+      3,
+      DASH,
+      1,
+      2,
+    ]);
+    // from a style attribute
+    const styled = await svgToVector(
+      '<svg viewBox="0 0 10 10"><line x1="0" y1="0" x2="9" y2="0" style="stroke:#000;stroke-dasharray:4" /></svg>',
+    );
+    expect(styled.ops.slice(2, 5)).toEqual([DASH, 4, 4]);
   });
 
-  it('does NOT flag stroke-dasharray when there is no visible/positive dash', async () => {
+  it('flags a dash pattern the tape cannot hold', async () => {
+    const percent = await svgToVector(
+      '<svg viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="black" stroke-dasharray="10%"/></svg>',
+    );
+    expect(percent.dropped).toContain('stroke-dasharray');
+    const long = await svgToVector(
+      '<svg viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="black" ' +
+        `stroke-dasharray="${Array.from({length: 18}, () => 1).join(' ')}"/></svg>`,
+    );
+    expect(long.dropped).toContain('stroke-dasharray');
+  });
+
+  it('writes no dash when there is no visible stroke or no positive dash', async () => {
     // no stroke → dash is inert
     const noStroke = await svgToVector(
       '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="blue" stroke-dasharray="2 1"/></svg>',
@@ -328,6 +371,8 @@ describe('svgToVector — dropped-feature detection (raster-fallback trigger)', 
       '<svg viewBox="0 0 10 10"><line x1="0" y1="0" x2="9" y2="9" stroke="black" stroke-dasharray="0 0"/></svg>',
     );
     expect(zero.dropped).toEqual([]);
+    for (const artifact of [noStroke, none, zero])
+      expect(opcodes(artifact.ops)).not.toContain(DASH);
   });
 });
 

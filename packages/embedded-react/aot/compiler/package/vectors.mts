@@ -61,6 +61,8 @@ const VECTOR_OPCODES: Record<string, number> = {
   ER_VECTOR_OP_ARC: 5,
   ER_VECTOR_OP_CLOSE: 6,
   ER_VECTOR_OP_MASK: 7,
+  ER_VECTOR_OP_DASH: 8,
+  ER_VECTOR_OP_DASH_OFFSET: 9,
 };
 
 const CHAIN_OPCODES = {'+': 'FADD', '-': 'FSUB', '*': 'FMUL'} as const;

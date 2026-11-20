@@ -1419,6 +1419,20 @@ const SCENARIOS: Scenario[] = [
     file: fixture('svg-mask-source'),
     screen: PORTRAIT,
   },
+  // Dashed strokes, which Flow A draws the same: at rest, and after the button moved both offsets.
+  {name: 'svg-dash', file: fixture('svg-dash'), screen: PORTRAIT, flowA: true},
+  {
+    name: 'svg-dash-moved',
+    file: fixture('svg-dash'),
+    screen: PORTRAIT,
+    taps: '40,250',
+    flowA: true,
+  },
+  {
+    name: 'svg-dash-source',
+    file: fixture('svg-dash-source'),
+    screen: PORTRAIT,
+  },
   {name: 'hooks', file: fixture('hooks'), screen: PORTRAIT},
   {
     name: 'hooks-taps',

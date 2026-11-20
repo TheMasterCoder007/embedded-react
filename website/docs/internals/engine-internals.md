@@ -234,6 +234,12 @@ A **clip or mask** is a tape op that takes the shapes after it out of the drawin
 Each row a later shape covers, the mask's value is worked out for the pixels that shape touched and scales
 their coverage, so nothing is drawn to a buffer first. A node with one is not cached.
 
+A **dashed stroke** is two tape ops in a shape's run: its dash and gap lengths, and how far into them it
+starts. The stroker walks each flattened subpath by length and strokes every dash as an open path of its
+own, so a dash takes the paint's cap and its corners their joins. A shape's offset can add the node's
+own, which is an animatable prop: the tape stays as it is while the dashes move, and such a node is not
+cached.
+
 On a PSRAM target, the per-node storage (`vector_store.c`) and the edge cache (`vector_cache.c`) can
 live in external RAM, since only the hot scratch in `vector.c` is touched per pixel; the ESP32-S3
 example's linker fragment does this and raises `ERUI_MAX_VECTOR_NODES` to 32.

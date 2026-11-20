@@ -1629,14 +1629,17 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
             return fail(error, ERB_ERROR_TAPE, "tape floats, paints or gradients out of range");
         }
         /* The ops parse with their argument counts. */
-        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u, 2u};
+        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u, 2u, 2u, 2u};
         uint32_t float_index = 0;
         /* The masks in force, the shapes across them, and the shapes the last mask op still takes. */
         uint32_t mask_groups = 0, mask_shapes = 0, mask_owed = 0;
+        /* Whether a shape has begun, and the dashes in its pattern. */
+        bool in_shape = false;
+        uint32_t dashes = 0;
         while (float_index < float_count)
         {
             const float opcode_value = erb_f32(table + floats + float_index * sizeof(float));
-            if (!(opcode_value >= ER_VECTOR_OP_SHAPE && opcode_value <= ER_VECTOR_OP_MASK)
+            if (!(opcode_value >= ER_VECTOR_OP_SHAPE && opcode_value <= ER_VECTOR_OP_DASH_OFFSET)
                 || (float)(int)opcode_value != opcode_value
                 || float_index + 1u + operand_counts[(int)opcode_value] > float_count)
             {
@@ -1654,9 +1657,19 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
                 {
                     mask_owed--;
                 }
+                in_shape = true;
+                dashes = 0;
+            }
+            else if (opcode == (int)ER_VECTOR_OP_DASH || opcode == (int)ER_VECTOR_OP_DASH_OFFSET)
+            {
+                if (!in_shape || (opcode == (int)ER_VECTOR_OP_DASH && ++dashes > ER_VECTOR_DASH_MAX))
+                {
+                    return fail(error, ERB_ERROR_TAPE, "dash");
+                }
             }
             else if (opcode == (int)ER_VECTOR_OP_MASK)
             {
+                in_shape = false;
                 const float kind = erb_f32(table + floats + (float_index + 1u) * sizeof(float));
                 const float shapes = erb_f32(table + floats + (float_index + 2u) * sizeof(float));
                 if (mask_owed > 0u || !(kind >= (float)ER_VECTOR_MASK_NONE && kind <= (float)ER_VECTOR_MASK_ALPHA)

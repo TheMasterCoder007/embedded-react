@@ -34,6 +34,8 @@ import {
   maskGroup,
   tapeBounds,
   tapeMaskProblem,
+  dashPattern,
+  svgDashOffset,
 } from '../svg-ops.mts';
 
 // Opcodes mirror er_scene.h.
@@ -44,6 +46,8 @@ const QUAD = 3;
 const CUBIC = 4;
 const ARC = 5;
 const CLOSE = 6;
+const DASH = 8;
+const DASH_OFFSET = 9;
 
 const el = (type, props) => ({type, props});
 
@@ -1113,5 +1117,199 @@ describe('clips and masks', () => {
     ]);
     expect(tapeBounds(ops)).toEqual({x: 1, y: 2, width: 8, height: 6});
     expect(tapeBounds([MASK, 0, 0])).toBeNull();
+  });
+});
+
+describe('dashed strokes', () => {
+  const line = props => el('Line', {x1: 0, y1: 5, x2: 10, y2: 5, ...props});
+  const flatten = (children, props = {}) =>
+    flattenSvg({width: 10, height: 10, ...props, children});
+
+  it('reads a strokeDasharray as dash and gap pairs', () => {
+    expect(dashPattern('6 3')).toEqual([6, 3]);
+    expect(dashPattern('6, 3,1 2')).toEqual([6, 3, 1, 2]);
+    expect(dashPattern([4, 2])).toEqual([4, 2]);
+    expect(dashPattern(5)).toEqual([5, 5]);
+    expect(dashPattern('3 1 2')).toEqual([3, 1, 2, 3, 1, 2]);
+    expect(dashPattern('0 4')).toEqual([0, 4]);
+    for (const solid of [null, undefined, 'none', '', '0 0', '4 -1', '10%', []])
+      expect(dashPattern(solid)).toBeNull();
+  });
+
+  it('writes a stroked shape its dashes and offset, after the SHAPE header', () => {
+    const {ops} = flatten([
+      line({stroke: '#000', strokeDasharray: '4 2', strokeDashoffset: 1}),
+    ]);
+    expect(ops).toEqual([
+      SHAPE,
+      0,
+      DASH,
+      4,
+      2,
+      DASH_OFFSET,
+      1,
+      0,
+      MOVE,
+      0,
+      5,
+      LINE,
+      10,
+      5,
+    ]);
+  });
+
+  it('writes no dash for a shape with no stroke, a solid pattern, or no offset', () => {
+    const unstroked = flatten([line({strokeDasharray: '4 2'})]);
+    expect(unstroked.ops.slice(2, 3)).toEqual([MOVE]);
+    const solid = flatten([line({stroke: '#000', strokeDasharray: 'none'})]);
+    expect(solid.ops.slice(2, 3)).toEqual([MOVE]);
+    const noOffset = flatten([line({stroke: '#000', strokeDasharray: [4, 2]})]);
+    expect(noOffset.ops.slice(2, 6)).toEqual([DASH, 4, 2, MOVE]);
+  });
+
+  it('scales the pattern with the stroke, and passes it down from the <Svg> and a <G>', () => {
+    const {ops} = flatten(
+      [
+        el('G', {
+          strokeDashoffset: 3,
+          children: [line({}), line({strokeDasharray: 'none'})],
+        }),
+      ],
+      {viewBox: '0 0 5 5', stroke: '#000', strokeDasharray: 2},
+    );
+    expect(ops.slice(0, 9)).toEqual([
+      SHAPE,
+      0,
+      DASH,
+      4,
+      4,
+      DASH_OFFSET,
+      6,
+      0,
+      MOVE,
+    ]);
+    expect(ops.slice(14, 17)).toEqual([SHAPE, 1, MOVE]);
+  });
+
+  it('leaves an animated offset to the node, at the scale of the stroke', () => {
+    const animated = {__animated: true};
+    const props = {
+      viewBox: '0 0 5 5',
+      width: 10,
+      height: 10,
+      children: [
+        line({stroke: '#000', strokeDasharray: 3, strokeDashoffset: animated}),
+      ],
+    };
+    expect(flattenSvg(props).ops.slice(2, 8)).toEqual([
+      DASH,
+      6,
+      6,
+      DASH_OFFSET,
+      0,
+      2,
+    ]);
+    expect(svgDashOffset(props)).toBe(animated);
+    expect(svgDashOffset({children: [line({strokeDashoffset: 4})]})).toBeNull();
+    expect(
+      svgDashOffset({
+        strokeDashoffset: animated,
+        children: [el('G', {children: [line({})]})],
+      }),
+    ).toBe(animated);
+  });
+
+  it('warns once when an <Svg> has two animated offsets, and follows the first', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const first = {__animated: true};
+    const props = {
+      children: [
+        line({strokeDashoffset: first}),
+        line({strokeDashoffset: first}),
+        line({strokeDashoffset: {__animated: true}}),
+      ],
+    };
+    expect(svgDashOffset(props)).toBe(first);
+    expect(svgDashOffset(props)).toBe(first);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/two different animated/);
+    warn.mockRestore();
+  });
+
+  it('leaves off dashes past the limit, with a warning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const {ops} = flatten([
+      line({stroke: '#000', strokeDasharray: new Array(20).fill(1)}),
+    ]);
+    expect(
+      ops.filter((value, index) => value === DASH && index % 3 === 2),
+    ).toHaveLength(8);
+    expect(ops[26]).toBe(MOVE);
+    expect(warn.mock.calls[0][0]).toMatch(/more than 8 dashes/);
+    warn.mockRestore();
+  });
+
+  it("scales a baked tape's dashes with its strokes, and keeps them out of its bounds", () => {
+    const ops = [
+      SHAPE,
+      0,
+      DASH,
+      4,
+      2,
+      DASH_OFFSET,
+      1,
+      0.5,
+      MOVE,
+      1,
+      2,
+      LINE,
+      3,
+      4,
+    ];
+    const scaled = scaleVectorArtifact(
+      {ops, paints: new Array(PAINT_STRIDE).fill(0), width: 10, height: 10},
+      20,
+      20,
+    );
+    expect(scaled.ops).toEqual([
+      SHAPE,
+      0,
+      DASH,
+      8,
+      4,
+      DASH_OFFSET,
+      2,
+      1,
+      MOVE,
+      2,
+      4,
+      LINE,
+      6,
+      8,
+    ]);
+    expect(tapeBounds(ops)).toEqual({x: 1, y: 2, width: 2, height: 2});
+  });
+
+  it('dashes an imperative shape', () => {
+    const {ops} = shapesToVector([
+      {line: [0, 0, 9, 0], stroke: '#000', dash: [3, 1], dashOffset: 2},
+      {dash: [3, 1]},
+    ]);
+    expect(Array.from(ops)).toEqual([
+      SHAPE,
+      0,
+      DASH,
+      3,
+      1,
+      DASH_OFFSET,
+      2,
+      0,
+      MOVE,
+      0,
+      0,
+      LINE,
+      9,
+      0,
+    ]);
   });
 });

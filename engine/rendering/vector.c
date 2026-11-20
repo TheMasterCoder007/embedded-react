@@ -39,6 +39,9 @@
  * A clip or mask (ER_VECTOR_OP_MASK) is kept as its own edge lists. Each row a shape covers under one, the
  * mask's value is worked out for the pixels the shape touched and scales their coverage before the row is
  * staged.
+ *
+ * A dashed shape (ER_VECTOR_OP_DASH) has its stroke cut along each subpath's length before the outline is
+ * built: every dash is stroked as an open path of its own, so it takes the paint's cap at both ends.
  */
 
 #include "vector.h"
@@ -137,10 +140,19 @@
 #define VEC_LUMINANCE_BLUE 0.0721f
 
 /* Op-tape layout: floats an op occupies, opcode included, and the coordinates each op carries. */
+#define VEC_DASH_PERIOD_MIN 0.25f /**< A dash pattern shorter than this (px) is drawn solid. */
+#define VEC_DASH_CURVE_TURN                                                                                            \
+    0.25f /**< sin² of the sharpest turn (30 deg) taken as a flattened curve's, not a corner.                         \
+           */
+#define VEC_DASH_ARC_TERM (1.0f / 24.0f) /**< An arc is longer than its chord by turn² / 24 of it. */
+#define VEC_DASH_CUTS_MAX 4096    /**< Dash ends cut along one subpath; past this the rest of it is left undrawn. */
+#define VEC_DASH_DOT_LENGTH 0.01f /**< The length (px) a dash of none is given, so a square cap has a direction. */
+
 #define VEC_MOVE_OP_SIZE 3
 #define VEC_MASK_OP_SIZE 3
 #define VEC_ARC_OP_SIZE 7
 #define VEC_POINT_ARGS 2
+#define VEC_DASH_ARGS 2
 #define VEC_QUAD_ARGS 4
 #define VEC_CURVE_ARGS 6
 
@@ -176,6 +188,13 @@ static float s_point_y[ERUI_VECTOR_MAX_POINTS];
 static int s_point_count;
 static VecSub s_subpaths[ERUI_VECTOR_MAX_SUBPATHS];
 static int s_subpath_count;
+
+/* The dash pattern of the shape being built: dash, gap, dash, gap. */
+static float s_dash[2 * ER_VECTOR_DASH_MAX];
+static int s_dash_count;         /**< Values in s_dash; 0 strokes solid. */
+static float s_dash_offset;      /**< How far into the pattern the shape's stroke starts. */
+static float s_dash_scale;       /**< How much of the node's dash offset the shape adds to that. */
+static float s_node_dash_offset; /**< The dash offset of the node being rendered. */
 
 static ERVecEdge s_edges[ERUI_VECTOR_MAX_EDGES];
 static int s_edge_count;
@@ -1713,14 +1732,257 @@ static void stroke_subpath(const VecSub* subpath, float stroke_width, int cap, i
     }
 }
 
+/**
+ * @brief The length of the dash pattern in force, or 0 when the stroke is solid.
+ *
+ * A pattern with a negative or non-finite value, or one too short to draw, is solid.
+ */
+static float dash_period(void)
+{
+    float period = 0.0f;
+    for (int index = 0; index < s_dash_count; index++)
+    {
+        if (!(s_dash[index] >= 0.0f && s_dash[index] < VEC_UNBOUNDED))
+            return 0.0f;
+        period += s_dash[index];
+    }
+    return (period >= VEC_DASH_PERIOD_MIN) ? period : 0.0f;
+}
+
+/** @brief One dash on its way to the stroker: a run of points in the spare end of the point pool. */
+typedef struct
+{
+    int start;
+    int count;
+} VecDash;
+
+/** @brief Appends a point to a dash. */
+static void dash_point(VecDash* dash, float x, float y)
+{
+    const int index = dash->start + dash->count;
+    if (index >= ERUI_VECTOR_MAX_POINTS)
+    {
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_MAX_POINTS", ERUI_VECTOR_MAX_POINTS);
+        return;
+    }
+    if (dash->count > 0 && s_point_x[index - 1] == x && s_point_y[index - 1] == y)
+        return;
+    s_point_x[index] = x;
+    s_point_y[index] = y;
+    dash->count++;
+}
+
+/**
+ * @brief Strokes one dash as an open path.
+ *
+ * A dash of no length has one point. A round cap draws it as a dot; a square cap needs a direction, so it is
+ * given a sliver of length along the path.
+ *
+ * @param[in] unit_x,unit_y  The path's direction where the dash ends.
+ */
+static void dash_stroke(VecDash* dash, float unit_x, float unit_y, float stroke_width, int cap, int join, float miter)
+{
+    if (dash->count == 1 && cap == ER_VECTOR_CAP_SQUARE && dash->start + 1 < ERUI_VECTOR_MAX_POINTS)
+    {
+        const float center_x = s_point_x[dash->start], center_y = s_point_y[dash->start];
+        s_point_x[dash->start] = center_x - unit_x * VEC_DASH_DOT_LENGTH;
+        s_point_y[dash->start] = center_y - unit_y * VEC_DASH_DOT_LENGTH;
+        s_point_x[dash->start + 1] = center_x + unit_x * VEC_DASH_DOT_LENGTH;
+        s_point_y[dash->start + 1] = center_y + unit_y * VEC_DASH_DOT_LENGTH;
+        dash->count = 2;
+    }
+    const VecSub subpath = {dash->start, dash->count, 0};
+    stroke_subpath(&subpath, stroke_width, cap, join, miter);
+}
+
+/**
+ * @brief sin² of the turn between two segments of a flattened curve, or 0 across a real corner.
+ *
+ * @param[in] in_x,in_y    The first segment's unit direction.
+ * @param[in] out_x,out_y  The next one's.
+ */
+static float dash_turn(float in_x, float in_y, float out_x, float out_y)
+{
+    const float cross = in_x * out_y - in_y * out_x;
+    const float turn = cross * cross;
+    return (in_x * out_x + in_y * out_y > 0.0f && turn < VEC_DASH_CURVE_TURN) ? turn : 0.0f;
+}
+
+/**
+ * @brief Strokes one subpath in dashes of the pattern in force.
+ *
+ * A curve is flattened to chords, which are shorter than the curve: lengths are measured along the arc each
+ * chord stands for, worked out from the turn at its ends, so a pattern that fits a circle fits its polyline.
+ *
+ * The pattern runs along the subpath's length from its first point, closing segment included. On a closed
+ * subpath that both starts and ends inside a dash, the two are one dash, so the corner between them is
+ * joined, not capped: the first is held back until the last is known.
+ *
+ * @param[in] period  The pattern's length (dash_period), above 0.
+ */
+static void dash_subpath(const VecSub* subpath, float period, float stroke_width, int cap, int join, float miter)
+{
+    const int vertex_count = subpath->count;
+    const float* points_x = &s_point_x[subpath->start];
+    const float* points_y = &s_point_y[subpath->start];
+    const bool closed = subpath->closed != 0;
+    const float gap_x = points_x[vertex_count - 1] - points_x[0], gap_y = points_y[vertex_count - 1] - points_y[0];
+    const bool has_closing_segment = closed && (gap_x * gap_x + gap_y * gap_y > VEC_CLOSE_EPSILON * VEC_CLOSE_EPSILON);
+    const int segment_count = has_closing_segment ? vertex_count : vertex_count - 1;
+
+    /* Where in the pattern the path starts. */
+    float start_offset = s_dash_offset + s_dash_scale * s_node_dash_offset;
+    if (!(fabsf(start_offset) < VEC_UNBOUNDED))
+        start_offset = 0.0f;
+    float into = fmodf(start_offset, period);
+    if (into < 0.0f)
+        into += period;
+    int entry = 0;
+    /* A dash of no length at the very start is still drawn. */
+    while (entry < s_dash_count - 1 && (into > s_dash[entry] || (into == s_dash[entry] && into > 0.0f)))
+        into -= s_dash[entry++];
+    float remaining = s_dash[entry] - into;
+    if (remaining < 0.0f)
+        remaining = 0.0f;
+    bool on = (entry & 1) == 0;
+    if (vertex_count < 2)
+    {
+        /* A lone point has no length: it is drawn when the pattern starts in a dash. */
+        if (on)
+            stroke_subpath(subpath, stroke_width, cap, join, miter);
+        return;
+    }
+
+    /* Dashes are built past the shape's own points. */
+    VecDash dash = {s_point_count, 0};
+    VecDash first = {0, 0};
+    bool hold_first = closed && on; /* the path starts inside a dash, which its last one may run into */
+    bool cut = false;               /* the pattern changed somewhere along the path */
+    int cuts = 0;
+    float unit_x = 1.0f, unit_y = 0.0f;
+    if (on)
+        dash_point(&dash, points_x[0], points_y[0]);
+
+    /* The direction of the segment before the current one; a closed path's first follows its last. */
+    float previous_x = 0.0f, previous_y = 0.0f, other_length;
+    bool has_previous = closed && segment_count >= 2
+                        && seg_dir(points_x[segment_count - 1],
+                                   points_y[segment_count - 1],
+                                   points_x[seg_end_index(segment_count - 1, vertex_count)],
+                                   points_y[seg_end_index(segment_count - 1, vertex_count)],
+                                   &previous_x,
+                                   &previous_y,
+                                   &other_length);
+
+    for (int segment = 0; segment < segment_count && !s_edge_truncated && cuts <= VEC_DASH_CUTS_MAX; segment++)
+    {
+        const int end_index = seg_end_index(segment, vertex_count);
+        const float start_x = points_x[segment], start_y = points_y[segment];
+        float chord;
+        if (!seg_dir(start_x, start_y, points_x[end_index], points_y[end_index], &unit_x, &unit_y, &chord))
+        {
+            has_previous = false;
+            continue;
+        }
+
+        /* The turn at each end; an end with no neighbour takes the other's. */
+        const int next = (segment + 1 < segment_count) ? segment + 1 : (closed && segment > 0 ? 0 : -1);
+        float next_x, next_y;
+        const bool has_next = next >= 0
+                              && seg_dir(points_x[next],
+                                         points_y[next],
+                                         points_x[seg_end_index(next, vertex_count)],
+                                         points_y[seg_end_index(next, vertex_count)],
+                                         &next_x,
+                                         &next_y,
+                                         &other_length);
+        const float turn_out = has_next ? dash_turn(unit_x, unit_y, next_x, next_y) : 0.0f;
+        const float turn_in = has_previous ? dash_turn(previous_x, previous_y, unit_x, unit_y) : turn_out;
+        const float stretch = 1.0f + 0.5f * (turn_in + (has_next ? turn_out : turn_in)) * VEC_DASH_ARC_TERM;
+        const float length = chord * stretch;
+        previous_x = unit_x;
+        previous_y = unit_y;
+        has_previous = true;
+
+        float at = 0.0f;
+        while (length - at > remaining && !s_edge_truncated)
+        {
+            /* A path far longer than its pattern, or one no float can step along, would never finish. */
+            if (++cuts > VEC_DASH_CUTS_MAX)
+            {
+                ERUI_WARN_ONCE("embedded-react vector: more than %d dashes along one path - the rest of it is "
+                               "left undrawn.\n",
+                               VEC_DASH_CUTS_MAX / 2);
+                on = false;
+                dash.count = 0;
+                break;
+            }
+            at += remaining;
+            const float along = at / stretch;
+            const float x = start_x + unit_x * along, y = start_y + unit_y * along;
+            cut = true;
+            if (on)
+            {
+                dash_point(&dash, x, y);
+                if (hold_first)
+                {
+                    /* Kept where it is; the dashes after it are built past it. */
+                    first = dash;
+                    hold_first = false;
+                }
+                else
+                {
+                    dash_stroke(&dash, unit_x, unit_y, stroke_width, cap, join, miter);
+                }
+            }
+            entry = (entry + 1) % s_dash_count;
+            remaining = s_dash[entry];
+            on = !on;
+            if (on)
+            {
+                dash.start = s_point_count + first.count;
+                dash.count = 0;
+                dash_point(&dash, x, y);
+            }
+        }
+        remaining -= length - at;
+        if (on)
+            dash_point(&dash, points_x[end_index], points_y[end_index]);
+    }
+
+    if (on && closed && !cut)
+    {
+        /* One dash covers the whole loop: it has no ends. */
+        stroke_subpath(subpath, stroke_width, cap, join, miter);
+        return;
+    }
+    if (on && dash.count > 0)
+    {
+        /* The last dash runs into the first across the start point. */
+        for (int index = 0; index < first.count; index++)
+            dash_point(&dash, s_point_x[first.start + index], s_point_y[first.start + index]);
+        first.count = 0;
+        dash_stroke(&dash, unit_x, unit_y, stroke_width, cap, join, miter);
+    }
+    if (first.count > 0)
+        dash_stroke(&first, unit_x, unit_y, stroke_width, cap, join, miter);
+}
+
 /** @brief Builds stroke outline edges for every subpath (into s_edges, honoring s_edge_y_top/s_edge_y_bottom). */
 static void stroke_build(float stroke_width, int cap, int join, float miter)
 {
     s_edge_count = 0;
     s_edge_truncated = false;
+    const float period = dash_period();
     for (int subpath_index = 0; subpath_index < s_subpath_count; subpath_index++)
-        if (s_subpaths[subpath_index].count >= 1)
+    {
+        if (s_subpaths[subpath_index].count < 1)
+            continue;
+        if (period > 0.0f)
+            dash_subpath(&s_subpaths[subpath_index], period, stroke_width, cap, join, miter);
+        else
             stroke_subpath(&s_subpaths[subpath_index], stroke_width, cap, join, miter);
+    }
 }
 
 /** @brief Builds stroke geometry for all subpaths and rasterizes it (recording it when armed). */
@@ -1884,6 +2146,13 @@ static bool shape_clipped_out(const float* ops,
     while (op_index < op_count && !ends_shape(ops[op_index]))
     {
         const float opcode = ops[op_index++];
+        if (opcode == ER_VECTOR_OP_DASH || opcode == ER_VECTOR_OP_DASH_OFFSET)
+        {
+            if (op_index + VEC_DASH_ARGS > op_count)
+                return false;
+            op_index += VEC_DASH_ARGS; /* lengths, not points */
+            continue;
+        }
         const int argument_count = (opcode == ER_VECTOR_OP_MOVE || opcode == ER_VECTOR_OP_LINE)   ? VEC_POINT_ARGS
                                    : (opcode == ER_VECTOR_OP_QUAD)                                ? VEC_QUAD_ARGS
                                    : (opcode == ER_VECTOR_OP_CUBIC || opcode == ER_VECTOR_OP_ARC) ? VEC_CURVE_ARGS
@@ -2208,6 +2477,9 @@ static int build_subpaths(const float* ops, int op_index, int op_count, int orig
 {
     s_point_count = 0;
     s_subpath_count = 0;
+    s_dash_count = 0;
+    s_dash_offset = 0.0f;
+    s_dash_scale = 0.0f;
     float current_x = 0.0f, current_y = 0.0f;
     while (op_index < op_count && !ends_shape(ops[op_index]))
     {
@@ -2219,10 +2491,31 @@ static int build_subpaths(const float* ops, int op_index, int op_count, int orig
         const int argument_count = (opcode == ER_VECTOR_OP_MOVE || opcode == ER_VECTOR_OP_LINE)   ? VEC_POINT_ARGS
                                    : (opcode == ER_VECTOR_OP_QUAD)                                ? VEC_QUAD_ARGS
                                    : (opcode == ER_VECTOR_OP_CUBIC || opcode == ER_VECTOR_OP_ARC) ? VEC_CURVE_ARGS
-                                                                                                  : 0;
+                                   : (opcode == ER_VECTOR_OP_DASH || opcode == ER_VECTOR_OP_DASH_OFFSET) ? VEC_DASH_ARGS
+                                                                                                         : 0;
         if (op_index + argument_count > op_count)
             break;
-        if (opcode == ER_VECTOR_OP_MOVE)
+        if (opcode == ER_VECTOR_OP_DASH)
+        {
+            if (s_dash_count + VEC_DASH_ARGS <= 2 * ER_VECTOR_DASH_MAX)
+            {
+                s_dash[s_dash_count++] = ops[op_index];
+                s_dash[s_dash_count++] = ops[op_index + 1];
+            }
+            else
+            {
+                ERUI_WARN_ONCE("embedded-react vector: more than %d dashes in one stroke's pattern - the rest are "
+                               "left off.\n",
+                               ER_VECTOR_DASH_MAX);
+            }
+            op_index += VEC_DASH_ARGS;
+        }
+        else if (opcode == ER_VECTOR_OP_DASH_OFFSET)
+        {
+            s_dash_offset = ops[op_index++];
+            s_dash_scale = ops[op_index++];
+        }
+        else if (opcode == ER_VECTOR_OP_MOVE)
         {
             current_x = (float)origin_x + ops[op_index++];
             current_y = (float)origin_y + ops[op_index++];
@@ -2807,6 +3100,30 @@ static bool replay_cache(const ERVecCache* entry,
 }
 #endif /* ERUI_VECTOR_EDGE_CACHE */
 
+void er_vector_dash_offset(float offset)
+{
+    s_node_dash_offset = offset;
+}
+
+#if ERUI_VECTOR_EDGE_CACHE
+/** @brief Whether a tape has a dashed shape that follows the node's dash offset, which a cached edge list cannot. */
+static bool tape_follows_dash_offset(const float* ops, int op_count)
+{
+    static const uint8_t argument_counts[] = {1, 2, 2, 4, 6, 6, 0, 2, 2, 2};
+    int op_index = 0;
+    while (op_index < op_count)
+    {
+        const float opcode = ops[op_index];
+        if (!(opcode >= ER_VECTOR_OP_SHAPE && opcode <= ER_VECTOR_OP_DASH_OFFSET))
+            return false;
+        if (opcode == ER_VECTOR_OP_DASH_OFFSET && op_index + VEC_DASH_ARGS < op_count && ops[op_index + 2] != 0.0f)
+            return true;
+        op_index += 1 + argument_counts[(int)opcode];
+    }
+    return false;
+}
+#endif
+
 /** @brief How much finer than a layout pixel a transform needs curves flattened: 1, 2, 4 or 8. */
 static int transform_detail(const ERVectorTransform* transform)
 {
@@ -2832,10 +3149,11 @@ void er_vector_render_slot(int slot,
     const float* ops = er_vector_slot_ops(slot, &op_count);
     const ERVectorPaint* paints = er_vector_slot_paints(slot, &paint_count);
     const ERVectorGradient* gradients = er_vector_slot_grads(slot, &gradient_count);
-    if (!ops || op_count <= 0)
+    if (!ops || op_count <= 0 || clip_x1 <= clip_x0 || clip_y1 <= clip_y0)
+    {
+        s_node_dash_offset = 0.0f;
         return;
-    if (clip_x1 <= clip_x0 || clip_y1 <= clip_y0)
-        return;
+    }
     /* Cache key: 0 for screen-space edges, the flattening detail for a transformed node's layout-space ones. */
     int detail = 0;
     if (transform)
@@ -2846,7 +3164,9 @@ void er_vector_render_slot(int slot,
         box_corners_update();
     }
 #if ERUI_VECTOR_EDGE_CACHE
-    const ERVecCache* hit = er_vector_cache_lookup(slot, origin_x, origin_y, detail);
+    /* A drawing whose dashes move with the node's offset is rebuilt each time. */
+    const bool follows_offset = tape_follows_dash_offset(ops, op_count);
+    const ERVecCache* hit = follows_offset ? 0 : er_vector_cache_lookup(slot, origin_x, origin_y, detail);
     const bool replayed = hit
                           && replay_cache(hit,
                                           paints,
@@ -2863,7 +3183,7 @@ void er_vector_render_slot(int slot,
     {
         /* Miss. Maybe record this render — begin() only grants an entry for a tape that stayed unchanged
          * since the previous render (two-touch), so an animated node never pays the record-mode build. */
-        s_recording = hit ? 0 : er_vector_cache_begin(slot, origin_x, origin_y, detail);
+        s_recording = (hit || follows_offset) ? 0 : er_vector_cache_begin(slot, origin_x, origin_y, detail);
         s_recording_failed = false;
         render_tape(ops,
                     op_count,
@@ -2900,4 +3220,5 @@ void er_vector_render_slot(int slot,
 #endif
     s_transform = 0;
     s_detail = 1.0f;
+    s_node_dash_offset = 0.0f;
 }

@@ -489,6 +489,41 @@ describe('animated bindings are released when a prop stops being animated', () =
     expect(calls.setProps[0].props.value).toBe(42);
   });
 
+  it("<Svg>: a shape's animated strokeDashoffset binds to the node, and a static one releases it", () => {
+    const animatedValue = new FakeAnimatedValue();
+    const ui = (strokeDashoffset, r = 40) =>
+      createElement(
+        'Svg',
+        {width: 100, height: 100},
+        createElement('Circle', {
+          cx: 50,
+          cy: 50,
+          r,
+          stroke: '#ffffff',
+          strokeDasharray: '6 3',
+          strokeDashoffset,
+        }),
+      );
+    const update = mount(ui(animatedValue));
+    const handle = animatedValue.bound[0].handle;
+    expect(animatedValue.bound).toEqual([{handle, prop: 'strokeDashoffset'}]);
+    // DASH 6 3, then DASH_OFFSET 0 at a scale of 1: the node's offset.
+    expect(calls.setVectorOps[0].ops.slice(2, 8)).toEqual([8, 6, 3, 9, 0, 1]);
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
+
+    // The shape changes under the same value: a new tape, the binding left alone.
+    update(ui(animatedValue, 30));
+    expect(counts()).toEqual({...NOTHING, setVectorOps: 1});
+    expect(animatedValue.bound).toHaveLength(1);
+
+    update(ui(4, 30));
+    expect(calls.animUnbind).toEqual([{handle, prop: 'strokeDashoffset'}]);
+    expect(calls.setVectorOps[1].ops.slice(2, 8)).toEqual([8, 6, 3, 9, 4, 0]);
+
+    update(ui(animatedValue, 30));
+    expect(animatedValue.bound).toHaveLength(2);
+  });
+
   it('a deleted descendant leaves no record, so its handle would bind from scratch', () => {
     // React hands removeChild only the TOP of a deleted subtree; destroyNode reclaims the descendants
     // in C. Their records go when React detaches them, or the map would keep one per destroyed node,

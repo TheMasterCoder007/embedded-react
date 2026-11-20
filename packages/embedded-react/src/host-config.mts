@@ -25,6 +25,7 @@ import {
 } from './props.mts';
 import {
   flattenSvg,
+  svgDashOffset,
   PAINT_PROPS,
   warnVectorCaps,
   scaleVectorArtifact,
@@ -209,6 +210,12 @@ function applyProps(type: string, handle: number, props: HostProps): Style {
       props = {...props, valueStart: undefined};
     }
   }
+  // An animated strokeDashoffset anywhere in an <Svg> drives the node's dash offset.
+  if (type === 'Svg' && !props.source) {
+    const dashOffset = svgDashOffset<Bindable>(props);
+    if (dashOffset)
+      bindings.push({prop: 'strokeDashoffset', value: dashOffset});
+  }
   releaseStaleBindings(handle, bindings);
   NativeUI.setProps(handle, buildProps(type, props, staticStyle));
   applyBindings(handle, bindings);
@@ -388,7 +395,17 @@ function diffUpdate(
             spans = true;
           }
         } else if (type === 'Svg') {
-          if (!deepEqualProps(previousValue, nextValue)) vector = true;
+          if (!deepEqualProps(previousValue, nextValue)) {
+            vector = true;
+            // A shape's animated strokeDashoffset is bound with the props.
+            if (
+              !sameBinding(
+                svgDashOffset<Bindable>(prevProps) ?? undefined,
+                svgDashOffset<Bindable>(nextProps) ?? undefined,
+              )
+            )
+              props = true;
+          }
         }
         return;
       case 'style':

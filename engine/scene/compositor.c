@@ -3269,6 +3269,7 @@ static ER_NOINLINE void paint_node(ERNode* node, int box_x, int box_y, int width
                 clip_to_damage(&clip_left, &clip_top, &clip_right, &clip_bottom);
                 /* Slot-keyed entry: an unchanged node replays its cached edge lists instead of
                  * re-tessellating the tape (ERUI_VECTOR_EDGE_CACHE). */
+                er_vector_dash_offset(node->vector_dash_offset);
                 er_vector_render_slot(
                     node->vector_slot, vector_x, vector_y, transform, clip_left, clip_top, clip_right, clip_bottom);
             }
@@ -4364,6 +4365,9 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             }
             break;
         }
+        case ER_NODE_VECTOR:
+            node->vector_dash_offset = er_nan_or(props->vector_dash_offset, 0.0f);
+            break;
         case ER_NODE_TEXT_INPUT:
             node->props.text_input.background_color = props->background_color;
             node->props.text_input.border_color = props->border_color;

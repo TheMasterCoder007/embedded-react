@@ -478,6 +478,8 @@ struct ERNode
     uint32_t modal_backdrop_color;
     /* Vector (ER_NODE_VECTOR): index into the vector op-tape/paint storage pool, or -1 if none. */
     int16_t vector_slot;
+    /* Vector: the live dash offset (props or ER_PROP_VECTOR_DASH_OFFSET animation). */
+    float vector_dash_offset;
     /* Vector sub-region damage: when vector_has_dirty, only this node-local rect is damaged on the next
      * commit (instead of the whole node box) — lets an interactive vector update just the changed area. */
     bool vector_has_dirty;

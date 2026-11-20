@@ -162,6 +162,15 @@ void er_vector_render(const float* ops,
                       int clip_y1);
 
 /**
+ * @brief Sets the dash offset of the node the next er_vector_render_slot() draws (ER_PROP_VECTOR_DASH_OFFSET).
+ *
+ * That call clears it.
+ *
+ * @param[in] offset  The offset, in pixels.
+ */
+void er_vector_dash_offset(float offset);
+
+/**
  * @brief Renders a storage slot's geometry at a node's box, through the edge cache when possible.
  *
  * The compositor's entry point for ER_NODE_VECTOR. Same painting contract as er_vector_render() with

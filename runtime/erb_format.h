@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 18u
+#define ERB_FORMAT_MINOR 19u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -63,6 +63,9 @@
 
 /** @brief The minor whose op-tapes can put a clip or mask over their shapes (ER_VECTOR_OP_MASK). */
 #define ERB_FORMAT_MINOR_MASK 18u
+
+/** @brief The minor whose op-tapes can dash a shape's stroke (ER_VECTOR_OP_DASH, ER_VECTOR_OP_DASH_OFFSET). */
+#define ERB_FORMAT_MINOR_DASH 19u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"

@@ -85,6 +85,15 @@ const PAINT = {
   strokeLinejoin: 'strokeLinejoin="round"',
   strokeMiterlimit: 'strokeMiterlimit={9}',
   fillRule: 'fillRule="evenodd"',
+  // A dash shows on a stroke, and its offset on a dash.
+  strokeDasharray: base => [
+    `${base} stroke="#f00"`,
+    `${base} stroke="#f00" strokeDasharray="4 2"`,
+  ],
+  strokeDashoffset: base => [
+    `${base} stroke="#f00" strokeDasharray="4 2"`,
+    `${base} stroke="#f00" strokeDasharray="4 2" strokeDashoffset={1}`,
+  ],
   fillGradient: `fillGradient=${GRADIENT}`,
   strokeGradient: `strokeGradient=${GRADIENT}`,
 };
@@ -405,11 +414,15 @@ const SHAPES = {
 /**
  * The [without, with] attribute strings for one sample.
  *
- * @param sample  An attribute, added to `base`, or a complete pair.
+ * @param sample  An attribute, added to `base`, a complete pair, or a function of `base` that gives the pair.
  * @param base  The attributes every compile carries.
  */
 const pairOf = (sample, base = '') =>
-  Array.isArray(sample) ? sample : [base, `${base} ${sample}`];
+  typeof sample === 'function'
+    ? sample(base)
+    : Array.isArray(sample)
+      ? sample
+      : [base, `${base} ${sample}`];
 
 describe('declared element props', () => {
   it('has a sample for every declared prop, and nothing undeclared', () => {
