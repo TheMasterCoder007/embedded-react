@@ -1822,11 +1822,6 @@ static float dash_turn(float in_x, float in_y, float out_x, float out_y)
 static void dash_subpath(const VecSub* subpath, float period, float stroke_width, int cap, int join, float miter)
 {
     const int vertex_count = subpath->count;
-    if (vertex_count < 2)
-    {
-        stroke_subpath(subpath, stroke_width, cap, join, miter);
-        return;
-    }
     const float* points_x = &s_point_x[subpath->start];
     const float* points_y = &s_point_y[subpath->start];
     const bool closed = subpath->closed != 0;
@@ -1849,6 +1844,13 @@ static void dash_subpath(const VecSub* subpath, float period, float stroke_width
     if (remaining < 0.0f)
         remaining = 0.0f;
     bool on = (entry & 1) == 0;
+    if (vertex_count < 2)
+    {
+        /* A lone point has no length: it is drawn when the pattern starts in a dash. */
+        if (on)
+            stroke_subpath(subpath, stroke_width, cap, join, miter);
+        return;
+    }
 
     /* Dashes are built past the shape's own points. */
     VecDash dash = {s_point_count, 0};

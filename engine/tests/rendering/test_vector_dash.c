@@ -302,6 +302,20 @@ static int check_caps(void)
     for (int pixel = 0; pixel < RASTER_SIDE * RASTER_SIDE; pixel++)
         if (s_framebuffer[pixel] != 0U)
             return fail("a dash of no length drew under a butt cap");
+
+    /* A path of one point is a dot when the pattern starts in a dash, and nothing when it starts in a gap. */
+    for (int in_gap = 0; in_gap < 2; in_gap++)
+    {
+        tape_begin(ROUND);
+        tape_dash(10.0f, 10.0f);
+        tape_dash_offset(in_gap ? 15.0f : 5.0f, 0.0f);
+        s_tape[s_tape_count++] = ER_VECTOR_OP_MOVE;
+        s_tape[s_tape_count++] = 64.0f;
+        s_tape[s_tape_count++] = 64.0f;
+        render();
+        if (alpha_at(64, 64) != (in_gap ? 0 : 255))
+            return fail(in_gap ? "a lone point drew in a gap" : "a lone point did not draw in a dash");
+    }
     return EXIT_SUCCESS;
 }
 
