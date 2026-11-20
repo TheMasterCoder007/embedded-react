@@ -121,6 +121,7 @@ target_compile_definitions(er_engine PRIVATE
     ERUI_VECTOR_MAX_SUBPATHS=8
     ERUI_VECTOR_MAX_EDGES=256
     ERUI_VECTOR_MAX_ROW=240
+    ERUI_VECTOR_MASK_EDGES=64    # clips and masks on an <Svg>; the default (512) costs ~10 KB of .bss
     ERUI_MAX_VECTOR_NODES=1
     ERUI_VECTOR_EDGE_CACHE=0     # cached <Svg> edge lists: this face uses no vector nodes, save the RAM
     ER_PERF_OVERLAY=0

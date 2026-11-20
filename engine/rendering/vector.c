@@ -35,6 +35,10 @@
  * A transformed node builds the same geometry, in layout space, and each finished edge takes the node's
  * matrix on its way into the edge list. The stroke outline is built before the matrix, so it scales and
  * turns with the shape.
+ *
+ * A clip or mask (ER_VECTOR_OP_MASK) is kept as its own edge lists. Each row a shape covers under one, the
+ * mask's value is worked out for the pixels the shape touched and scales their coverage before the row is
+ * staged.
  */
 
 #include "vector.h"
@@ -66,6 +70,15 @@
 #endif
 #ifndef ERUI_VECTOR_MAX_ROW
 #define ERUI_VECTOR_MAX_ROW 1024 /**< Max node width in logical px (coverage row buffer). */
+#endif
+/* Edges of the clips and masks in force at once (ER_VECTOR_OP_MASK). 0 compiles masks out: their shapes
+ * are skipped and the rest draws unmasked. */
+#ifndef ERUI_VECTOR_MASK_EDGES
+#define ERUI_VECTOR_MASK_EDGES 512
+#endif
+#if ERUI_VECTOR_MASK_EDGES > ERUI_VECTOR_MAX_EDGES
+#undef ERUI_VECTOR_MASK_EDGES
+#define ERUI_VECTOR_MASK_EDGES ERUI_VECTOR_MAX_EDGES /* a mask row shares the crossing lists */
 #endif
 #ifndef ERUI_VECTOR_SORT_BUCKETS
 #define ERUI_VECTOR_SORT_BUCKETS                                                                                       \
@@ -117,9 +130,15 @@
 #define VEC_DETAIL_MAX 8                /**< Finest flattening detail a scaled-up transform asks for. */
 #define VEC_DETAIL_STEP 1.5f            /**< Scale past which the detail doubles. */
 #define VEC_SIMILARITY_EPSILON 1e-4f    /**< How far a matrix may stray from rotate + uniform scale. */
+#define VEC_MASK_FULL 65536U            /**< A mask layer's whole-pixel coverage, in the fixed point its rows use. */
+#define VEC_MASK_LAYERS_MAX (2 * ER_VECTOR_MASK_SHAPES_MAX) /**< A fill and a stroke for each mask shape. */
+#define VEC_LUMINANCE_RED 0.2125f                           /**< A mask's luminance, from its sRGB colour. */
+#define VEC_LUMINANCE_GREEN 0.7154f
+#define VEC_LUMINANCE_BLUE 0.0721f
 
 /* Op-tape layout: floats an op occupies, opcode included, and the coordinates each op carries. */
 #define VEC_MOVE_OP_SIZE 3
+#define VEC_MASK_OP_SIZE 3
 #define VEC_ARC_OP_SIZE 7
 #define VEC_POINT_ARGS 2
 #define VEC_QUAD_ARGS 4
@@ -192,6 +211,39 @@ static uint32_t s_row[ERUI_VECTOR_MAX_ROW];
 /* Crossing list reused per sub-scanline. */
 static float s_cross_x[ERUI_VECTOR_MAX_EDGES];
 static int s_cross_direction[ERUI_VECTOR_MAX_EDGES];
+
+#if ERUI_VECTOR_MASK_EDGES > 0
+/* One painted piece of a mask: the fill or the stroke of one of its shapes, as screen-space edges. */
+typedef struct
+{
+    int start, count;                 /**< Its edges in s_mask_edges. */
+    float top, bottom;                /**< The rows its edges span. */
+    const ERVectorGradient* gradient; /**< Its paint's gradient in the node's table, or NULL for a solid one. */
+    uint8_t even_odd;
+    uint8_t value; /**< What a solid one paints into the mask, 0 to 255. */
+    uint8_t alpha; /**< How strongly, 0 to 255. */
+} VecMaskLayer;
+
+/* One clip or mask in force: a run of layers, painted in order. */
+typedef struct
+{
+    uint8_t kind; /**< ER_VECTOR_MASK_*. */
+    uint8_t first_layer, layer_count;
+} VecMaskGroup;
+
+static ERVecEdge s_mask_edges[ERUI_VECTOR_MASK_EDGES];
+static int s_mask_edge_count;
+static VecMaskLayer s_mask_layers[VEC_MASK_LAYERS_MAX];
+static int s_mask_layer_count;
+static VecMaskGroup s_mask_groups[ER_VECTOR_MASK_GROUPS_MAX];
+static int s_mask_origin_x, s_mask_origin_y; /**< The node origin, which a layer's gradient is placed from. */
+/* The masks' value for the row being drawn, 0 to 255 per clip column, and one group's on its way into it. */
+static uint8_t s_mask_row[ERUI_VECTOR_MAX_ROW];
+static uint8_t s_mask_group_row[ERUI_VECTOR_MAX_ROW];
+#endif
+static int s_mask_group_count; /**< Masks in force; 0 draws unmasked. */
+static int s_mask_shape_count; /**< Shapes across them. */
+static bool s_mask_failed;     /**< A mask did not fit: shapes draw unmasked until the masks are lifted. */
 
 #if ERUI_VECTOR_EDGE_CACHE
 /* Edge-cache recording state. Non-NULL while er_vector_render_slot is recording a render into a cache
@@ -745,6 +797,159 @@ static void emit_row(uint32_t color, const ERVectorGradient* gradient, int row_y
         flush_row(stretch_start, staged_count, row_y, clip_x0);
 }
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Clips and masks: a row's value
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+#if ERUI_VECTOR_MASK_EDGES > 0
+/** @brief Adds a mask layer's covered span [span_start,span_end] (screen px) to s_row, in fixed point. */
+static void mask_span(float span_start, float span_end, int clip_x0, int low, int high)
+{
+    if (!isfinite(span_start) || !isfinite(span_end))
+        return;
+    span_start -= (float)clip_x0;
+    span_end -= (float)clip_x0;
+    if (span_start < (float)low)
+        span_start = (float)low;
+    if (span_end > (float)high)
+        span_end = (float)high;
+    if (span_end <= span_start)
+        return;
+    const float weight = (float)(VEC_MASK_FULL / VEC_SUBSAMPLES);
+    const int cell_start = (int)floorf(span_start);
+    const int cell_end = (int)floorf(span_end);
+    if (cell_start == cell_end)
+    {
+        s_row[cell_start] += (uint32_t)(weight * (span_end - span_start));
+        return;
+    }
+    s_row[cell_start] += (uint32_t)(weight * ((float)(cell_start + 1) - span_start));
+    for (int cell = cell_start + 1; cell < cell_end; cell++)
+        s_row[cell] += VEC_MASK_FULL / VEC_SUBSAMPLES;
+    if (cell_end < high)
+        s_row[cell_end] += (uint32_t)(weight * (span_end - (float)cell_end));
+}
+
+/**
+ * @brief Works out a layer's coverage of clip columns [low,high) on a row, into s_row.
+ *
+ * s_row is free until the row is staged, so it holds the coverage: VEC_MASK_FULL for a whole pixel.
+ *
+ * @return false when the layer covers none of them.
+ */
+static bool mask_layer_cover(const VecMaskLayer* layer, int row_y, int clip_x0, int low, int high)
+{
+    if ((float)(row_y + 1) <= layer->top || (float)row_y >= layer->bottom)
+        return false;
+    const ERVecEdge* edges = s_mask_edges + layer->start;
+    bool covered = false;
+    for (int subsample = 0; subsample < VEC_SUBSAMPLES; subsample++)
+    {
+        const float sample_y = (float)row_y + ((float)subsample + 0.5f) / (float)VEC_SUBSAMPLES;
+        int cross_count = 0;
+        for (int edge_index = 0; edge_index < layer->count; edge_index++)
+        {
+            const ERVecEdge* edge = &edges[edge_index];
+            if (sample_y < edge->y0 || sample_y >= edge->y1)
+                continue;
+            /* Kept in order as it goes in: a mask's row crosses few edges. */
+            const float x = edge->x0 + (edge->x1 - edge->x0) * (sample_y - edge->y0) / (edge->y1 - edge->y0);
+            int insert_index = cross_count - 1;
+            while (insert_index >= 0 && s_cross_x[insert_index] > x)
+            {
+                s_cross_x[insert_index + 1] = s_cross_x[insert_index];
+                s_cross_direction[insert_index + 1] = s_cross_direction[insert_index];
+                insert_index--;
+            }
+            s_cross_x[insert_index + 1] = x;
+            s_cross_direction[insert_index + 1] = edge->direction;
+            cross_count++;
+        }
+        int winding = 0;
+        for (int cross_index = 0; cross_index < cross_count - 1; cross_index++)
+        {
+            winding += s_cross_direction[cross_index];
+            if (!rule_inside(winding, layer->even_odd))
+                continue;
+            if (!covered)
+            {
+                memset(&s_row[low], 0, sizeof(uint32_t) * (size_t)(high - low));
+                covered = true;
+            }
+            mask_span(s_cross_x[cross_index], s_cross_x[cross_index + 1], clip_x0, low, high);
+        }
+    }
+    return covered;
+}
+
+/** @brief Works out one mask's value for clip columns [low,high) of a row, 0 to 255 each, into @p row. */
+static void mask_group_row(const VecMaskGroup* group, uint8_t* row, int row_y, int clip_x0, int low, int high)
+{
+    memset(&row[low], 0, (size_t)(high - low));
+    for (int layer_index = 0; layer_index < group->layer_count; layer_index++)
+    {
+        const VecMaskLayer* layer = &s_mask_layers[group->first_layer + layer_index];
+        if (!mask_layer_cover(layer, row_y, clip_x0, low, high))
+            continue;
+        /* The layer is painted over what the earlier ones left, as far as it covers each pixel. */
+        float value = (float)layer->value, strength = (float)layer->alpha / ER_CHANNEL_MAX_FLOAT;
+        for (int column = low; column < high; column++)
+        {
+            const uint32_t covered = s_row[column];
+            if (covered == 0U)
+                continue;
+#if ERUI_GRADIENT
+            if (layer->gradient)
+            {
+                float sample_x = (float)(clip_x0 + column) + 0.5f, sample_y = (float)row_y + 0.5f;
+                if (s_transform)
+                    point_to_layout(&sample_x, &sample_y);
+                const uint32_t color = er_gradient_eval_stops(
+                    layer->gradient->stops,
+                    layer->gradient->stop_count,
+                    vgrad_t(layer->gradient, sample_x - (float)s_mask_origin_x, sample_y - (float)s_mask_origin_y));
+                strength = (float)((color >> 24) & 0xFFU) / ER_CHANNEL_MAX_FLOAT;
+                value = (group->kind == ER_VECTOR_MASK_LUMINANCE)
+                            ? VEC_LUMINANCE_RED * (float)((color >> 16) & 0xFFU)
+                                  + VEC_LUMINANCE_GREEN * (float)((color >> 8) & 0xFFU)
+                                  + VEC_LUMINANCE_BLUE * (float)(color & 0xFFU)
+                            : ER_CHANNEL_MAX_FLOAT;
+            }
+#endif
+            const float share = strength * (covered >= VEC_MASK_FULL ? 1.0f : (float)covered / (float)VEC_MASK_FULL);
+            const float before = (float)row[column];
+            row[column] = (uint8_t)(before + (value - before) * share + 0.5f);
+        }
+    }
+}
+
+/**
+ * @brief Scales a row's coverage, clip columns [low,high) of s_cover, by the masks in force.
+ *
+ * Only the pixels the shape touched are worked out, so a mask costs nothing where its shape is not.
+ */
+static void mask_apply_row(int row_y, int clip_x0, int low, int high)
+{
+    for (int group_index = 0; group_index < s_mask_group_count; group_index++)
+    {
+        if (group_index == 0)
+        {
+            mask_group_row(&s_mask_groups[0], s_mask_row, row_y, clip_x0, low, high);
+            continue;
+        }
+        mask_group_row(&s_mask_groups[group_index], s_mask_group_row, row_y, clip_x0, low, high);
+        for (int column = low; column < high; column++)
+            s_mask_row[column] = (uint8_t)(((uint32_t)s_mask_row[column] * s_mask_group_row[column] + ER_CHANNEL_ROUND)
+                                           / ER_CHANNEL_MAX);
+    }
+    for (int column = low; column < high; column++)
+    {
+        if (s_mask_row[column] != ER_CHANNEL_MAX)
+            s_cover[column] *= (float)s_mask_row[column] / ER_CHANNEL_MAX_FLOAT;
+    }
+}
+#endif /* ERUI_VECTOR_MASK_EDGES > 0 */
+
 /* Indices of edges crossing the current scanline (the active-edge table). */
 static int s_active[ERUI_VECTOR_MAX_EDGES];
 
@@ -957,7 +1162,13 @@ static void rasterize(const ERVecEdge* edges,
             }
         }
         if (s_row_high > s_row_low)
+        {
+#if ERUI_VECTOR_MASK_EDGES > 0
+            if (s_mask_group_count > 0 && !s_mask_failed)
+                mask_apply_row(row_y, clip_x0, s_row_low, s_row_high);
+#endif
             emit_row(color, gradient, row_y, clip_x0, s_row_low, s_row_high);
+        }
     }
 }
 
@@ -1631,6 +1842,12 @@ static float paint_margin(const ERVectorPaint* paint)
     return margin;
 }
 
+/** @brief Whether a tape value ends a shape's run of path ops: the next shape, or a mask op. */
+static inline bool ends_shape(float opcode)
+{
+    return opcode == ER_VECTOR_OP_SHAPE || opcode == ER_VECTOR_OP_MASK;
+}
+
 /**
  * @brief Decides whether a shape's ink cannot reach the clip box, reading only its op run.
  *
@@ -1664,7 +1881,7 @@ static bool shape_clipped_out(const float* ops,
     bool found_any = false;
     float bounds_x0 = VEC_UNBOUNDED, bounds_y0 = VEC_UNBOUNDED, bounds_x1 = -VEC_UNBOUNDED, bounds_y1 = -VEC_UNBOUNDED;
 
-    while (op_index < op_count && ops[op_index] != ER_VECTOR_OP_SHAPE)
+    while (op_index < op_count && !ends_shape(ops[op_index]))
     {
         const float opcode = ops[op_index++];
         const int argument_count = (opcode == ER_VECTOR_OP_MOVE || opcode == ER_VECTOR_OP_LINE)   ? VEC_POINT_ARGS
@@ -1760,7 +1977,7 @@ static bool arc_run_match(const float* ops, int op_index, int op_count, int orig
     bool have_move = false, have_arc = false;
     float move_x = 0.0f, move_y = 0.0f, arc_start_x = 0.0f, arc_start_y = 0.0f;
 
-    while (op_index < op_count && ops[op_index] != ER_VECTOR_OP_SHAPE)
+    while (op_index < op_count && !ends_shape(ops[op_index]))
     {
         const float opcode = ops[op_index];
         if (opcode == ER_VECTOR_OP_MOVE)
@@ -1982,6 +2199,299 @@ void er_vector_analytic_arc_count_reset(void)
 #endif
 }
 
+/**
+ * @brief Flattens one shape's run of path ops into s_subpaths, up to the next shape or mask op.
+ *
+ * @return The tape index just past the run.
+ */
+static int build_subpaths(const float* ops, int op_index, int op_count, int origin_x, int origin_y)
+{
+    s_point_count = 0;
+    s_subpath_count = 0;
+    float current_x = 0.0f, current_y = 0.0f;
+    while (op_index < op_count && !ends_shape(ops[op_index]))
+    {
+        const float opcode = ops[op_index++];
+        /* Verify this op's args fit within the tape before reading them. A tape truncated mid-op —
+         * e.g. the JS bridge capping it at ERUI_VECTOR_TAPE_MAX, or any malformed input — would
+         * otherwise read past op_count into adjacent memory, producing NaN/garbage coordinates that
+         * index s_cover[] out of bounds and crash. Stop parsing the shape's tail instead. */
+        const int argument_count = (opcode == ER_VECTOR_OP_MOVE || opcode == ER_VECTOR_OP_LINE)   ? VEC_POINT_ARGS
+                                   : (opcode == ER_VECTOR_OP_QUAD)                                ? VEC_QUAD_ARGS
+                                   : (opcode == ER_VECTOR_OP_CUBIC || opcode == ER_VECTOR_OP_ARC) ? VEC_CURVE_ARGS
+                                                                                                  : 0;
+        if (op_index + argument_count > op_count)
+            break;
+        if (opcode == ER_VECTOR_OP_MOVE)
+        {
+            current_x = (float)origin_x + ops[op_index++];
+            current_y = (float)origin_y + ops[op_index++];
+            sub_begin(current_x, current_y);
+        }
+        else if (opcode == ER_VECTOR_OP_LINE)
+        {
+            current_x = (float)origin_x + ops[op_index++];
+            current_y = (float)origin_y + ops[op_index++];
+            pt_add(current_x, current_y);
+        }
+        else if (opcode == ER_VECTOR_OP_QUAD)
+        {
+            const float control_x = (float)origin_x + ops[op_index++];
+            const float control_y = (float)origin_y + ops[op_index++];
+            const float end_x = (float)origin_x + ops[op_index++];
+            const float end_y = (float)origin_y + ops[op_index++];
+            /* Elevate the quadratic to a cubic and reuse the cubic flattener. */
+            const float control1_x = current_x + VEC_QUAD_TO_CUBIC * (control_x - current_x);
+            const float control1_y = current_y + VEC_QUAD_TO_CUBIC * (control_y - current_y);
+            const float control2_x = end_x + VEC_QUAD_TO_CUBIC * (control_x - end_x);
+            const float control2_y = end_y + VEC_QUAD_TO_CUBIC * (control_y - end_y);
+            flatten_cubic(current_x, current_y, control1_x, control1_y, control2_x, control2_y, end_x, end_y, 0);
+            current_x = end_x;
+            current_y = end_y;
+        }
+        else if (opcode == ER_VECTOR_OP_CUBIC)
+        {
+            const float control1_x = (float)origin_x + ops[op_index++];
+            const float control1_y = (float)origin_y + ops[op_index++];
+            const float control2_x = (float)origin_x + ops[op_index++];
+            const float control2_y = (float)origin_y + ops[op_index++];
+            const float end_x = (float)origin_x + ops[op_index++];
+            const float end_y = (float)origin_y + ops[op_index++];
+            flatten_cubic(current_x, current_y, control1_x, control1_y, control2_x, control2_y, end_x, end_y, 0);
+            current_x = end_x;
+            current_y = end_y;
+        }
+        else if (opcode == ER_VECTOR_OP_ARC)
+        {
+            const float arc_center_x = (float)origin_x + ops[op_index++];
+            const float arc_center_y = (float)origin_y + ops[op_index++];
+            const float arc_radius = ops[op_index++];
+            const float start_angle = ops[op_index++];
+            const float end_angle = ops[op_index++];
+            const int counter_clockwise = (ops[op_index++] != 0.0f);
+            if (s_subpath_count == 0)
+                sub_begin(arc_center_x + arc_radius * cosf(start_angle), arc_center_y + arc_radius * sinf(start_angle));
+            append_arc(arc_center_x, arc_center_y, arc_radius, start_angle, end_angle, counter_clockwise);
+            current_x = arc_center_x + arc_radius * cosf(end_angle);
+            current_y = arc_center_y + arc_radius * sinf(end_angle);
+        }
+        else if (opcode == ER_VECTOR_OP_CLOSE)
+        {
+            if (s_subpath_count > 0)
+            {
+                s_subpaths[s_subpath_count - 1].closed = 1;
+                current_x = s_point_x[s_subpaths[s_subpath_count - 1].start];
+                current_y = s_point_y[s_subpaths[s_subpath_count - 1].start];
+            }
+        }
+        else
+        {
+            /* Unknown opcode: stop to avoid desync. */
+            break;
+        }
+    }
+    return op_index;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Clips and masks: building
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Lifts every mask in force. */
+static void mask_reset(void)
+{
+    s_mask_group_count = 0;
+    s_mask_shape_count = 0;
+    s_mask_failed = false;
+#if ERUI_VECTOR_MASK_EDGES > 0
+    s_mask_layer_count = 0;
+    s_mask_edge_count = 0;
+#endif
+}
+
+#if ERUI_VECTOR_MASK_EDGES > 0
+/**
+ * @brief Keeps the edge list just built (s_edges) as the next layer of the mask being defined.
+ *
+ * @return false when the layers or the edge pool are full.
+ */
+static bool mask_layer_add(const ERVectorGradient* gradient, int even_odd, uint8_t value, uint8_t alpha)
+{
+    if (s_edge_count == 0)
+        return true; /* nothing of it reaches these rows */
+    if (s_edge_truncated || s_mask_layer_count >= VEC_MASK_LAYERS_MAX
+        || s_mask_edge_count + s_edge_count > ERUI_VECTOR_MASK_EDGES)
+    {
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_MASK_EDGES", ERUI_VECTOR_MASK_EDGES);
+        return false;
+    }
+    VecMaskLayer* layer = &s_mask_layers[s_mask_layer_count++];
+    layer->start = s_mask_edge_count;
+    layer->count = s_edge_count;
+    layer->gradient = gradient;
+    layer->even_odd = (uint8_t)even_odd;
+    layer->value = value;
+    layer->alpha = alpha;
+    layer->top = VEC_UNBOUNDED;
+    layer->bottom = -VEC_UNBOUNDED;
+    for (int edge_index = 0; edge_index < s_edge_count; edge_index++)
+    {
+        if (s_edges[edge_index].y0 < layer->top)
+            layer->top = s_edges[edge_index].y0;
+        if (s_edges[edge_index].y1 > layer->bottom)
+            layer->bottom = s_edges[edge_index].y1;
+    }
+    memcpy(s_mask_edges + s_mask_edge_count, s_edges, (size_t)s_edge_count * sizeof(ERVecEdge));
+    s_mask_edge_count += s_edge_count;
+    return true;
+}
+
+/** @brief What a solid colour paints into a mask of @p kind, 0 to 255. */
+static uint8_t mask_value(int kind, uint32_t color)
+{
+    if (kind != ER_VECTOR_MASK_LUMINANCE)
+        return ER_CHANNEL_MAX;
+    return (uint8_t)(VEC_LUMINANCE_RED * (float)((color >> 16) & 0xFFU)
+                     + VEC_LUMINANCE_GREEN * (float)((color >> 8) & 0xFFU) + VEC_LUMINANCE_BLUE * (float)(color & 0xFFU)
+                     + 0.5f);
+}
+
+/**
+ * @brief Adds the shape just flattened (s_subpaths) to the mask being defined: its fill, then its stroke.
+ *
+ * A clip takes the fill's area whatever the paint's colours are.
+ *
+ * @return false when it did not fit.
+ */
+static bool mask_shape_add(int kind, const ERVectorPaint* paint, const ERVectorGradient* gradients, int gradient_count)
+{
+    const int even_odd = paint && paint->fill_rule == ER_VECTOR_FILL_EVENODD;
+    if (kind == ER_VECTOR_MASK_CLIP)
+    {
+        fill_build();
+        return mask_layer_add(NULL, even_odd, ER_CHANNEL_MAX, ER_CHANNEL_MAX);
+    }
+    if (!paint)
+        return true;
+    const ERVectorGradient* fill_gradient = NULL;
+    const ERVectorGradient* stroke_gradient = NULL;
+#if ERUI_GRADIENT
+    /* The table's own entry: a layer's gradient is placed from the node origin when it is sampled. */
+    if (paint->fill_gradient > 0 && paint->fill_gradient <= gradient_count && gradients
+        && vgrad_supported(gradients[paint->fill_gradient - 1].type)
+        && gradients[paint->fill_gradient - 1].stop_count >= 2)
+        fill_gradient = &gradients[paint->fill_gradient - 1];
+    if (paint->stroke_gradient > 0 && paint->stroke_gradient <= gradient_count && gradients
+        && vgrad_supported(gradients[paint->stroke_gradient - 1].type)
+        && gradients[paint->stroke_gradient - 1].stop_count >= 2)
+        stroke_gradient = &gradients[paint->stroke_gradient - 1];
+#else
+    (void)gradients;
+    (void)gradient_count;
+#endif
+    if (fill_gradient || ((paint->fill >> 24) & 0xFFU) != 0U)
+    {
+        fill_build();
+        if (!mask_layer_add(fill_gradient, even_odd, mask_value(kind, paint->fill), (uint8_t)(paint->fill >> 24)))
+            return false;
+    }
+    if ((stroke_gradient || ((paint->stroke >> 24) & 0xFFU) != 0U) && paint->stroke_width > 0.0f)
+    {
+        stroke_build(
+            paint->stroke_width, paint->cap, paint->join, paint->miter > 0.0f ? paint->miter : VEC_DEFAULT_MITER_LIMIT);
+        if (!mask_layer_add(stroke_gradient, 0, mask_value(kind, paint->stroke), (uint8_t)(paint->stroke >> 24)))
+            return false;
+    }
+    return true;
+}
+#endif /* ERUI_VECTOR_MASK_EDGES > 0 */
+
+/**
+ * @brief Reads an ER_VECTOR_OP_MASK and the shapes it takes, and puts the mask in force.
+ *
+ * The shapes are read off the tape whether or not the mask is kept, so none of them is ever drawn. A mask
+ * that does not fit (too many in force, too many shapes or edges) leaves the shapes after it unmasked until
+ * the masks are lifted.
+ *
+ * @param[in] op_index  Index of the op.
+ *
+ * @return The tape index just past the mask's shapes.
+ */
+static int mask_define(const float* ops,
+                       int op_index,
+                       int op_count,
+                       const ERVectorPaint* paints,
+                       int paint_count,
+                       const ERVectorGradient* gradients,
+                       int gradient_count,
+                       int origin_x,
+                       int origin_y,
+                       int clip_y0,
+                       int clip_y1)
+{
+    if (op_index + VEC_MASK_OP_SIZE > op_count)
+        return op_count;
+    const float kind_value = ops[op_index + 1], count_value = ops[op_index + 2];
+    op_index += VEC_MASK_OP_SIZE;
+    const int kind = (kind_value >= 0.0f && kind_value <= (float)ER_VECTOR_MASK_ALPHA) ? (int)kind_value : -1;
+    /* A count over the limit is still read, so its shapes are skipped; the tape's length bounds it. */
+    const int shape_count = (count_value >= 0.0f && count_value <= (float)op_count) ? (int)count_value : 0;
+    if (kind == ER_VECTOR_MASK_NONE)
+    {
+        mask_reset();
+        return op_index;
+    }
+    bool keep = kind > 0 && !s_mask_failed && s_mask_group_count < ER_VECTOR_MASK_GROUPS_MAX
+                && s_mask_shape_count + shape_count <= ER_VECTOR_MASK_SHAPES_MAX;
+#if ERUI_VECTOR_MASK_EDGES > 0
+    if (!keep && !s_mask_failed)
+        ERUI_WARN_ONCE("embedded-react vector: more than %d clips and masks at once, or %d shapes in them - "
+                       "drawn unmasked.\n",
+                       ER_VECTOR_MASK_GROUPS_MAX,
+                       ER_VECTOR_MASK_SHAPES_MAX);
+    const int first_layer = s_mask_layer_count;
+    s_mask_origin_x = origin_x;
+    s_mask_origin_y = origin_y;
+    s_edge_y_top = (float)clip_y0;
+    s_edge_y_bottom = (float)clip_y1;
+#else
+    (void)paints;
+    (void)paint_count;
+    (void)gradients;
+    (void)gradient_count;
+    (void)clip_y0;
+    (void)clip_y1;
+    keep = false;
+#endif
+    for (int shape = 0; shape < shape_count && op_index < op_count && ops[op_index] == ER_VECTOR_OP_SHAPE; shape++)
+    {
+        const float paint_value = (op_index + 1 < op_count) ? ops[op_index + 1] : -1.0f;
+        op_index = (op_index + 2 < op_count) ? op_index + 2 : op_count;
+        op_index = build_subpaths(ops, op_index, op_count, origin_x, origin_y);
+#if ERUI_VECTOR_MASK_EDGES > 0
+        const ERVectorPaint* paint =
+            (paint_value >= 0.0f && paint_value < (float)paint_count) ? &paints[(int)paint_value] : 0;
+        if (keep && !mask_shape_add(kind, paint, gradients, gradient_count))
+            keep = false;
+#else
+        (void)paint_value;
+#endif
+    }
+    if (!keep)
+    {
+        s_mask_failed = true;
+        return op_index;
+    }
+#if ERUI_VECTOR_MASK_EDGES > 0
+    VecMaskGroup* group = &s_mask_groups[s_mask_group_count++];
+    group->kind = (uint8_t)kind;
+    group->first_layer = (uint8_t)first_layer;
+    group->layer_count = (uint8_t)(s_mask_layer_count - first_layer);
+    s_mask_shape_count += shape_count;
+#endif
+    return op_index;
+}
+
 /** @brief Walks an op-tape and paints it — er_vector_render's body, shared with the recording path. */
 static void render_tape(const float* ops,
                         int op_count,
@@ -2007,9 +2517,30 @@ static void render_tape(const float* ops,
     const int clip_left = clip_x0, clip_top = clip_y0, clip_right = clip_x1, clip_bottom = clip_y1;
     const VecClip build_clip = clip_in_build_space(clip_x0, clip_y0, clip_x1, clip_y1);
 
+    mask_reset();
     int op_index = 0;
     while (op_index < op_count)
     {
+        if (ops[op_index] == ER_VECTOR_OP_MASK)
+        {
+#if ERUI_VECTOR_EDGE_CACHE
+            /* A masked node is not cached: a replay has no tape to find the mask in. */
+            if (s_recording)
+                s_recording_failed = true;
+#endif
+            op_index = mask_define(ops,
+                                   op_index,
+                                   op_count,
+                                   paints,
+                                   paint_count,
+                                   gradients,
+                                   gradient_count,
+                                   origin_x,
+                                   origin_y,
+                                   clip_top,
+                                   clip_bottom);
+            continue;
+        }
         if (ops[op_index] != ER_VECTOR_OP_SHAPE)
         {
             op_index++; /* tape must start with SHAPE; skip stray values defensively */
@@ -2044,7 +2575,8 @@ static void render_tape(const float* ops,
          * core, skipping flatten + stroke-outline + scanline coverage entirely. A gradient paint keeps
          * the general path — vector gradients carry SVG axis geometry, which the sector core's
          * angle/thickness ramps do not express. */
-        if (shape_paint && shape_paint->fill_gradient == 0 && shape_paint->stroke_gradient == 0)
+        if (shape_paint && shape_paint->fill_gradient == 0 && shape_paint->stroke_gradient == 0
+            && (s_mask_group_count == 0 || s_mask_failed))
         {
             VecArcRun arc_run, screen_arc;
             float stroke_scale = 1.0f;
@@ -2073,92 +2605,7 @@ static void render_tape(const float* ops,
         }
 #endif
 
-        /* Build this shape's subpaths until the next SHAPE or end of tape. */
-        s_point_count = 0;
-        s_subpath_count = 0;
-        float current_x = 0.0f, current_y = 0.0f;
-        while (op_index < op_count && ops[op_index] != ER_VECTOR_OP_SHAPE)
-        {
-            const float opcode = ops[op_index++];
-            /* Verify this op's args fit within the tape before reading them. A tape truncated mid-op —
-             * e.g. the JS bridge capping it at ERUI_VECTOR_TAPE_MAX, or any malformed input — would
-             * otherwise read past op_count into adjacent memory, producing NaN/garbage coordinates that
-             * index s_cover[] out of bounds and crash. Stop parsing the shape's tail instead. */
-            const int argument_count = (opcode == ER_VECTOR_OP_MOVE || opcode == ER_VECTOR_OP_LINE)   ? VEC_POINT_ARGS
-                                       : (opcode == ER_VECTOR_OP_QUAD)                                ? VEC_QUAD_ARGS
-                                       : (opcode == ER_VECTOR_OP_CUBIC || opcode == ER_VECTOR_OP_ARC) ? VEC_CURVE_ARGS
-                                                                                                      : 0;
-            if (op_index + argument_count > op_count)
-                break;
-            if (opcode == ER_VECTOR_OP_MOVE)
-            {
-                current_x = (float)origin_x + ops[op_index++];
-                current_y = (float)origin_y + ops[op_index++];
-                sub_begin(current_x, current_y);
-            }
-            else if (opcode == ER_VECTOR_OP_LINE)
-            {
-                current_x = (float)origin_x + ops[op_index++];
-                current_y = (float)origin_y + ops[op_index++];
-                pt_add(current_x, current_y);
-            }
-            else if (opcode == ER_VECTOR_OP_QUAD)
-            {
-                const float control_x = (float)origin_x + ops[op_index++];
-                const float control_y = (float)origin_y + ops[op_index++];
-                const float end_x = (float)origin_x + ops[op_index++];
-                const float end_y = (float)origin_y + ops[op_index++];
-                /* Elevate the quadratic to a cubic and reuse the cubic flattener. */
-                const float control1_x = current_x + VEC_QUAD_TO_CUBIC * (control_x - current_x);
-                const float control1_y = current_y + VEC_QUAD_TO_CUBIC * (control_y - current_y);
-                const float control2_x = end_x + VEC_QUAD_TO_CUBIC * (control_x - end_x);
-                const float control2_y = end_y + VEC_QUAD_TO_CUBIC * (control_y - end_y);
-                flatten_cubic(current_x, current_y, control1_x, control1_y, control2_x, control2_y, end_x, end_y, 0);
-                current_x = end_x;
-                current_y = end_y;
-            }
-            else if (opcode == ER_VECTOR_OP_CUBIC)
-            {
-                const float control1_x = (float)origin_x + ops[op_index++];
-                const float control1_y = (float)origin_y + ops[op_index++];
-                const float control2_x = (float)origin_x + ops[op_index++];
-                const float control2_y = (float)origin_y + ops[op_index++];
-                const float end_x = (float)origin_x + ops[op_index++];
-                const float end_y = (float)origin_y + ops[op_index++];
-                flatten_cubic(current_x, current_y, control1_x, control1_y, control2_x, control2_y, end_x, end_y, 0);
-                current_x = end_x;
-                current_y = end_y;
-            }
-            else if (opcode == ER_VECTOR_OP_ARC)
-            {
-                const float arc_center_x = (float)origin_x + ops[op_index++];
-                const float arc_center_y = (float)origin_y + ops[op_index++];
-                const float arc_radius = ops[op_index++];
-                const float start_angle = ops[op_index++];
-                const float end_angle = ops[op_index++];
-                const int counter_clockwise = (ops[op_index++] != 0.0f);
-                if (s_subpath_count == 0)
-                    sub_begin(arc_center_x + arc_radius * cosf(start_angle),
-                              arc_center_y + arc_radius * sinf(start_angle));
-                append_arc(arc_center_x, arc_center_y, arc_radius, start_angle, end_angle, counter_clockwise);
-                current_x = arc_center_x + arc_radius * cosf(end_angle);
-                current_y = arc_center_y + arc_radius * sinf(end_angle);
-            }
-            else if (opcode == ER_VECTOR_OP_CLOSE)
-            {
-                if (s_subpath_count > 0)
-                {
-                    s_subpaths[s_subpath_count - 1].closed = 1;
-                    current_x = s_point_x[s_subpaths[s_subpath_count - 1].start];
-                    current_y = s_point_y[s_subpaths[s_subpath_count - 1].start];
-                }
-            }
-            else
-            {
-                /* Unknown opcode: stop to avoid desync. */
-                break;
-            }
-        }
+        op_index = build_subpaths(ops, op_index, op_count, origin_x, origin_y);
 
         /* Apply the shape's paint: fill first, then stroke (SVG paint order). */
         const ERVectorPaint* paint = shape_paint;
@@ -2196,6 +2643,7 @@ static void render_tape(const float* ops,
                              clip_bottom);
         }
     }
+    mask_reset();
 }
 
 void er_vector_render(const float* ops,

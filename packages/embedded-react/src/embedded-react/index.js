@@ -40,6 +40,8 @@ export {
   G,
   Arc,
   SvgText,
+  ClipPath,
+  Mask,
 } from './components.mts';
 export {Pressable} from './Pressable.mts';
 export {Button} from './Button.mts';

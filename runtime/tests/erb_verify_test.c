@@ -647,8 +647,58 @@ static void test_anims(void)
     EXPECT(ERB_ERROR_ANIMATION, "an unknown animation flag");
 }
 
+/** @brief Replaces the base package's op-tape. */
+static void set_tape(const float* floats, uint16_t count)
+{
+    TPkg* package = base();
+    memcpy(package->tape_floats, floats, count * sizeof(float));
+    package->tape_float_count = count;
+    package->tapes[0].float_count = count;
+}
+
+static void test_tape_masks(void)
+{
+    /* MASK kind count, then a shape of one point. */
+    const float masked[] = {7.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 6.0f, 7.0f, 0.0f, 0.0f};
+    float tape[64];
+    set_tape(masked, 14u);
+    EXPECT(ERB_OK, "a clip, a shape under it, and the clip lifted");
+    memcpy(tape, masked, sizeof(masked));
+    tape[1] = 4.0f;
+    set_tape(tape, 14u);
+    EXPECT(ERB_ERROR_TAPE, "an unknown kind of mask");
+    tape[1] = 1.0f;
+    tape[2] = 0.0f;
+    set_tape(tape, 14u);
+    EXPECT(ERB_OK, "a clip of no shapes, which hides what it clips");
+    tape[2] = 1.5f;
+    set_tape(tape, 14u);
+    EXPECT(ERB_ERROR_TAPE, "a mask of a shape and a half");
+    tape[2] = 1.0f;
+    tape[13] = 1.0f;
+    set_tape(tape, 14u);
+    EXPECT(ERB_ERROR_TAPE, "lifting the masks, with a shape count");
+    tape[2] = 3.0f;
+    set_tape(tape, 11u);
+    EXPECT(ERB_ERROR_TAPE, "a mask the tape ends before the shapes of");
+    tape[13] = 0.0f;
+    set_tape(tape, 14u);
+    EXPECT(ERB_ERROR_TAPE, "a mask op among another mask's shapes");
+    uint16_t count = 0;
+    for (int mask = 0; mask <= ER_VECTOR_MASK_GROUPS_MAX; mask++)
+    {
+        memcpy(tape + count, masked, 5u * sizeof(float));
+        count += 5u;
+    }
+    set_tape(tape, count);
+    EXPECT(ERB_ERROR_TAPE, "more masks at once than the engine keeps");
+    set_tape(tape, (uint16_t)(count - 5u));
+    EXPECT(ERB_OK, "as many masks at once as the engine keeps");
+}
+
 static void test_tapes(void)
 {
+    test_tape_masks();
     base()->tape_floats[0] = 9.0f;
     EXPECT(ERB_ERROR_TAPE, "an unknown vector op");
     base()->tape_floats[1] = 3.0f;

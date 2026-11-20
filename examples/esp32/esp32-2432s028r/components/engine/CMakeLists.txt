@@ -88,10 +88,13 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     ERUI_VECTOR_MAX_POINTS=512   # flattened vertices per shape (a 270° wide-stroke arc bakes to cubics → ~200+ pts)
     ERUI_VECTOR_MAX_SUBPATHS=8
-    ERUI_VECTOR_MAX_EDGES=1536   # stroke-outline edges for the largest single shape. A wide-stroke 240° arc
+    ERUI_VECTOR_MAX_EDGES=1408   # stroke-outline edges for the largest single shape. A wide-stroke 240° arc
                                  # tessellates to >600, and 600 truncated on HW (ERUI_VECTOR_MAX_EDGES
                                  # exhausted warning), so keep this well clear of the arc's edge count.
     ERUI_VECTOR_MAX_ROW=224      # coverage row buffer in px. MUST be >= the widest vector node.
+    ERUI_VECTOR_MASK_EDGES=128   # clips and masks on an <Svg>: ~3.8 KB of DRAM, taken out of
+                                 # ERUI_VECTOR_MAX_EDGES above (1536 before), since this board boot-loops
+                                 # with any more static data
     ERUI_MAX_VECTOR_NODES=2      # the dial is a native <Dial> now and uses NO vector node; this whole
                                  # pool is spare headroom for an app that adds an <Svg>
     ERUI_VECTOR_EDGE_CACHE=0     # cached edge lists for static <Svg> nodes: ~85 KB/node of .bss this

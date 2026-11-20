@@ -19,6 +19,7 @@ import {compilePackage, packPackage} from '../compile.mts';
 import {STYLE_KEYS} from '../style-map.mts';
 import {
   ELEMENT_TAGS,
+  SVG_DEFINITION_TAGS,
   SVG_SHAPE_TAGS,
   elementSpec,
   svgShapeSpec,
@@ -30,7 +31,7 @@ import {
 const PREAMBLE = `import {useState, useRef} from 'react';
 import logo from './logo.png';
 import knob from './knob.png';
-import {View, Text, Svg, Circle, Ellipse, Rect, Line, Arc, G, Path, Pressable, TouchableOpacity, Image,
+import {View, Text, Svg, Circle, Ellipse, Rect, Line, Arc, G, Path, ClipPath, Mask, Pressable, TouchableOpacity, Image,
   ScrollView, Switch, TextInput, ActivityIndicator, Modal, Dial, FlatList, SectionList, Button, ImageBackground,
   Animated, useAnimatedValue}
   from 'embedded-react';
@@ -86,6 +87,43 @@ const PAINT = {
   fillRule: 'fillRule="evenodd"',
   fillGradient: `fillGradient=${GRADIENT}`,
   strokeGradient: `strokeGradient=${GRADIENT}`,
+};
+
+/** A clip and a mask for a shape to name; neither changes a drawing that doesn't. */
+const DEFINITIONS =
+  '<ClipPath id="c"><Rect width={3} height={3} /></ClipPath>' +
+  '<Mask id="m"><Rect width={3} height={3} fill="#fff" /></Mask>';
+
+/** What every shape is clipped or masked by. `clipRule` shows on a shape inside a <ClipPath>. */
+const MASKED = {
+  clipPath: 'clipPath="url(#c)"',
+  mask: 'mask="url(#m)"',
+  clipRule: 'clipRule="evenodd"',
+};
+
+/** A clip's and a mask's own props, on one applied to a 10 by 10 square. */
+const DEFINITION_SAMPLES = {
+  ClipPath: {
+    clipPathUnits: 'clipPathUnits="objectBoundingBox"',
+    clipRule: 'clipRule="evenodd"',
+    clipPath: 'clipPath="url(#c)"',
+    mask: 'mask="url(#m)"',
+  },
+  Mask: {
+    ...PAINT,
+    maskType: 'maskType="alpha"',
+    x: 'x={0.5}',
+    y: 'y={0.5}',
+    width: 'width={0.5}',
+    height: 'height={0.5}',
+    maskUnits: [
+      'width={5} height={5}',
+      'width={5} height={5} maskUnits="userSpaceOnUse"',
+    ],
+    maskContentUnits: 'maskContentUnits="objectBoundingBox"',
+    clipPath: 'clipPath="url(#c)"',
+    mask: 'mask="url(#m)"',
+  },
 };
 
 /**
@@ -389,7 +427,22 @@ describe('declared element props', () => {
     expect(Object.keys(SHAPES).sort()).toEqual([...SVG_SHAPE_TAGS].sort());
     for (const tag of SVG_SHAPE_TAGS) {
       expect(
-        [...Object.keys(SHAPES[tag].props), ...Object.keys(PAINT)].sort(),
+        [
+          ...Object.keys(SHAPES[tag].props),
+          ...Object.keys(PAINT),
+          ...Object.keys(MASKED),
+        ].sort(),
+        tag,
+      ).toEqual([...svgShapeSpec(tag).props].sort());
+    }
+
+    expect(Object.keys(DEFINITION_SAMPLES).sort()).toEqual(
+      [...SVG_DEFINITION_TAGS].sort(),
+    );
+    for (const tag of SVG_DEFINITION_TAGS) {
+      // An id names the element; it has nothing of its own to lower.
+      expect(
+        [...Object.keys(DEFINITION_SAMPLES[tag]), 'id'].sort(),
         tag,
       ).toEqual([...svgShapeSpec(tag).props].sort());
     }
@@ -406,15 +459,36 @@ describe('declared element props', () => {
 
   for (const tag of SVG_SHAPE_TAGS) {
     const {base, children = '', props} = SHAPES[tag];
+    const shape = attrs => `<${tag} ${attrs}>${children}</${tag}>`;
     const jsx = attrs =>
-      `<Svg width={20} height={20}><${tag} ${attrs}>${children}</${tag}></Svg>`;
-    it.each(Object.entries({...props, ...PAINT}))(
+      `<Svg width={20} height={20}>${DEFINITIONS}${shape(attrs)}</Svg>`;
+    // The shape as a clip's own, on a square: where its clipRule shows.
+    const clipJsx = attrs =>
+      `<Svg width={20} height={20}><ClipPath id="k">${shape(attrs)}</ClipPath>` +
+      '<Rect width={10} height={10} clipPath="url(#k)" /></Svg>';
+    it.each(Object.entries({...props, ...PAINT, ...MASKED}))(
       `<${tag}> lowers %s`,
       (name, sample) => {
         const [without, withProp] = pairOf(
           sample,
           tag === 'Path' && !Array.isArray(sample) ? 'd="M0 0 L5 5"' : base,
         );
+        const wrap = name === 'clipRule' ? clipJsx : jsx;
+        expect(gen(wrap(withProp))).not.toBe(gen(wrap(without)));
+      },
+    );
+  }
+
+  for (const tag of SVG_DEFINITION_TAGS) {
+    const reference = tag === 'ClipPath' ? 'clipPath' : 'mask';
+    const jsx = attrs =>
+      `<Svg width={20} height={20}>${DEFINITIONS}` +
+      `<${tag} id="d" ${attrs}><Rect width={10} height={10} /><Rect x={4} y={4} width={10} height={10} stroke="#fff" /></${tag}>` +
+      `<Rect width={10} height={10} ${reference}="url(#d)" /></Svg>`;
+    it.each(Object.entries(DEFINITION_SAMPLES[tag]))(
+      `<${tag}> lowers %s`,
+      (name, sample) => {
+        const [without, withProp] = pairOf(sample);
         expect(gen(jsx(withProp))).not.toBe(gen(jsx(without)));
       },
     );

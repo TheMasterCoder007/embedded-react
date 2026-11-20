@@ -565,3 +565,230 @@ describe('svgToVector — text', () => {
     expect(await inked(undefined)).toBe(0);
   });
 });
+
+describe('svgToVector — clip-path and mask', () => {
+  const MASK = 7;
+  const CLIP = 1;
+  const LUMINANCE = 2;
+  const ALPHA = 3;
+  const PAINT_STRIDE = 9;
+  const svg = (body: string): string =>
+    `<svg viewBox="0 0 100 100" width="100" height="100">${body}</svg>`;
+  /** The mask ops of a tape, as [kind, shapes] pairs in order. */
+  const maskOps = (ops: number[]): number[][] => {
+    const operands = [1, 2, 2, 4, 6, 6, 0, 2];
+    const found: number[][] = [];
+    for (let index = 0; index < ops.length; index += 1 + operands[ops[index]])
+      if (ops[index] === MASK) found.push([ops[index + 1], ops[index + 2]]);
+    return found;
+  };
+
+  it('bakes a clip-path ahead of the shape it clips, and stays a vector', async () => {
+    const artifact = await svgToVector(
+      svg(
+        '<clipPath id="c"><rect x="10" y="10" width="20" height="20"/></clipPath>' +
+          '<rect width="100" height="100" fill="red" clip-path="url(#c)"/>',
+      ),
+    );
+    expect(artifact.dropped).toEqual([]);
+    // MASK clip 1, the clip's rect on the shared clip paint, then the drawn rect.
+    expect(artifact.ops.slice(0, 8)).toEqual([
+      MASK,
+      CLIP,
+      1,
+      SHAPE,
+      0,
+      MOVE,
+      10,
+      10,
+    ]);
+    expect(maskOps(artifact.ops)).toEqual([[CLIP, 1]]);
+    expect(artifact.paints.length / PAINT_STRIDE).toBe(2);
+    expect(artifact.paints[PAINT_STRIDE]).toBe(0xffff0000);
+  });
+
+  it('clips every shape of a group once, and lifts the clip after it', async () => {
+    const artifact = await svgToVector(
+      svg(
+        '<clipPath id="c"><circle cx="50" cy="50" r="30"/></clipPath>' +
+          '<g clip-path="url(#c)"><rect width="100" height="50"/><rect y="50" width="100" height="50"/></g>' +
+          '<rect width="5" height="5"/>',
+      ),
+    );
+    expect(artifact.dropped).toEqual([]);
+    expect(maskOps(artifact.ops)).toEqual([
+      [CLIP, 1],
+      [0, 0],
+    ]);
+  });
+
+  it('reads clip-rule, a transform on the clipPath, and a clip-path given in a style', async () => {
+    const artifact = await svgToVector(
+      svg(
+        '<clipPath id="c" transform="translate(5 0)"><path d="M0 0L10 0L10 10Z" clip-rule="evenodd"/></clipPath>' +
+          '<rect width="100" height="100" style="clip-path:url(#c)"/>',
+      ),
+    );
+    expect(artifact.ops.slice(0, 8)).toEqual([
+      MASK,
+      CLIP,
+      1,
+      SHAPE,
+      0,
+      MOVE,
+      5,
+      0,
+    ]);
+    expect(artifact.paints[6]).toBe(1); // the clip paint's fill rule
+  });
+
+  it('places objectBoundingBox clip units across the element, in its own space', async () => {
+    const artifact = await svgToVector(
+      svg(
+        '<clipPath id="c" clipPathUnits="objectBoundingBox"><rect width="0.5" height="1"/></clipPath>' +
+          '<rect x="20" y="40" width="40" height="10" transform="translate(100 0)" clip-path="url(#c)"/>',
+      ),
+    );
+    // Half the box's width, moved with the rect.
+    expect(artifact.ops.slice(3, 14)).toEqual([
+      SHAPE,
+      0,
+      MOVE,
+      120,
+      40,
+      LINE,
+      140,
+      40,
+      LINE,
+      140,
+      50,
+    ]);
+  });
+
+  it('bakes a mask with its shapes painted, by luminance or by alpha', async () => {
+    const body = (type: string): string =>
+      svg(
+        '<linearGradient id="g"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="black"/></linearGradient>' +
+          `<mask id="m"${type}><rect width="100" height="100" fill="url(#g)"/><circle cx="50" cy="50" r="10" fill="white" opacity="0.5"/></mask>` +
+          '<rect width="100" height="100" fill="blue" mask="url(#m)"/>',
+      );
+    const luminance = await svgToVector(body(''));
+    expect(luminance.dropped).toEqual([]);
+    expect(maskOps(luminance.ops)).toEqual([[LUMINANCE, 2]]);
+    expect(luminance.gradients).toHaveLength(1);
+    expect(luminance.paints[7]).toBe(1); // the mask rect's gradient
+    expect(luminance.paints[PAINT_STRIDE]).toBe(0x80ffffff);
+    const alpha = await svgToVector(body(' mask-type="alpha"'));
+    expect(maskOps(alpha.ops)).toEqual([[ALPHA, 2]]);
+  });
+
+  it("adds a mask's box as a clip only when the mask paints past a box smaller than its element", async () => {
+    const mask = (attributes: string): string =>
+      svg(
+        `<mask id="m" ${attributes}><rect width="100" height="100" fill="white"/></mask>` +
+          '<rect x="10" y="10" width="20" height="20" mask="url(#m)"/>',
+      );
+    // The default box is a tenth past the element on every side.
+    expect(maskOps((await svgToVector(mask(''))).ops)).toEqual([
+      [LUMINANCE, 1],
+    ]);
+    const narrowed = await svgToVector(
+      mask('x="0" y="0" width="0.5" height="1"'),
+    );
+    expect(maskOps(narrowed.ops)).toEqual([
+      [CLIP, 1],
+      [LUMINANCE, 1],
+    ]);
+    expect(narrowed.ops.slice(3, 11)).toEqual([
+      SHAPE,
+      1, // the box's paint, after the mask rect's
+      MOVE,
+      10,
+      10,
+      LINE,
+      20,
+      10,
+    ]);
+    const userSpace = await svgToVector(
+      mask('maskUnits="userSpaceOnUse" x="0" y="0" width="15" height="100"'),
+    );
+    expect(userSpace.ops.slice(5, 11)).toEqual([MOVE, 0, 0, LINE, 15, 0]);
+  });
+
+  it("narrows a clip by the clipPath's own clip-path, and nests a clipped shape in a clipped group", async () => {
+    const artifact = await svgToVector(
+      svg(
+        '<clipPath id="a"><rect width="50" height="100"/></clipPath>' +
+          '<clipPath id="b" clip-path="url(#a)"><rect width="100" height="50"/></clipPath>' +
+          '<clipPath id="c"><circle cx="50" cy="50" r="40"/></clipPath>' +
+          '<g clip-path="url(#c)"><rect width="100" height="100" clip-path="url(#b)"/><rect width="9" height="9"/></g>',
+      ),
+    );
+    expect(artifact.dropped).toEqual([]);
+    expect(maskOps(artifact.ops)).toEqual([
+      [CLIP, 1], // c
+      [CLIP, 1], // a
+      [CLIP, 1], // b
+      [0, 0],
+      [CLIP, 1], // c again, for the group's second shape
+    ]);
+  });
+
+  it('leaves what it cannot apply to the raster fallback', async () => {
+    const unknown = await svgToVector(
+      svg('<rect width="9" height="9" clip-path="url(#nope)"/>'),
+    );
+    expect(unknown.dropped).toEqual(['clip-path']);
+    const shape = await svgToVector(
+      svg('<rect width="9" height="9" clip-path="circle(40%)"/>'),
+    );
+    expect(shape.dropped).toEqual(['clip-path']);
+    const inside = await svgToVector(
+      svg(
+        '<clipPath id="a"><rect width="5" height="5"/></clipPath>' +
+          '<clipPath id="b"><rect width="9" height="9" clip-path="url(#a)"/></clipPath>' +
+          '<rect width="9" height="9" clip-path="url(#b)"/>',
+      ),
+    );
+    expect(inside.dropped).toEqual(['clipPath child with a clip-path or mask']);
+    const looped = await svgToVector(
+      svg(
+        '<clipPath id="a" clip-path="url(#a)"><rect width="5" height="5"/></clipPath>' +
+          '<rect width="9" height="9" clip-path="url(#a)"/>',
+      ),
+    );
+    expect(looped.dropped).toEqual(['clipPath that applies itself']);
+    const clips = Array.from(
+      {length: 5},
+      (_, index) =>
+        `<clipPath id="c${index}"><rect width="50" height="50"/></clipPath>`,
+    ).join('');
+    const deep = await svgToVector(
+      svg(
+        `${clips}<g clip-path="url(#c0)"><g clip-path="url(#c1)"><g clip-path="url(#c2)"><g clip-path="url(#c3)">` +
+          '<rect width="9" height="9" clip-path="url(#c4)"/></g></g></g></g>',
+      ),
+    );
+    expect(deep.dropped).toEqual(['clip-path and mask nesting']);
+  });
+
+  it('matches the rasterized reference where a clip and a mask apply', async () => {
+    // The clip's and the mask's own shapes never show: only the masked square's pixels are drawn.
+    const artifact = await svgToVector(
+      svg(
+        '<clipPath id="c"><rect x="0" y="0" width="60" height="100" fill="red"/></clipPath>' +
+          '<mask id="m"><rect width="100" height="100" fill="#808080"/></mask>' +
+          '<rect x="20" y="20" width="60" height="60" fill="blue" clip-path="url(#c)" mask="url(#m)"/>',
+      ),
+    );
+    expect(artifact.dropped).toEqual([]);
+    expect(maskOps(artifact.ops)).toEqual([
+      [CLIP, 1],
+      [LUMINANCE, 1],
+    ]);
+    // The grey mask rect, then the drawn square: no red paint is in the table.
+    expect(
+      Array.from(artifact.paints).filter(value => value === 0xffff0000),
+    ).toEqual([]);
+  });
+});

@@ -735,8 +735,50 @@ export interface SvgProps extends SvgPaintProps, TouchEventProps {
 }
 
 /** Groups shapes under one paint and an optional translate/scale, composed with any enclosing <G>. */
-export interface GProps extends SvgPaintProps {
+/** What a shape or <G> is clipped or masked by. */
+export interface SvgMaskedProps {
+  /** A <ClipPath> in the same <Svg>, as `url(#id)`: the element shows only inside its shapes. */
+  clipPath?: string;
+  /** A <Mask> in the same <Svg>, as `url(#id)`: the element shows as far as the mask is light. */
+  mask?: string;
+}
+
+/**
+ * A clip: an element with `clipPath="url(#id)"` shows only inside these shapes. It draws nothing itself,
+ * and its shapes' colors are not read.
+ */
+export interface ClipPathProps extends SvgMaskedProps {
+  id?: string;
   children?: ReactNode;
+  /** `objectBoundingBox` places the shapes across the clipped element's box, 0 to 1 each way. */
+  clipPathUnits?: 'userSpaceOnUse' | 'objectBoundingBox';
+  /** How a shape's area is worked out, for every shape that does not give its own. */
+  clipRule?: 'nonzero' | 'evenodd';
+}
+
+/**
+ * A mask: an element with `mask="url(#id)"` shows as far as these shapes are light (or opaque, with
+ * `maskType="alpha"`). It draws nothing itself.
+ */
+export interface MaskProps extends SvgPaintProps, SvgMaskedProps {
+  id?: string;
+  children?: ReactNode;
+  maskType?: 'luminance' | 'alpha';
+  /** The box the mask stops at. Defaults to a tenth past the masked element's box on every side. */
+  x?: SvgNumber;
+  y?: SvgNumber;
+  width?: SvgNumber;
+  height?: SvgNumber;
+  /** What `x`, `y`, `width` and `height` are in. Defaults to `objectBoundingBox`. */
+  maskUnits?: 'userSpaceOnUse' | 'objectBoundingBox';
+  /** `objectBoundingBox` places the shapes across the masked element's box, 0 to 1 each way. */
+  maskContentUnits?: 'userSpaceOnUse' | 'objectBoundingBox';
+}
+
+export interface GProps extends SvgPaintProps, SvgMaskedProps {
+  children?: ReactNode;
+  /** Inside a <ClipPath>: how its shapes' areas are worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
   x?: SvgNumber;
   y?: SvgNumber;
   translateX?: SvgNumber;
@@ -744,26 +786,34 @@ export interface GProps extends SvgPaintProps {
   scale?: SvgNumber;
 }
 
-export interface PathProps extends SvgPaintProps {
+export interface PathProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
   /** Path data. M/L/H/V/C/S/Q/T/A/Z, absolute and relative. Parsing a `d` string costs more than the
    *  primitive shapes — prefer <Circle>/<Rect>/<Arc> for anything rebuilt per frame. */
   d?: string;
 }
 
-export interface CircleProps extends SvgPaintProps {
+export interface CircleProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
   cx?: SvgNumber;
   cy?: SvgNumber;
   r?: SvgNumber;
 }
 
-export interface EllipseProps extends SvgPaintProps {
+export interface EllipseProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
   cx?: SvgNumber;
   cy?: SvgNumber;
   rx?: SvgNumber;
   ry?: SvgNumber;
 }
 
-export interface RectProps extends SvgPaintProps {
+export interface RectProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
   x?: SvgNumber;
   y?: SvgNumber;
   width?: SvgNumber;
@@ -774,7 +824,9 @@ export interface RectProps extends SvgPaintProps {
   ry?: SvgNumber;
 }
 
-export interface LineProps extends SvgPaintProps {
+export interface LineProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
   x1?: SvgNumber;
   y1?: SvgNumber;
   x2?: SvgNumber;
@@ -786,7 +838,9 @@ export interface LineProps extends SvgPaintProps {
  * 12 o'clock. It emits a native arc op — no `d` parsing or bezier conversion — so it is cheap enough to
  * rebuild every drag frame.
  */
-export interface ArcProps extends SvgPaintProps {
+export interface ArcProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
   cx?: SvgNumber;
   cy?: SvgNumber;
   r?: SvgNumber;
@@ -799,7 +853,9 @@ export interface ArcProps extends SvgPaintProps {
  * font file, so the text and everything that places it must be constants: literals, module-level constants,
  * or an imported font. Paint may change at run time. For text that changes, put a <Text> over the <Svg>.
  */
-export interface SvgTextProps extends SvgPaintProps {
+export interface SvgTextProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
   /** The text. */
   children?: string | number;
   /** Where the baseline starts, or its middle or end by `textAnchor`. */
@@ -830,6 +886,8 @@ export const Line: (props: LineProps) => JSX.Element;
 export const G: (props: GProps) => JSX.Element;
 export const Arc: (props: ArcProps) => JSX.Element;
 export const SvgText: (props: SvgTextProps) => JSX.Element;
+export const ClipPath: (props: ClipPathProps) => JSX.Element;
+export const Mask: (props: MaskProps) => JSX.Element;
 
 // --- StyleSheet ------------------------------------------------------------
 export const StyleSheet: {

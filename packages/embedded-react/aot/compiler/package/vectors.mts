@@ -60,6 +60,7 @@ const VECTOR_OPCODES: Record<string, number> = {
   ER_VECTOR_OP_CUBIC: 4,
   ER_VECTOR_OP_ARC: 5,
   ER_VECTOR_OP_CLOSE: 6,
+  ER_VECTOR_OP_MASK: 7,
 };
 
 const CHAIN_OPCODES = {'+': 'FADD', '-': 'FSUB', '*': 'FMUL'} as const;

@@ -1412,6 +1412,13 @@ const SCENARIOS: Scenario[] = [
     file: fixture('svg-text-source'),
     screen: PORTRAIT,
   },
+  // Clips and masks: inline, which Flow A draws the same, and from a .svg file.
+  {name: 'svg-mask', file: fixture('svg-mask'), screen: PORTRAIT, flowA: true},
+  {
+    name: 'svg-mask-source',
+    file: fixture('svg-mask-source'),
+    screen: PORTRAIT,
+  },
   {name: 'hooks', file: fixture('hooks'), screen: PORTRAIT},
   {
     name: 'hooks-taps',
