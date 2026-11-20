@@ -694,8 +694,19 @@ export interface VectorGradient {
  * `fill="none"` on anything meant to be stroke-only.
  */
 export interface SvgPaintProps {
+  /** A color, or `url(#id)` naming a <LinearGradient> or <RadialGradient> in the same <Svg>. */
   fill?: string;
+  /** A color, or `url(#id)` naming a <LinearGradient> or <RadialGradient> in the same <Svg>. */
   stroke?: string;
+  /** 0 to 1, multiplied into the fill's alpha, gradients included. */
+  fillOpacity?: SvgNumber;
+  /** 0 to 1, multiplied into the stroke's alpha, gradients included. */
+  strokeOpacity?: SvgNumber;
+  /**
+   * 0 to 1, multiplied into the fill and the stroke. A <G>'s multiplies into its shapes', each faded on its own,
+   * so where they overlap they show through each other.
+   */
+  opacity?: SvgNumber;
   strokeWidth?: SvgNumber;
   strokeLinecap?: 'butt' | 'round' | 'square';
   strokeLinejoin?: 'miter' | 'round' | 'bevel';
@@ -843,6 +854,63 @@ export interface LineProps extends SvgPaintProps, SvgMaskedProps {
   y2?: SvgNumber;
 }
 
+/** Points as `'x1,y1 x2,y2 …'`, or as a flat list of numbers. */
+export type SvgPoints = string | readonly SvgNumber[];
+
+/** A closed shape through its points. */
+export interface PolygonProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
+  points?: SvgPoints;
+}
+
+/** An open line through its points. */
+export interface PolylineProps extends SvgPaintProps, SvgMaskedProps {
+  /** Inside a <ClipPath>: how this shape's area is worked out. */
+  clipRule?: 'nonzero' | 'evenodd';
+  points?: SvgPoints;
+}
+
+/** Holds gradients, clips and masks. Nothing in it is drawn where it sits. */
+export interface DefsProps {
+  children?: ReactNode;
+}
+
+/** What a gradient's coordinates are in: the painted shape's box, 0 to 1 each way (the default), or its own units. */
+export type GradientUnits = 'objectBoundingBox' | 'userSpaceOnUse';
+
+/** A gradient along a line, used as `fill="url(#id)"` or `stroke="url(#id)"`. Holds <Stop>s. */
+export interface LinearGradientProps {
+  id?: string;
+  children?: ReactNode;
+  /** Where the line starts and ends: numbers, or percentages such as `'50%'`. Defaults to across the box. */
+  x1?: SvgNumber;
+  y1?: SvgNumber;
+  x2?: SvgNumber;
+  y2?: SvgNumber;
+  gradientUnits?: GradientUnits;
+}
+
+/** A gradient out from a centre, used as `fill="url(#id)"` or `stroke="url(#id)"`. Holds <Stop>s. */
+export interface RadialGradientProps {
+  id?: string;
+  children?: ReactNode;
+  /** The centre and radius: numbers, or percentages such as `'50%'`. Default to a circle filling the box. */
+  cx?: SvgNumber;
+  cy?: SvgNumber;
+  r?: SvgNumber;
+  gradientUnits?: GradientUnits;
+}
+
+/** One color along a gradient. Up to 8 per gradient. */
+export interface StopProps {
+  /** 0 to 1, or a percentage such as `'50%'`. A stop before the one ahead of it is moved up to it. */
+  offset?: SvgNumber;
+  stopColor?: string;
+  /** 0 to 1, multiplied into the stop's alpha. */
+  stopOpacity?: SvgNumber;
+}
+
 /**
  * Circular-arc convenience primitive (not a standard SVG element). Angles are DEGREES clockwise from
  * 12 o'clock. It emits a native arc op — no `d` parsing or bezier conversion — so it is cheap enough to
@@ -893,7 +961,13 @@ export const Circle: (props: CircleProps) => JSX.Element;
 export const Ellipse: (props: EllipseProps) => JSX.Element;
 export const Rect: (props: RectProps) => JSX.Element;
 export const Line: (props: LineProps) => JSX.Element;
+export const Polygon: (props: PolygonProps) => JSX.Element;
+export const Polyline: (props: PolylineProps) => JSX.Element;
 export const G: (props: GProps) => JSX.Element;
+export const Defs: (props: DefsProps) => JSX.Element;
+export const LinearGradient: (props: LinearGradientProps) => JSX.Element;
+export const RadialGradient: (props: RadialGradientProps) => JSX.Element;
+export const Stop: (props: StopProps) => JSX.Element;
 export const Arc: (props: ArcProps) => JSX.Element;
 export const SvgText: (props: SvgTextProps) => JSX.Element;
 export const ClipPath: (props: ClipPathProps) => JSX.Element;

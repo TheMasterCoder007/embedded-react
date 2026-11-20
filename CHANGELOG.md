@@ -33,8 +33,17 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Dashed strokes in an `.svg` file are drawn by the vector rasteriser, so a file that uses them stays a
   vector.
 - `<use>`, `<symbol>`, `<pattern>` fills and embedded images in an `.svg` file are drawn as vectors.
+- `<Polygon>`, `<Polyline>`, `<Defs>`, `<LinearGradient>`, `<RadialGradient>` and `<Stop>` inside an
+  `<Svg>`, in both flows, with `fill="url(#id)"` and `stroke="url(#id)"`.
+- `fillOpacity`, `strokeOpacity` and `opacity` on `<Svg>`, `<G>` and every shape.
+- The Svg docs list each element and attribute for a file and inline.
 
 ### Changed
+
+- In an `.svg` file, an `opacity` multiplies into the one around it, `fill-opacity` and `stroke-opacity` fade a
+  gradient, and a gradient with one stop paints its colour.
+- A gradient fill or stroke carries its middle colour, so a board built without radial gradients draws a
+  radial one as that colour instead of nothing.
 
 - Asset packs are now version 3: the engine reads a font's glyph tables from the pack in place, so they take
   no RAM. Older packs no longer load, so rebuild the app with this version.

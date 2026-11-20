@@ -29,10 +29,14 @@ import type {
   ClipPathProps,
   EllipseProps,
   GProps,
+  LinearGradientProps,
   LineProps,
   MaskProps,
   PathProps,
+  PolygonProps,
+  RadialGradientProps,
   RectProps,
+  StopProps,
   SvgPaintProps,
   SvgProps,
   VectorGradient,
@@ -76,7 +80,7 @@ export interface VectorArtifact {
 export type ColorInput = string | number | null | undefined | false;
 
 /** Scale then translate, per axis. */
-interface Transform {
+export interface Transform {
   scaleX: number;
   scaleY: number;
   translateX: number;
@@ -117,9 +121,19 @@ type ShapeProps = GProps &
   EllipseProps &
   RectProps &
   LineProps &
+  PolygonProps &
   ArcProps &
   ClipPathProps &
-  MaskProps;
+  MaskProps &
+  LinearGradientProps &
+  RadialGradientProps &
+  StopProps;
+
+/** A fill or stroke as a paint record holds it: a color, and a gradient drawn instead of it, or null. */
+export interface PaintSource {
+  color: number;
+  gradient: PackedGradient | null;
+}
 
 /** A clip or mask as tape values: its op, then the shapes it takes. */
 export interface MaskGroup {
@@ -252,6 +266,14 @@ function lerpArgb(
       channel(0)) >>>
     0
   );
+}
+
+/**
+ * The solid color a gradient paint carries beside it: its middle color. The engine draws it only when it drops
+ * the gradient, as a board built without radial gradients does with a radial one.
+ */
+export function gradientFallback(stops: readonly PackedStop[]): number {
+  return evalStopsAt(stops as PackedStop[], 0.5);
 }
 
 /** Gradient color at `position` (stops ascending by offset; clamps to the endpoint colors). */
@@ -904,6 +926,25 @@ function rectOps(props: RectProps): number[] {
   return rectOpsXY(x, y, width, height, rx, ry);
 }
 
+/** Points, as a string or a list of numbers, as a `d` string: open, or closed for a polygon. Fewer than two
+ *  points draw nothing. Returned as a string so it goes through the same parse cache as <Path d>. */
+export function polyPathD(points: unknown, close: boolean): string {
+  const values = (
+    Array.isArray(points)
+      ? points
+      : String(points ?? '')
+          .trim()
+          .split(/[\s,]+/)
+  )
+    .map(value => (typeof value === 'number' ? value : parseFloat(value)))
+    .filter(value => Number.isFinite(value));
+  if (values.length < 4) return '';
+  let d = `M${values[0]} ${values[1]}`;
+  for (let index = 2; index + 1 < values.length; index += 2)
+    d += `L${values[index]} ${values[index + 1]}`;
+  return close ? `${d}Z` : d;
+}
+
 function lineOps(props: LineProps): number[] {
   return [
     VOP_MOVE,
@@ -1063,7 +1104,13 @@ function pushGrad(
   gradients: PackedGradient[],
   gradient: VectorGradient,
 ): number {
-  gradients.push({
+  gradients.push(packGradient(gradient));
+  return gradients.length;
+}
+
+/** A gradient descriptor with its stop colors packed, and faded by `opacity`. */
+function packGradient(gradient: VectorGradient, opacity = 1): PackedGradient {
+  return {
     type: gradient.type,
     ax: gradient.ax,
     ay: gradient.ay,
@@ -1071,12 +1118,137 @@ function pushGrad(
     by: gradient.by,
     r: gradient.r,
     stops: (gradient.stops || []).map(stop => ({
-      color:
+      color: fadeColor(
         typeof stop.color === 'string' ? parseColor(stop.color) : stop.color,
+        opacity,
+      ),
       offset: stop.offset,
     })),
-  });
-  return gradients.length;
+  };
+}
+
+// --- Opacity and gradients by reference ------------------------------------------------------------
+
+const PERCENT = 100;
+
+function clamp01(value: number): number {
+  return value < 0 ? 0 : value > 1 ? 1 : value;
+}
+
+/** An opacity prop as 0 to 1; anything that is not a number is 1. */
+export function opacityOf(value: unknown): number {
+  return clamp01(num(value, 1));
+}
+
+/** An ARGB color with its alpha multiplied by `factor`. */
+export function fadeColor(argb: number, factor: number): number {
+  if (factor >= 1) return argb >>> 0;
+  const alpha = Math.round(((argb >>> ALPHA_SHIFT) & 0xff) * clamp01(factor));
+  return ((alpha << ALPHA_SHIFT) | (argb & 0xffffff)) >>> 0;
+}
+
+/** A gradient coordinate or stop offset: a number, or a percentage as a fraction (`'50%'` is 0.5). */
+export function gradientNumber(value: unknown, fallback: number): number {
+  const parsed =
+    typeof value === 'string' && value.trim().endsWith('%')
+      ? parseFloat(value) / PERCENT
+      : num(value, fallback);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/** A gradient's stops before packing: a color, an offset and an opacity, each as written. */
+export interface StopInput {
+  color: ColorInput;
+  offset: unknown;
+  opacity: unknown;
+}
+
+/**
+ * A gradient's stops, packed: each offset clamped to 0..1 and never behind the stop before it, as in SVG, and
+ * each color faded by its stop's opacity. A stop with no color is black.
+ */
+export function packStops(stops: readonly StopInput[]): PackedStop[] {
+  const packed: PackedStop[] = [];
+  let floor = 0;
+  for (const stop of stops) {
+    const offset = Math.max(floor, clamp01(gradientNumber(stop.offset, 0)));
+    floor = offset;
+    packed.push({
+      color: fadeColor(
+        parseColor(stop.color ?? 'black'),
+        opacityOf(stop.opacity),
+      ),
+      offset,
+    });
+  }
+  return packed;
+}
+
+/** What a gradient element is placed by: its tag and its props. */
+export interface GradientElement {
+  type: 'LinearGradient' | 'RadialGradient';
+  props: LinearGradientProps & RadialGradientProps;
+}
+
+/**
+ * A <LinearGradient> or <RadialGradient> placed on one shape, in the tape's coordinates. In `objectBoundingBox`
+ * units, the default, it spans `box`, the shape's box before `transform`. A radial across a box that is not
+ * square takes the circle of the same area, as a file's does.
+ */
+export function placeGradient(
+  element: GradientElement,
+  stops: PackedStop[],
+  box: TapeBounds | null,
+  transform: Transform,
+): PackedGradient {
+  const props = element.props;
+  const area =
+    props.gradientUnits === 'userSpaceOnUse'
+      ? null
+      : (box ?? {x: 0, y: 0, width: 0, height: 0});
+  const place = (x: number, y: number): [number, number] => {
+    const userX = area ? area.x + x * area.width : x;
+    const userY = area ? area.y + y * area.height : y;
+    return [
+      userX * transform.scaleX + transform.translateX,
+      userY * transform.scaleY + transform.translateY,
+    ];
+  };
+  if (element.type === 'RadialGradient') {
+    const [ax, ay] = place(
+      gradientNumber(props.cx, 0.5),
+      gradientNumber(props.cy, 0.5),
+    );
+    const radius =
+      gradientNumber(props.r, 0.5) *
+      (area ? Math.sqrt(area.width * area.height) : 1) *
+      Math.sqrt(Math.abs(transform.scaleX * transform.scaleY));
+    return {type: GRAD_RADIAL, stops, ax, ay, bx: 0, by: 0, r: radius};
+  }
+  const [ax, ay] = place(
+    gradientNumber(props.x1, 0),
+    gradientNumber(props.y1, 0),
+  );
+  const [bx, by] = place(
+    gradientNumber(props.x2, 1),
+    gradientNumber(props.y2, 0),
+  );
+  return {type: GRAD_LINEAR, stops, ax, ay, bx, by, r: 0};
+}
+
+/** A packed gradient with its stops faded by `opacity`. */
+function fadeGradient(
+  gradient: PackedGradient,
+  opacity: number,
+): PackedGradient {
+  if (opacity >= 1) return gradient;
+  return {
+    ...gradient,
+    stops: gradient.stops.map(stop => ({
+      color: fadeColor(stop.color, opacity),
+      offset: stop.offset,
+    })),
+  };
 }
 
 // --- Dashed strokes --------------------------------------------------------------------------------
@@ -1311,7 +1483,7 @@ export function tapeBounds(ops: readonly number[]): TapeBounds | null {
 }
 
 /** `url(#id)` as its id, or null. */
-export function maskReference(value: unknown): string | null {
+export function urlReference(value: unknown): string | null {
   const match =
     typeof value === 'string' &&
     value.trim().match(/^url\(\s*#([^)\s]+)\s*\)$/);
@@ -1323,6 +1495,9 @@ export function maskReference(value: unknown): string | null {
 const PAINT_DEFAULT: ResolvedPaint = {
   fill: 'black',
   stroke: 'none',
+  fillOpacity: 1,
+  strokeOpacity: 1,
+  opacity: 1,
   strokeWidth: DEFAULT_STROKE_WIDTH,
   strokeLinecap: 'butt',
   strokeLinejoin: 'miter',
@@ -1337,35 +1512,38 @@ const PAINT_DEFAULT: ResolvedPaint = {
 /** The props that make up a shape's paint; a <G> or the <Svg> itself passes them down. */
 export const PAINT_PROPS = Object.keys(PAINT_DEFAULT) as PaintProp[];
 
+/** Paint inherited from `base`, with `props` set over it. An opacity multiplies into the one it inherits. */
 function mergePaint(base: ResolvedPaint, props: SvgPaintProps): ResolvedPaint {
   const merged: Record<string, unknown> = {...base};
   for (const key of PAINT_PROPS)
-    if (props[key] != null) merged[key] = props[key];
+    if (props[key] != null)
+      merged[key] =
+        key === 'opacity'
+          ? opacityOf(base.opacity) * opacityOf(props.opacity)
+          : props[key];
   return merged as ResolvedPaint;
 }
 
 /** Maps the resolved paint to the PAINT_STRIDE-number record [fill, stroke, strokeWidth, miter, cap, join, rule,
- *  fillGradient, strokeGradient]. Any gradient descriptor is appended to `gradients` and referenced by its
- *  1-BASED index (0 = solid), the same encoding shapesToVector uses. */
+ *  fillGradient, strokeGradient]. A gradient is appended to `gradients` and referenced by its 1-BASED index
+ *  (0 = solid), the same encoding shapesToVector uses. */
 function paintRecord(
   paint: ResolvedPaint,
   scale: number,
   gradients: PackedGradient[],
+  fill: PaintSource,
+  stroke: PaintSource,
 ): number[] {
   return [
-    parseColor(paint.fill),
-    parseColor(paint.stroke),
+    fill.color,
+    stroke.color,
     num(paint.strokeWidth, DEFAULT_STROKE_WIDTH) * scale,
     num(paint.strokeMiterlimit, DEFAULT_MITER_LIMIT),
     CAP[paint.strokeLinecap] ?? CAP.butt,
     JOIN[paint.strokeLinejoin] ?? JOIN.miter,
     paint.fillRule === 'evenodd' ? FILL_RULE_EVEN_ODD : FILL_RULE_NONZERO,
-    paint.fillGradient && gradients
-      ? pushGrad(gradients, paint.fillGradient)
-      : 0,
-    paint.strokeGradient && gradients
-      ? pushGrad(gradients, paint.strokeGradient)
-      : 0,
+    fill.gradient ? gradients.push(fill.gradient) : 0,
+    stroke.gradient ? gradients.push(stroke.gradient) : 0,
   ];
 }
 
@@ -1472,15 +1650,132 @@ const SVG_TAGS = [
   'Ellipse',
   'Rect',
   'Line',
+  'Polygon',
+  'Polyline',
   'Arc',
   'SvgText',
   'G',
   'ClipPath',
   'Mask',
+  'Defs',
+  'LinearGradient',
+  'RadialGradient',
+  'Stop',
 ];
 
-/** The paint a clip's shapes share: only the fill rule is read. */
-const CLIP_PAINT: ResolvedPaint = {...PAINT_DEFAULT};
+/** Tags that are found by id and draw nothing where they sit, and what holds them. */
+const DEFINITION_TAGS = [
+  'ClipPath',
+  'Mask',
+  'Defs',
+  'LinearGradient',
+  'RadialGradient',
+  'Stop',
+];
+
+/** The tags a fill or stroke can name. */
+export const isGradientTag = (type: unknown): type is GradientElement['type'] =>
+  type === 'LinearGradient' || type === 'RadialGradient';
+
+/** No fill or stroke. */
+const NO_PAINT: PaintSource = {color: 0, gradient: null};
+
+/**
+ * A shape's path ops before any transform. Path-like geometry comes from a `d` string and is cached (parse and
+ * transform) by that string; the primitives build a fixed handful of numbers, which is cheaper than any lookup.
+ */
+function shapeGeometry(
+  type: unknown,
+  props: ShapeProps,
+): {entry: PathEntry | null; ops: number[] | null} {
+  // An <SvgText> arrives baked to a `d` by the build.
+  if ((type === 'Path' || type === 'SvgText') && props.d)
+    return {entry: pathEntry(props.d), ops: null}; // pathEntry coerces the key
+  if (type === 'Ellipse')
+    return {entry: pathEntry(ellipsePathD(props)), ops: null};
+  if (type === 'Polygon' || type === 'Polyline')
+    return {
+      entry: pathEntry(polyPathD(props.points, type === 'Polygon')),
+      ops: null,
+    };
+  if (type === 'Circle') return {entry: null, ops: circleOps(props)};
+  if (type === 'Rect') return {entry: null, ops: rectOps(props)};
+  if (type === 'Line') return {entry: null, ops: lineOps(props)};
+  if (type === 'Arc')
+    return {
+      entry: null,
+      ops: arcOpsCW(
+        num(props.cx, 0),
+        num(props.cy, 0),
+        num(props.r, 0),
+        num(props.startAngle, 0),
+        num(props.endAngle, 0),
+      ),
+    };
+  return {entry: null, ops: null};
+}
+
+/** A shape's box before any transform, which a gradient across it spans; null for a shape with no geometry. */
+export function shapeBounds(type: string, props: object): TapeBounds | null {
+  const {entry, ops} = shapeGeometry(type, props as ShapeProps);
+  return tapeBounds((entry ? entry.ops : ops) ?? []);
+}
+
+/**
+ * The paint a `url(#id)` fill or stroke gives: no stops paint nothing and one paints its color, as in SVG; more
+ * are placed as a gradient on the shape. Faded by `opacity`.
+ */
+export function gradientSource(
+  element: GradientElement,
+  stops: PackedStop[],
+  opacity: number,
+  box: () => TapeBounds | null,
+  transform: Transform,
+): PaintSource {
+  if (!stops.length) return NO_PAINT;
+  if (stops.length === 1)
+    return {color: fadeColor(stops[0].color, opacity), gradient: null};
+  return {
+    color: fadeColor(gradientFallback(stops), opacity),
+    // Only a gradient across the box needs it.
+    gradient: fadeGradient(
+      placeGradient(
+        element,
+        stops,
+        element.props.gradientUnits === 'userSpaceOnUse' ? null : box(),
+        transform,
+      ),
+      opacity,
+    ),
+  };
+}
+
+/** The <Stop>s in a gradient's children, packed. Anything else there is skipped. */
+export function elementStops(children: unknown): PackedStop[] {
+  const stops: StopInput[] = [];
+  const visit = (child: unknown): void => {
+    if (Array.isArray(child)) return child.forEach(visit);
+    if (!isElement(child)) return;
+    if (child.type === REACT_FRAGMENT) return visit(child.props.children);
+    if (child.type === 'Stop')
+      stops.push({
+        color: child.props.stopColor,
+        offset: child.props.offset,
+        opacity: child.props.stopOpacity,
+      });
+  };
+  visit(children);
+  return packStops(stops);
+}
+
+let _warnedSvgPaint = false;
+
+/** Warns once about a fill or stroke an <Svg> cannot paint as written. */
+function warnSvgPaint(message: string): void {
+  if (_warnedSvgPaint) return;
+  _warnedSvgPaint = true;
+  console.warn(`embedded-react: ${message}`);
+}
 
 /** A <Mask>'s box when it gives none: a tenth past its element's on every side. */
 const MASK_REGION_DEFAULT = {x: -0.1, y: -0.1, width: 1.2, height: 1.2};
@@ -1526,8 +1821,8 @@ function warnSvgChild(child: unknown): void {
 
 /**
  * Flattens an <Svg> element's props into {ops, paints, gradients} flat arrays for NativeUI.setVectorOps.
- * Handles Path/Circle/Ellipse/Rect/Line shapes, <G> grouping (inherited paint + translate/scale), and
- * a root viewBox -> width/height scale. Arrays and fragments are unwrapped at any depth, so a mapped
+ * Handles Path/Circle/Ellipse/Rect/Line/Polygon/Polyline shapes, <G> grouping (inherited paint + translate/scale),
+ * gradients a fill or stroke names as url(#id), and a root viewBox -> width/height scale. Arrays and fragments are unwrapped at any depth, so a mapped
  * list of shapes draws like an inline one. A shape's fillGradient/strokeGradient descriptor lands in
  * `gradients` and is referenced 1-based from its paint record. Returns empty arrays when there is
  * nothing to draw.
@@ -1556,7 +1851,7 @@ export function flattenSvg(props: SvgProps): VectorTape {
     }
   }
 
-  // <ClipPath> and <Mask> elements by id, wherever they sit; found on the first reference to one.
+  // Clips, masks and gradients by id, wherever they sit; found on the first reference to one.
   let definitions: Map<string, SvgElement> | null = null;
   const definition = (id: string): SvgElement | undefined => {
     if (!definitions) {
@@ -1565,7 +1860,9 @@ export function flattenSvg(props: SvgProps): VectorTape {
         if (Array.isArray(child)) return child.forEach(collect);
         if (!isElement(child)) return;
         if (
-          (child.type === 'ClipPath' || child.type === 'Mask') &&
+          (child.type === 'ClipPath' ||
+            child.type === 'Mask' ||
+            isGradientTag(child.type)) &&
           child.props.id != null
         )
           found.set(String(child.props.id), child);
@@ -1583,9 +1880,63 @@ export function flattenSvg(props: SvgProps): VectorTape {
     const key = rule === 'evenodd' ? 'evenodd' : 'nonzero';
     if (clipPaints[key] == null) {
       clipPaints[key] = paints.length / PAINT_STRIDE;
-      paints.push(...paintRecord({...CLIP_PAINT, fillRule: key}, 1, gradients));
+      paints.push(
+        ...paintRecord(
+          {...PAINT_DEFAULT, fillRule: key},
+          1,
+          gradients,
+          {color: OPAQUE_BLACK, gradient: null},
+          NO_PAINT,
+        ),
+      );
     }
     return clipPaints[key];
+  };
+
+  // A gradient's stops, packed once per element.
+  const stopCache = new Map<SvgElement, PackedStop[]>();
+
+  /**
+   * A fill or stroke: a color or a gradient faded by `opacity`. A `url(#id)` places the gradient it names on the
+   * shape, whose box before `transform` is `box`; one that names none paints nothing.
+   */
+  const paintSource = (
+    value: unknown,
+    descriptor: VectorGradient | null,
+    opacity: number,
+    box: () => TapeBounds | null,
+    transform: Transform,
+  ): PaintSource => {
+    const id = urlReference(value);
+    if (id == null)
+      return {
+        color: fadeColor(parseColor(value as ColorInput), opacity),
+        gradient: descriptor ? packGradient(descriptor, opacity) : null,
+      };
+    if (descriptor) {
+      const gradient = packGradient(descriptor, opacity);
+      return {color: gradientFallback(gradient.stops), gradient};
+    }
+    const found = definition(id);
+    if (!found || !isGradientTag(found.type)) {
+      warnSvgPaint(
+        `${JSON.stringify(value)} names no <LinearGradient> or <RadialGradient> in its <Svg>, and paints ` +
+          'nothing. Give the gradient an id and refer to it as url(#id).',
+      );
+      return NO_PAINT;
+    }
+    let stops = stopCache.get(found);
+    if (!stops) {
+      stops = elementStops(found.props.children);
+      stopCache.set(found, stops);
+    }
+    return gradientSource(
+      found as unknown as GradientElement,
+      stops,
+      opacity,
+      box,
+      transform,
+    );
   };
 
   // A definition's groups under one transform and box, kept so every shape under it shares them.
@@ -1605,7 +1956,7 @@ export function flattenSvg(props: SvgProps): VectorTape {
     ] as const) {
       const value = elementProps[prop];
       if (value == null || value === 'none') continue;
-      const id = maskReference(value);
+      const id = urlReference(value);
       const found = id == null ? undefined : definition(id);
       if (!found || found.type !== tag) {
         warnSvgMask(
@@ -1791,7 +2142,7 @@ export function flattenSvg(props: SvgProps): VectorTape {
         clipRule,
       );
     // A definition draws nothing where it sits.
-    if (child.type === 'ClipPath' || child.type === 'Mask') return;
+    if (DEFINITION_TAGS.includes(child.type as string)) return;
     const merged = mergePaint(paint, childProps);
     const childRule = childProps.clipRule ?? clipRule;
     let childTransform = transform;
@@ -1849,26 +2200,7 @@ export function flattenSvg(props: SvgProps): VectorTape {
         childRule,
       );
 
-    // Path/Ellipse geometry comes from a `d` string and is cached (parse + transform) by that string;
-    // the primitives build a fixed handful of numbers, which is cheaper than any cache lookup.
-    let entry: PathEntry | null = null;
-    let shapeOps: number[] | null = null;
-    // An <SvgText> arrives baked to a `d` by the build.
-    if ((child.type === 'Path' || child.type === 'SvgText') && childProps.d)
-      entry = pathEntry(childProps.d); // pathEntry coerces the key
-    else if (child.type === 'Ellipse')
-      entry = pathEntry(ellipsePathD(childProps));
-    else if (child.type === 'Circle') shapeOps = circleOps(childProps);
-    else if (child.type === 'Rect') shapeOps = rectOps(childProps);
-    else if (child.type === 'Line') shapeOps = lineOps(childProps);
-    else if (child.type === 'Arc')
-      shapeOps = arcOpsCW(
-        num(childProps.cx, 0),
-        num(childProps.cy, 0),
-        num(childProps.r, 0),
-        num(childProps.startAngle, 0),
-        num(childProps.endAngle, 0),
-      );
+    const {entry, ops: shapeOps} = shapeGeometry(child.type, childProps);
     const baseOps = entry ? entry.ops : shapeOps;
     if (!baseOps || baseOps.length === 0) return;
 
@@ -1881,7 +2213,30 @@ export function flattenSvg(props: SvgProps): VectorTape {
     else if (target.mode !== 'bounds') {
       paintIndex = target.paints.length / PAINT_STRIDE;
       const scale = (transform.scaleX + transform.scaleY) / 2; // stroke-width scale (uniform assumed)
-      const record = paintRecord(merged, scale, target.gradients);
+      // A gradient across the shape's box takes its box before the transform.
+      let box: TapeBounds | null | undefined;
+      const shapeBox = (): TapeBounds | null =>
+        box === undefined ? (box = tapeBounds(baseOps)) : box;
+      const opacity = opacityOf(merged.opacity);
+      const record = paintRecord(
+        merged,
+        scale,
+        target.gradients,
+        paintSource(
+          merged.fill,
+          merged.fillGradient,
+          opacity * opacityOf(merged.fillOpacity),
+          shapeBox,
+          transform,
+        ),
+        paintSource(
+          merged.stroke,
+          merged.strokeGradient,
+          opacity * opacityOf(merged.strokeOpacity),
+          shapeBox,
+          transform,
+        ),
+      );
       target.paints.push(...record);
       if (
         record[PAINT_STROKE_WIDTH_SLOT] > 0 &&

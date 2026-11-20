@@ -61,7 +61,11 @@ import {
   MASK_LUMINANCE,
   MaskWriter,
   maskGroup,
-  maskReference,
+  urlReference,
+  fadeColor,
+  gradientFallback,
+  opacityOf,
+  packStops,
   tapeBounds,
   tapeMaskProblem,
   tapeShapeCount,
@@ -70,6 +74,7 @@ import type {
   MaskGroup,
   PackedGradient,
   PackedStop,
+  StopInput,
   VectorArtifact,
 } from '../src/embedded-react/svg-ops.mts';
 import {
@@ -651,7 +656,12 @@ function resolvePaint(attributes: Attributes, inherited: Paint): Paint {
   const paint = {...inherited};
   for (const key of PAINT_KEYS) {
     const value = style[key] ?? attributes[key];
-    if (value != null) paint[key] = value;
+    if (value == null) continue;
+    // An opacity multiplies into the one around it.
+    paint[key] =
+      key === 'opacity'
+        ? String(opacityOf(inherited.opacity) * opacityOf(value))
+        : value;
   }
   return paint;
 }
@@ -677,25 +687,18 @@ function applyAlpha(argb: number, factor: number): number {
 
 /** Parses <stop>s into [{ color: uint32 (stop-opacity baked in), offset: 0..1 }], in authored order. */
 function parseStops(node: INode): PackedStop[] {
-  const stops: PackedStop[] = [];
+  const stops: StopInput[] = [];
   for (const child of node.children || []) {
     if (child.type !== 'element' || child.name !== 'stop') continue;
     const attributes = child.attributes || {};
     const style = parseStyle(attributes.style);
-    const color = style['stop-color'] ?? attributes['stop-color'] ?? 'black';
-    const stopOpacity = clamp01(
-      num(style['stop-opacity'] ?? attributes['stop-opacity'], 1),
-    );
-    const offsetText = String(attributes.offset ?? '0').trim();
-    const offset = offsetText.endsWith('%')
-      ? parseFloat(offsetText) / PERCENT
-      : parseFloat(offsetText);
     stops.push({
-      color: applyAlpha(parseColor(color), stopOpacity),
-      offset: clamp01(Number.isNaN(offset) ? 0 : offset),
+      color: style['stop-color'] ?? attributes['stop-color'],
+      offset: attributes.offset,
+      opacity: style['stop-opacity'] ?? attributes['stop-opacity'],
     });
   }
-  return stops;
+  return packStops(stops);
 }
 
 /** Collects every <linearGradient>/<radialGradient> by id (searched anywhere, including <defs>). */
@@ -1046,11 +1049,14 @@ export async function svgToVector(
     }
 
     const paintIndex = paints.length / PAINT_STRIDE;
-    const opacity = clamp01(num(paint.opacity, 1));
-    // A url(#id) fill/stroke referencing a parsed gradient bakes to a 1-based gradient-table index; the
-    // solid color stays 0 (colorOf returns 0 for url()). The shape's bbox is computed once, lazily.
+    const opacity = opacityOf(paint.opacity);
+    const fillOpacity = opacity * opacityOf(paint['fill-opacity']);
+    const strokeOpacity = opacity * opacityOf(paint['stroke-opacity']);
+    // A url(#id) fill/stroke referencing a parsed gradient bakes to a 1-based gradient-table index, faded by the
+    // paint's opacity; the solid color stays 0 (colorOf returns 0 for url()), except for a gradient of one stop,
+    // which paints its color. The shape's bbox is computed once, lazily.
     let bbox: BBox | null = null;
-    const gradientIndex = (reference: string | null): number => {
+    const gradientIndex = (reference: string | null, fade: number): number => {
       if (!reference) return 0;
       const definition = gradientDefinitions.get(reference);
       if (!definition || definition.stops.length < MIN_GRADIENT_STOPS) return 0;
@@ -1060,11 +1066,23 @@ export async function svgToVector(
         return 0;
       }
       if (!bbox) bbox = opsBBox(shapeOps);
-      gradients.push(bakeGradient(definition, matrix, bbox));
+      const baked = bakeGradient(definition, matrix, bbox);
+      gradients.push({
+        ...baked,
+        stops: baked.stops.map(stop => ({
+          color: fadeColor(stop.color, fade),
+          offset: stop.offset,
+        })),
+      });
       return gradients.length; // 1-based
     };
-    const fillGradient = gradientIndex(urlRef(paint.fill));
-    const strokeGradient = gradientIndex(urlRef(paint.stroke));
+    const fillGradient = gradientIndex(urlRef(paint.fill), fillOpacity);
+    const strokeGradient = gradientIndex(urlRef(paint.stroke), strokeOpacity);
+    /** A solid color: a gradient's middle color, which the engine draws only when it drops the gradient. */
+    const solid = (value: string): number => {
+      const stops = gradientDefinitions.get(urlRef(value) ?? '')?.stops;
+      return stops?.length ? gradientFallback(stops) : colorOf(value);
+    };
     target.writer?.use(masks);
     target.ops.push(
       VOP_SHAPE,
@@ -1073,14 +1091,8 @@ export async function svgToVector(
       ...transformOps(shapeOps, matrix),
     );
     paints.push(
-      applyAlpha(
-        colorOf(paint.fill ?? 'black'),
-        opacity * clamp01(num(paint['fill-opacity'], 1)),
-      ),
-      applyAlpha(
-        colorOf(paint.stroke ?? 'none'),
-        opacity * clamp01(num(paint['stroke-opacity'], 1)),
-      ),
+      applyAlpha(solid(paint.fill ?? 'black'), fillOpacity),
+      applyAlpha(solid(paint.stroke ?? 'none'), strokeOpacity),
       num(paint['stroke-width'], DEFAULT_STROKE_WIDTH) * scaleOf(matrix),
       num(paint['stroke-miterlimit'], DEFAULT_MITER_LIMIT),
       CAP[paint['stroke-linecap']] ?? 0,
@@ -1256,7 +1268,7 @@ export async function svgToVector(
     ]) {
       const value = styled(attributes, name);
       if (!value || value === 'none') continue;
-      const id = maskReference(value);
+      const id = urlReference(value);
       const definition = id == null ? undefined : maskDefinitions.get(id);
       if (!definition || definition.name !== tag) {
         dropped.add(name); // a shape function, or a reference to nothing

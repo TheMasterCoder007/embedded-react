@@ -443,33 +443,38 @@ import gauge from './gauge.svg';
 </Svg>
 ```
 
-| Prop              | Type              | Notes                                                                                                                                                                           |
-| ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prop              | Type              | Notes                                                                                                                                                                                                            |
+| ----------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `source`          | imported `.svg`   | Baked at build time to a vector tape, [text](#text), clips, masks, [patterns and images](#in-an-svg-file) included (or a raster, if the file uses filters). Scaled to the render box; shape children are ignored |
-| `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source` |
-| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then         |
-| paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                              |
+| `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source`                                  |
+| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then                                          |
+| paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                                                               |
 
-**Paint props**, on `<Svg>`, `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`
+**Paint props**, on `<Svg>`, `<G>` and every shape: `fill` and `stroke` (a colour, or `url(#id)` naming a
+[gradient](#gradients)), `fillOpacity`, `strokeOpacity` and `opacity` (0 to 1), `strokeWidth`, `strokeLinecap`
 (`butt`/`round`/`square`), `strokeLinejoin` (`miter`/`round`/`bevel`), `strokeMiterlimit`,
 `fillRule` (`nonzero`/`evenodd`), `strokeDasharray`/`strokeDashoffset` (see
 [Dashed strokes](#dashed-strokes)), and `fillGradient`/`strokeGradient`, a gradient
 `{type: 1 linear | 2 radial | 3 conic, stops: [{color, offset}], ax, ay, bx, by, r}` with up to 8
-stops. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and the
+stops. An `opacity` multiplies into the one on the `<G>` or `<Svg>` around it, and fades each shape on
+its own, so shapes that overlap in a faded `<G>` show through one another. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and the
 [named colours](./styles.md#colours).
 **An unfilled shape defaults to black**: set `fill="none"` on anything meant to be stroke-only.
 
-| Shape                  | Props                                                                                                                                                                                                  |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `<Path>`               | `d` (M/L/H/V/C/S/Q/T/A/Z, absolute and relative). Parsing `d` costs more than the primitives; prefer them for anything rebuilt per frame                                                               |
-| `<Circle>`             | `cx`, `cy`, `r`                                                                                                                                                                                        |
-| `<Ellipse>`            | `cx`, `cy`, `rx`, `ry`                                                                                                                                                                                 |
-| `<Rect>`               | `x`, `y`, `width`, `height`, `rx`, `ry` (a negative radius is `auto`, as in SVG; each is clamped to half its side)                                                                                     |
-| `<Line>`               | `x1`, `y1`, `x2`, `y2`                                                                                                                                                                                 |
-| `<Arc>`                | `cx`, `cy`, `r`, `startAngle`, `endAngle`: degrees clockwise from 12 o'clock. Not a standard SVG element; it emits a native arc op with no bezier conversion, cheap enough to rebuild every drag frame |
-| `<G>`                  | Groups shapes under one paint and an optional `x`/`y`/`translateX`/`translateY`/`scale`, composed with enclosing groups                                                                                |
-| `<SvgText>`            | Constant text as glyph outlines: `x`, `y`, `fontFamily`, `fontSize`, `fontWeight`, `letterSpacing`, `textAnchor`, `dominantBaseline`, `transform`. See [Text](#text)                                   |
-| `<ClipPath>`, `<Mask>` | Shapes another shape or `<G>` is shown through. See [Clips and masks](#clips-and-masks)                                                                                                                |
+| Shape                                            | Props                                                                                                                                                                                                  |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `<Path>`                                         | `d` (M/L/H/V/C/S/Q/T/A/Z, absolute and relative). Parsing `d` costs more than the primitives; prefer them for anything rebuilt per frame                                                               |
+| `<Circle>`                                       | `cx`, `cy`, `r`                                                                                                                                                                                        |
+| `<Ellipse>`                                      | `cx`, `cy`, `rx`, `ry`                                                                                                                                                                                 |
+| `<Rect>`                                         | `x`, `y`, `width`, `height`, `rx`, `ry` (a negative radius is `auto`, as in SVG; each is clamped to half its side)                                                                                     |
+| `<Line>`                                         | `x1`, `y1`, `x2`, `y2`                                                                                                                                                                                 |
+| `<Polygon>`, `<Polyline>`                        | `points`, as `'x1,y1 x2,y2 …'` or a flat list of numbers. A polygon is closed, a polyline open                                                                                                         |
+| `<Arc>`                                          | `cx`, `cy`, `r`, `startAngle`, `endAngle`: degrees clockwise from 12 o'clock. Not a standard SVG element; it emits a native arc op with no bezier conversion, cheap enough to rebuild every drag frame |
+| `<G>`                                            | Groups shapes under one paint and an optional `x`/`y`/`translateX`/`translateY`/`scale`, composed with enclosing groups                                                                                |
+| `<SvgText>`                                      | Constant text as glyph outlines: `x`, `y`, `fontFamily`, `fontSize`, `fontWeight`, `letterSpacing`, `textAnchor`, `dominantBaseline`, `transform`. See [Text](#text)                                   |
+| `<ClipPath>`, `<Mask>`                           | Shapes another shape or `<G>` is shown through. See [Clips and masks](#clips-and-masks)                                                                                                                |
+| `<LinearGradient>`, `<RadialGradient>`, `<Stop>` | Gradients a `fill` or `stroke` names. See [Gradients](#gradients)                                                                                                                                      |
+| `<Defs>`                                         | Holds gradients, clips and masks; nothing in it is drawn                                                                                                                                               |
 
 Limits: 16 shapes per `<Svg>` and 8 vector nodes at once, by default (`ERUI_VECTOR_PAINTS_MAX`,
 `ERUI_MAX_VECTOR_NODES`). Combine many tick marks into one `<Path>` with several subpaths.
@@ -529,6 +534,78 @@ animated one; a second animated value in one `<Svg>`, or a pattern past the limi
 
 In an `.svg` file, `stroke-dasharray` and `stroke-dashoffset` bake the same way. A file falls back to a
 raster when a pattern has a percentage in it or more than 8 dashes.
+
+### Gradients
+
+A `<LinearGradient>` or `<RadialGradient>` holds `<Stop>`s and draws nothing where it sits. A shape, `<G>` or
+`<Svg>` paints with one through `fill="url(#id)"` or `stroke="url(#id)"`; each shape it reaches is painted
+across its own box.
+
+```tsx
+<Svg width={120} height={120} viewBox="0 0 100 100">
+  <Defs>
+    <LinearGradient id="sky" x1={0} y1={0} x2={0} y2="100%">
+      <Stop offset={0} stopColor="#f0b020" />
+      <Stop offset={1} stopColor="#e04030" />
+    </LinearGradient>
+  </Defs>
+  <Polygon points="50,6 95,92 5,92" fill="url(#sky)" stroke="#202020" />
+</Svg>
+```
+
+| Element            | Props                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| `<LinearGradient>` | `id`, `x1`, `y1`, `x2`, `y2` (default across the box, left to right), `gradientUnits` |
+| `<RadialGradient>` | `id`, `cx`, `cy`, `r` (default a circle filling the box), `gradientUnits`             |
+| `<Stop>`           | `offset` (0 to 1, or `'50%'`), `stopColor`, `stopOpacity`                             |
+
+Coordinates are numbers or percentages. With `gradientUnits="objectBoundingBox"`, the default, they run 0 to
+1 across the painted shape's box; with `userSpaceOnUse` they are in the drawing's own units. A radial across
+a box that is not square takes the circle of the same area, as the engine draws circles only. A stop placed
+before the one ahead of it is moved up to it. A gradient with one stop paints that colour, and one with
+none paints nothing. `fillOpacity`, `strokeOpacity` and `opacity` fade a gradient as they fade a colour.
+Up to 8 stops; Flow A resamples a longer gradient down to 8, and Flow B fails the build. A board built
+without radial gradients (`ERUI_GRADIENT_RADIAL=0`, as the ESP32-S3 example is) draws a radial one as
+its middle colour, as it does a `.svg` file's.
+
+**Flow B:** in a state-driven `<Svg>`, gradients must be constant (a `fillGradient` can follow state), and
+one across a shape's box needs that shape's geometry constant: use `userSpaceOnUse` for a shape state moves.
+A `fill` or `stroke` that names no gradient, a `<Stop>` outside a gradient, or anything else inside one
+fails the build, where Flow A paints nothing for the reference and skips the rest.
+
+### Elements and attributes
+
+What an `.svg` file and an inline `<Svg>` each draw. Inline props are the file's attributes in camelCase
+(`stroke-width` is `strokeWidth`). A file may also give any paint attribute in a `style` attribute.
+
+| Element or attribute                                                     | In a file                                     | Inline                                                      |
+| ------------------------------------------------------------------------ | --------------------------------------------- | ----------------------------------------------------------- |
+| `svg`: `width`, `height`, `viewBox`                                      | Yes                                           | Yes                                                         |
+| `g`                                                                      | Yes, moved by `transform`                     | Yes, moved by `x`, `y`, `translateX`, `translateY`, `scale` |
+| `path`: `d`                                                              | Yes                                           | Yes                                                         |
+| `rect`: `x`, `y`, `width`, `height`, `rx`, `ry`                          | Yes                                           | Yes                                                         |
+| `circle`: `cx`, `cy`, `r`                                                | Yes                                           | Yes                                                         |
+| `ellipse`: `cx`, `cy`, `rx`, `ry`                                        | Yes                                           | Yes                                                         |
+| `line`: `x1`, `y1`, `x2`, `y2`                                           | Yes                                           | Yes                                                         |
+| `polygon`, `polyline`: `points`                                          | Yes                                           | Yes                                                         |
+| `<Arc>`                                                                  | No                                            | Yes, not a standard element                                 |
+| `text`, `tspan`                                                          | Yes, see [Text](#text)                        | As `<SvgText>`, see [Text](#text)                           |
+| `defs`                                                                   | Yes                                           | Yes                                                         |
+| `linearGradient`: `x1`, `y1`, `x2`, `y2`, `gradientUnits`                | Yes                                           | Yes                                                         |
+| `radialGradient`: `cx`, `cy`, `r`, `gradientUnits`                       | Yes                                           | Yes                                                         |
+| `gradientTransform` on a gradient                                        | Yes                                           | No                                                          |
+| `stop`: `offset`, `stop-color`, `stop-opacity`                           | Yes                                           | Yes                                                         |
+| `clipPath`, `mask`                                                       | Yes, and `transform` on a `clipPath`          | Yes, see [Clips and masks](#clips-and-masks)                |
+| `use`, `symbol`, `pattern`, `image` (a `data:` URL)                      | Yes, see [In an `.svg` file](#in-an-svg-file) | No                                                          |
+| `filter`, `foreignObject` and other elements                             | The whole file falls back to a raster         | No                                                          |
+| `fill`, `stroke`: a colour or `url(#id)`                                 | Yes, and `url(#id)` naming a `pattern`        | Yes                                                         |
+| `fill-opacity`, `stroke-opacity`, `opacity`                              | Yes                                           | Yes                                                         |
+| `stroke-width`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit` | Yes                                           | Yes                                                         |
+| `fill-rule`, `clip-rule`                                                 | Yes                                           | Yes                                                         |
+| `stroke-dasharray`, `stroke-dashoffset`                                  | Yes                                           | Yes, and an animated `strokeDashoffset`                     |
+| `clip-path`, `mask`: `url(#id)`                                          | Yes                                           | Yes                                                         |
+| `transform` on a shape                                                   | Yes                                           | No; `<SvgText>` takes one                                   |
+| `fillGradient`, `strokeGradient`                                         | No                                            | Yes, including a conic gradient                             |
 
 ### Clips and masks
 

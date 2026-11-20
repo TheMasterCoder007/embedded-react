@@ -80,6 +80,12 @@ const HOST = {
 const PAINT = {
   fill: 'fill="#f00"',
   stroke: 'stroke="#f00"',
+  fillOpacity: 'fillOpacity={0.5}',
+  strokeOpacity: base => [
+    `${base} stroke="#f00"`,
+    `${base} stroke="#f00" strokeOpacity={0.5}`,
+  ],
+  opacity: 'opacity={0.5}',
   strokeWidth: 'strokeWidth={3}',
   strokeLinecap: 'strokeLinecap="round"',
   strokeLinejoin: 'strokeLinejoin="round"',
@@ -110,8 +116,31 @@ const MASKED = {
   clipRule: 'clipRule="evenodd"',
 };
 
-/** A clip's and a mask's own props, on one applied to a 10 by 10 square. */
+/** Two stops for a gradient sample. */
+const STOPS =
+  '<Stop offset={0} stopColor="#f00" /><Stop offset={1} stopColor="#00f" />';
+
+/** A definition's own props, on one applied to a 10 by 10 square. */
 const DEFINITION_SAMPLES = {
+  Defs: {},
+  LinearGradient: {
+    x1: 'x1={0.5}',
+    y1: 'y1="50%"',
+    x2: 'x2={0.5}',
+    y2: 'y2={1}',
+    gradientUnits: 'gradientUnits="userSpaceOnUse"',
+  },
+  RadialGradient: {
+    cx: 'cx={0.2}',
+    cy: 'cy="20%"',
+    r: 'r={0.2}',
+    gradientUnits: 'gradientUnits="userSpaceOnUse"',
+  },
+  Stop: {
+    offset: 'offset={0.5}',
+    stopColor: 'stopColor="#0f0"',
+    stopOpacity: 'stopOpacity={0.5}',
+  },
   ClipPath: {
     clipPathUnits: 'clipPathUnits="objectBoundingBox"',
     clipRule: 'clipRule="evenodd"',
@@ -379,6 +408,16 @@ const SHAPES = {
       ry: 'ry={1}',
     },
   },
+  Polygon: {
+    base: 'points="0,0 9,0 5,8"',
+    props: {points: ['points="0,0 9,0 5,8"', 'points="0,0 9,0 5,9"']},
+  },
+  Polyline: {
+    base: 'points={[0, 0, 9, 0, 5, 8]}',
+    props: {
+      points: ['points={[0, 0, 9, 0, 5, 8]}', 'points={[0, 0, 9, 0, 5, 9]}'],
+    },
+  },
   Line: {
     base: 'x2={5} y2={5}',
     props: {
@@ -454,8 +493,9 @@ describe('declared element props', () => {
     );
     for (const tag of SVG_DEFINITION_TAGS) {
       // An id names the element; it has nothing of its own to lower.
+      const named = svgShapeSpec(tag).props.has('id') ? ['id'] : [];
       expect(
-        [...Object.keys(DEFINITION_SAMPLES[tag]), 'id'].sort(),
+        [...Object.keys(DEFINITION_SAMPLES[tag]), ...named].sort(),
         tag,
       ).toEqual([...svgShapeSpec(tag).props].sort());
     }
@@ -494,10 +534,18 @@ describe('declared element props', () => {
 
   for (const tag of SVG_DEFINITION_TAGS) {
     const reference = tag === 'ClipPath' ? 'clipPath' : 'mask';
+    const square =
+      '<Rect width={10} height={10} /><Rect x={4} y={4} width={10} height={10} stroke="#fff" />';
     const jsx = attrs =>
-      `<Svg width={20} height={20}>${DEFINITIONS}` +
-      `<${tag} id="d" ${attrs}><Rect width={10} height={10} /><Rect x={4} y={4} width={10} height={10} stroke="#fff" /></${tag}>` +
-      `<Rect width={10} height={10} ${reference}="url(#d)" /></Svg>`;
+      tag === 'Stop'
+        ? `<Svg width={20} height={20}><LinearGradient id="d"><Stop stopColor="#f00" /><Stop ${attrs} />` +
+          '</LinearGradient><Rect width={10} height={10} fill="url(#d)" /></Svg>'
+        : tag === 'LinearGradient' || tag === 'RadialGradient'
+          ? `<Svg width={20} height={20}><${tag} id="d" ${attrs}>${STOPS}</${tag}>` +
+            '<Rect width={10} height={10} fill="url(#d)" /></Svg>'
+          : `<Svg width={20} height={20}>${DEFINITIONS}` +
+            `<${tag} id="d" ${attrs}>${square}</${tag}>` +
+            `<Rect width={10} height={10} ${reference}="url(#d)" /></Svg>`;
     it.each(Object.entries(DEFINITION_SAMPLES[tag]))(
       `<${tag}> lowers %s`,
       (name, sample) => {

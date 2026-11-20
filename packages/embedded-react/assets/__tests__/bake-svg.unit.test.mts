@@ -154,8 +154,9 @@ describe('bake-svg: svgToVector', () => {
       Math.round(gradient.bx),
       Math.round(gradient.by),
     ]).toEqual([0, 0, 10, 0]);
-    // The rect's paint: solid fill 0, fill_gradient = 1 (1-based; the 8th paint field).
-    expect(artifact.paints[0]).toBe(0);
+    // The rect's paint: the ramp's middle as the solid fill, drawn only where the gradient is dropped, and
+    // fill_gradient = 1 (1-based; the 8th paint field).
+    expect(artifact.paints[0]).toBe(0xff800080);
     expect(artifact.paints[7]).toBe(1);
   });
 
