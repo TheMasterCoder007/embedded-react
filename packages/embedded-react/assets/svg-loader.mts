@@ -17,6 +17,7 @@
 // esbuild loader for `import logo from './logo.svg'`. Two outcomes, decided at bake time:
 //   - VECTOR: the SVG is fully representable as the engine's op-tape — bake it and INLINE a
 //     {kind:'vector', ops, paints, gradients, width, height} artifact (small numeric data) into the bundle.
+//     The images it embeds are registered like a raster fallback's PNG.
 //   - RASTER: the SVG uses features the vector baker can't represent (mask, filter, use,
 //     pattern, …). We warn, rasterize the whole SVG via resvg to a PNG, register that PNG through the
 //     bundler's normal image pipeline (a small `addRasterAsset(name, pngPath)` callback), and inline a
@@ -73,6 +74,7 @@ export function registerSvgVectorLoader(
       const {
         dropped = [],
         fonts: rasterFonts,
+        images,
         ...vector
       } = await svgToVector(svg, svgFontSearch(args.path, fonts));
       if (dropped.length) {
@@ -96,6 +98,15 @@ export function registerSvgVectorLoader(
             `no raster fallback — that content will NOT render. Simplify the SVG, or import it via a bundler that ` +
             `supports the image pipeline.`,
         );
+      }
+      if (images.length) {
+        if (addRasterAsset)
+          for (const image of images) addRasterAsset(image.name, image.png);
+        else
+          console.warn(
+            `embedded-react: ${basename(args.path)} embeds images and this build has no image pipeline — they ` +
+              `will NOT render.`,
+          );
       }
       return {
         contents: `module.exports = ${JSON.stringify({kind: 'vector', ...vector})};`,

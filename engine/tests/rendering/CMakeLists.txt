@@ -176,6 +176,14 @@ target_include_directories(test_vector_mask PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
         ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_vector_mask COMMAND test_vector_mask)
 
+add_executable(test_vector_image test_vector_image.c)
+target_link_libraries(test_vector_image PRIVATE embedded-react)
+# test_vector_image needs engine/rendering for vector.h (a private engine header), and engine/core for the
+# er_diagnostics.h it pulls in.
+target_include_directories(test_vector_image PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_vector_image COMMAND test_vector_image)
+
 add_executable(test_vector_dash test_vector_dash.c)
 target_link_libraries(test_vector_dash PRIVATE embedded-react)
 # test_vector_dash needs engine/rendering for vector.h (a private engine header), and engine/core for the

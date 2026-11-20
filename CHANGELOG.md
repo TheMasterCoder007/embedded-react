@@ -32,6 +32,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `strokeDashoffset` takes an animated value, which moves the dashes with no re-render.
 - Dashed strokes in an `.svg` file are drawn by the vector rasteriser, so a file that uses them stays a
   vector.
+- `<use>`, `<symbol>`, `<pattern>` fills and embedded images in an `.svg` file are drawn as vectors.
 
 ### Changed
 
@@ -40,8 +41,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `ErAssetsStorage` holds fonts only.
 - Flow B: the font-size check reports against the family a text uses.
 - Flow B: a package with more fonts than the firmware reserves reports both counts.
-- Flow B packages are now format minor 19 and engine ABI 3. Firmware built before this version does not
+- Flow B packages are now format minor 20 and engine ABI 3. Firmware built before this version does not
   load them.
+- An `.svg` file that references something outside itself fails the build.
 
 ### Fixed
 

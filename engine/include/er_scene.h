@@ -200,6 +200,7 @@ extern "C"
      *   ER_VECTOR_OP_MASK   kind count              put a clip or mask over the shapes after it
      *   ER_VECTOR_OP_DASH   dash gap                add a dash and the gap after it to this shape's stroke
      *   ER_VECTOR_OP_DASH_OFFSET offset scale       how far into its dashes this shape's stroke starts
+     *   ER_VECTOR_OP_IMAGE  id alpha a b c d e f    draw a registered image
      *
      * A shape with an ER_VECTOR_OP_DASH in its run is stroked in dashes that follow the path's length, each
      * one capped by the paint's cap. Up to ER_VECTOR_DASH_MAX of them make the pattern, which repeats. The
@@ -212,6 +213,10 @@ extern "C"
      *   ER_VECTOR_MASK_CLIP       inside any of its shapes' fills, by each paint's fill rule
      *   ER_VECTOR_MASK_LUMINANCE  its shapes painted in order; the luminance of the result, times its alpha
      *   ER_VECTOR_MASK_ALPHA      its shapes painted in order; the alpha of the result
+     *
+     * ER_VECTOR_OP_IMAGE draws the image registered as ER_VECTOR_IMAGE_PREFIX followed by `id` in six lowercase
+     * hex digits, in order with the shapes around it and under the masks in force. The matrix (a b c d e f)
+     * maps its pixels to the tape, and `alpha` (0 to 1) fades it. An image that is not registered draws nothing.
      */
 #define ER_VECTOR_OP_SHAPE 0.0f
 #define ER_VECTOR_OP_MOVE 1.0f
@@ -223,8 +228,12 @@ extern "C"
 #define ER_VECTOR_OP_MASK 7.0f
 #define ER_VECTOR_OP_DASH 8.0f
 #define ER_VECTOR_OP_DASH_OFFSET 9.0f
+#define ER_VECTOR_OP_IMAGE 10.0f
 
 #define ER_VECTOR_DASH_MAX 8 /**< Dash and gap pairs in one shape's pattern. */
+
+#define ER_VECTOR_IMAGE_PREFIX "svg-image-" /**< Starts the name an image op's image is registered under. */
+#define ER_VECTOR_IMAGE_ID_MAX 0xFFFFFF     /**< The largest image id: six hex digits, exact in a float. */
 
 #define ER_VECTOR_MASK_NONE 0
 #define ER_VECTOR_MASK_CLIP 1

@@ -23,9 +23,11 @@
 // Supports <path> + <rect>/<circle>/<ellipse>/<line>/<polygon>/<polyline> + <g> nesting + viewBox + solid
 // AND gradient fill/stroke (linear/radial/conic via url() refs; presentation attrs + inline style +
 // inheritance). <text> and <tspan> bake to glyph outlines from a font file (svg-text.mts). `clip-path` and
-// `mask` bake to mask ops over the shapes they apply to. Features the op-tape can't represent (<filter>,
-// <use>, …) are recorded in `dropped` so the caller can rasterize the whole SVG as a fallback image instead. Primitives are emitted as line/cubic paths (no native arc op)
-// so an arbitrary matrix bakes cleanly.
+// `mask` bake to mask ops over the shapes they apply to. <use> and <symbol> expand in place, a <pattern> fill
+// tiles its shapes under a clip of the shape it fills, and an <image> embedded as a data: URL becomes an image
+// op the caller registers. Features the op-tape can't represent (<filter>, …) are recorded in `dropped` so the
+// caller can rasterize the whole SVG as a fallback image instead. A reference to anything outside the file
+// fails. Primitives are emitted as line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
 import {parse} from 'svgson';
 import type {INode} from 'svgson';
 import {mkdirSync, writeFileSync} from 'node:fs';
@@ -44,6 +46,8 @@ import {
   VOP_CLOSE,
   VOP_DASH,
   VOP_DASH_OFFSET,
+  VOP_IMAGE,
+  OP_OPERANDS,
   DASH_MAX,
   dashPattern,
   CAP,
@@ -85,6 +89,8 @@ import {
 } from './svg-text.mts';
 import type {FontSearch, TextAnchor, TextRun} from './svg-text.mts';
 import type opentype from 'opentype.js';
+import {decodeEmbeddedImages} from './svg-images.mts';
+import type {EmbeddedImage} from './svg-images.mts';
 
 /** A 2D affine matrix [a, b, c, d, e, f]. */
 export type Matrix = readonly [number, number, number, number, number, number];
@@ -112,9 +118,21 @@ interface BBox {
 /** Where a walk writes its shapes, and what it writes them as. */
 interface Target {
   ops: number[];
-  /** `draw` paints shapes, `clip` and `mask` collect a definition's, `bounds` only measures. */
-  mode: 'draw' | 'clip' | 'mask' | 'bounds';
+  /**
+   * `draw` paints shapes, `clip` and `mask` collect a definition's, `pattern` collects one tile of a pattern's,
+   * `bounds` only measures.
+   */
+  mode: 'draw' | 'clip' | 'mask' | 'pattern' | 'bounds';
   writer: MaskWriter | null;
+  /** How far a measured stroke reaches past its path. */
+  reach?: number;
+}
+
+/** An image the tape draws, for the caller to register. */
+export interface SvgImage {
+  name: string;
+  /** The PNG file it was written to. */
+  png: string;
 }
 
 /** A baked .svg file. */
@@ -124,6 +142,8 @@ export interface BakedSvg extends VectorArtifact {
   dropped: string[];
   /** The fonts its text uses, for a raster fallback to draw the same ones. */
   fonts: RasterFonts;
+  /** The images its tape draws. */
+  images: SvgImage[];
 }
 
 /** The font files a rasterized SVG draws its text with. */
@@ -146,6 +166,10 @@ const MIN_GRADIENT_STOPS = 2;
 const RASTER_HASH_LENGTH = 8;
 /** A <mask>'s box when it gives none: a tenth past its element's on every side. */
 const MASK_REGION_DEFAULT = {x: -0.1, y: -0.1, width: 1.2, height: 1.2};
+/** The most tiles one pattern fill is cut into; past it the file falls back to a raster. */
+export const PATTERN_TILES_MAX = 1024;
+/** How far content may stray past its viewport and still count as inside it. */
+const OVERFLOW_EPSILON = 1e-6;
 
 // --- 2D affine matrix [a, b, c, d, e, f]:  x' = a*x + c*y + e ;  y' = b*x + d*y + f ------------------
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
@@ -162,6 +186,75 @@ function mul(outer: Matrix, inner: Matrix): Matrix {
     a1 * e2 + c1 * f2 + e1,
     b1 * e2 + d1 * f2 + f1,
   ];
+}
+
+/** The inverse of a matrix, or null for one that flattens the plane. */
+function invert(matrix: Matrix): Matrix | null {
+  const [a, b, c, d, e, f] = matrix;
+  const determinant = a * d - b * c;
+  if (!determinant || !Number.isFinite(determinant)) return null;
+  return [
+    d / determinant,
+    -b / determinant,
+    -c / determinant,
+    a / determinant,
+    (c * f - d * e) / determinant,
+    (b * e - a * f) / determinant,
+  ];
+}
+
+/** A `viewBox` as [x, y, width, height], or null for none or a malformed one. */
+function parseViewBox(value: string | undefined): number[] | null {
+  const box = String(value ?? '')
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  return box.length === 4 && box.every(Number.isFinite) ? box : null;
+}
+
+/**
+ * The matrix that fits a viewBox into a viewport of @p width x @p height, by `preserveAspectRatio`.
+ *
+ * @returns The matrix, and whether the viewBox reaches past the viewport (`slice`); null when the viewBox has no area.
+ */
+function viewBoxMatrix(
+  viewBox: readonly number[],
+  width: number,
+  height: number,
+  preserve: string | undefined,
+): {matrix: Matrix; slice: boolean} | null {
+  const [boxX, boxY, boxWidth, boxHeight] = viewBox;
+  if (!(boxWidth > 0 && boxHeight > 0)) return null;
+  const [align = 'xMidYMid', fit = 'meet'] = String(preserve ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  let scaleX = width / boxWidth;
+  let scaleY = height / boxHeight;
+  let slice = false;
+  if (align !== 'none') {
+    slice = fit === 'slice';
+    scaleX = scaleY = slice
+      ? Math.max(scaleX, scaleY)
+      : Math.min(scaleX, scaleY);
+  }
+  const spareX = width - boxWidth * scaleX;
+  const spareY = height - boxHeight * scaleY;
+  // `xMinYMid` and the like: where the spare room goes on each axis.
+  const shares: Record<string, number> = {Min: 0, Mid: 0.5, Max: 1};
+  const shareX = shares[align.slice(1, 4)] ?? 0.5;
+  const shareY = shares[align.slice(5, 8)] ?? 0.5;
+  return {
+    matrix: [
+      scaleX,
+      0,
+      0,
+      scaleY,
+      -boxX * scaleX + spareX * shareX,
+      -boxY * scaleY + spareY * shareY,
+    ],
+    slice: slice && (spareX < -OVERFLOW_EPSILON || spareY < -OVERFLOW_EPSILON),
+  };
 }
 
 /** Parses an SVG `transform` attribute (a chain of functions) into a single matrix. */
@@ -281,6 +374,162 @@ function scaleOf(matrix: Matrix): number {
 function num(value: string | undefined, fallback = 0): number {
   const parsed = parseFloat(value as string);
   return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+/** A length that may be a percentage of @p reference. */
+function length(
+  value: string | undefined,
+  reference: number,
+  fallback = 0,
+): number {
+  const text = String(value ?? '').trim();
+  if (!text.endsWith('%')) return num(text, fallback);
+  const parsed = parseFloat(text);
+  return Number.isFinite(parsed) ? (parsed / PERCENT) * reference : fallback;
+}
+
+/** How far a stroke can reach past its path: half its width, out to a miter's or a square cap's corner. */
+function strokeReach(paint: Paint): number {
+  const halfWidth = num(paint['stroke-width'], DEFAULT_STROKE_WIDTH) / 2;
+  const miter =
+    (paint['stroke-linejoin'] ?? 'miter') === 'miter'
+      ? num(paint['stroke-miterlimit'], DEFAULT_MITER_LIMIT)
+      : 0;
+  return halfWidth * Math.max(Math.SQRT2, miter);
+}
+
+/** A filled clip shape through four corners. */
+function quadShape(
+  paintIndex: number,
+  corners: ReadonlyArray<readonly [number, number]>,
+): number[] {
+  const shape = [VOP_SHAPE, paintIndex];
+  corners.forEach(([x, y], corner) =>
+    shape.push(corner === 0 ? VOP_MOVE : VOP_LINE, x, y),
+  );
+  shape.push(VOP_CLOSE);
+  return shape;
+}
+
+/** The corners of a box under a matrix. */
+function boxCorners(
+  matrix: Matrix,
+  width: number,
+  height: number,
+): Array<[number, number]> {
+  return [
+    pt(matrix, 0, 0),
+    pt(matrix, width, 0),
+    pt(matrix, width, height),
+    pt(matrix, 0, height),
+  ];
+}
+
+/** Whether a box reaches past [0, width] x [0, height] by more than @p reach allows. */
+function reachesPast(
+  box: BBox,
+  reach: number,
+  width: number,
+  height: number,
+): boolean {
+  return (
+    box.x - reach < -OVERFLOW_EPSILON ||
+    box.y - reach < -OVERFLOW_EPSILON ||
+    box.x + box.width + reach > width + OVERFLOW_EPSILON ||
+    box.y + box.height + reach > height + OVERFLOW_EPSILON
+  );
+}
+
+/** Whether an element's `overflow` lets its content show past its viewport. */
+function overflowVisible(attributes: Attributes): boolean {
+  return /^(visible|auto)$/.test(styled(attributes, 'overflow') ?? '');
+}
+
+/** An element's `href`, or SVG 1.1's `xlink:href`. */
+function hrefOf(attributes: Attributes): string {
+  return String(attributes.href ?? attributes['xlink:href'] ?? '').trim();
+}
+
+/**
+ * Fails on an href or url() that points outside the file. Only a link (<a>) and an image embedded as a data: URL
+ * may name anything but an id in the file.
+ */
+function checkReferences(node: INode): void {
+  for (const child of node.children || []) {
+    if (child.type !== 'element') continue;
+    for (const [key, value] of Object.entries(child.attributes || {})) {
+      const references: string[] = [];
+      if ((key === 'href' || key === 'xlink:href') && child.name !== 'a')
+        references.push(value);
+      for (const match of String(value).matchAll(
+        /url\(\s*(['"]?)([^'")]*)\1\s*\)/g,
+      ))
+        references.push(match[2]);
+      for (const reference of references) {
+        const target = reference.trim();
+        if (target && !target.startsWith('#') && !/^data:/i.test(target))
+          throw new Error(
+            `it references "${target}", which is outside the file. Put what it points to in the file, or embed ` +
+              `an image as a data: URL.`,
+          );
+      }
+    }
+    checkReferences(child);
+  }
+}
+
+/** Every element with an id, by id; the first one wins. */
+function collectIds(root: INode): Map<string, INode> {
+  const elements = new Map<string, INode>();
+  const visit = (node: INode): void => {
+    for (const child of node.children || []) {
+      if (child.type !== 'element') continue;
+      const id = child.attributes?.id;
+      if (id && !elements.has(id)) elements.set(id, child);
+      visit(child);
+    }
+  };
+  visit(root);
+  return elements;
+}
+
+/** The data: URLs every <image> gives. */
+function imageUrls(root: INode): Set<string> {
+  const urls = new Set<string>();
+  const visit = (node: INode): void => {
+    for (const child of node.children || []) {
+      if (child.type !== 'element') continue;
+      const href = hrefOf(child.attributes || {});
+      if (child.name === 'image' && /^data:/i.test(href)) urls.add(href);
+      visit(child);
+    }
+  };
+  visit(root);
+  return urls;
+}
+
+/** A tape cut into its shapes, each with the dash ops after its SHAPE, and its images. */
+function tapePieces(
+  ops: readonly number[],
+): Array<{head: number[]; path: number[]} | {image: number[]}> {
+  const pieces: Array<{head: number[]; path: number[]} | {image: number[]}> =
+    [];
+  let shape: {head: number[]; path: number[]} | null = null;
+  for (let index = 0; index < ops.length;) {
+    const opcode = ops[index];
+    const op = ops.slice(index, index + 1 + (OP_OPERANDS[opcode] ?? 0));
+    index += op.length;
+    if (opcode === VOP_IMAGE) {
+      pieces.push({image: op});
+      shape = null;
+    } else if (opcode === VOP_SHAPE) {
+      shape = {head: op, path: []};
+      pieces.push(shape);
+    } else if (opcode === VOP_DASH || opcode === VOP_DASH_OFFSET)
+      shape?.head.push(...op);
+    else shape?.path.push(...op);
+  }
+  return pieces;
 }
 
 // --- Primitive shapes -> path `d` (emitted as lines/arcs; parsePath turns arcs into cubics) ----------
@@ -645,6 +894,10 @@ export async function svgToVector(
 ): Promise<BakedSvg> {
   const root = await parse(String(svgString));
   const attributes = root.attributes || {};
+  checkReferences(root);
+  const elementsById = collectIds(root);
+  const embedded = await decodeEmbeddedImages(imageUrls(root));
+  const images = new Map<string, SvgImage>();
 
   let viewBox = String(attributes.viewBox || '')
     .trim()
@@ -674,9 +927,9 @@ export async function svgToVector(
   const gradients: PackedGradient[] = [];
   const gradientDefinitions = collectGradients(root);
 
-  // Elements we intentionally skip without losing visible content (gradient defs are collected separately,
-  // the rest are metadata). Anything else hitting the skip branch — image/use/mask/filter/pattern/… —
-  // is unsupported VISUAL content, recorded in `dropped` so the loader can warn + fall back to raster.
+  // Elements we intentionally skip without losing visible content (definitions are drawn where they are used,
+  // the rest are metadata). Anything else hitting the skip branch — filter, foreignObject, … — is unsupported
+  // VISUAL content, recorded in `dropped` so the loader can warn + fall back to raster.
   const SVG_IGNORABLE = new Set([
     'defs',
     'title',
@@ -687,6 +940,8 @@ export async function svgToVector(
     'conicGradient',
     'clipPath',
     'mask',
+    'symbol',
+    'pattern',
   ]);
   const dropped = new Set<string>();
   const usedFonts = new Set<opentype.Font>();
@@ -722,8 +977,17 @@ export async function svgToVector(
     masks: readonly MaskGroup[],
     target: Target,
   ): void => {
+    const stroked =
+      paint.stroke &&
+      paint.stroke !== 'none' &&
+      num(paint['stroke-width'], DEFAULT_STROKE_WIDTH) > 0;
     if (target.mode === 'bounds') {
       target.ops.push(VOP_SHAPE, 0, ...transformOps(shapeOps, matrix));
+      if (stroked)
+        target.reach = Math.max(
+          target.reach ?? 0,
+          strokeReach(paint) * scaleOf(matrix),
+        );
       return;
     }
     // A filter applied to an otherwise-bakeable shape still loses fidelity as a vector → flag it.
@@ -737,13 +1001,27 @@ export async function svgToVector(
       );
       return;
     }
+    // A pattern fills the shape's area with its tiles; the stroke is drawn over them.
+    if (stroked && patternFor(paint.stroke)) dropped.add('pattern stroke');
+    const fillPattern = patternFor(paint.fill);
+    if (fillPattern) {
+      if (target.mode === 'draw')
+        bakePattern(fillPattern, shapeOps, matrix, paint, masks, target);
+      else dropped.add(`pattern inside a ${target.mode}`);
+      if (stroked)
+        emitShape(
+          shapeOps,
+          matrix,
+          {...paint, fill: 'none'},
+          attributes,
+          masks,
+          target,
+        );
+      return;
+    }
     // A visible stroke's dashes go in the tape, scaled like its width. A pattern the tape cannot hold (a
     // percentage, or more dashes than the engine keeps) flags the file for the raster fallback.
     const dash = paint['stroke-dasharray'];
-    const stroked =
-      paint.stroke &&
-      paint.stroke !== 'none' &&
-      num(paint['stroke-width'], DEFAULT_STROKE_WIDTH) > 0;
     const dashOps: number[] = [];
     if (stroked && dash && dash !== 'none') {
       const pattern = dashPattern(dash);
@@ -776,6 +1054,11 @@ export async function svgToVector(
       if (!reference) return 0;
       const definition = gradientDefinitions.get(reference);
       if (!definition || definition.stops.length < MIN_GRADIENT_STOPS) return 0;
+      // A tile's copies share their paints, so a gradient placed for one would be wrong on the rest.
+      if (target.mode === 'pattern') {
+        dropped.add('gradient inside a pattern');
+        return 0;
+      }
       if (!bbox) bbox = opsBBox(shapeOps);
       gradients.push(bakeGradient(definition, matrix, bbox));
       return gradients.length; // 1-based
@@ -1127,6 +1410,406 @@ export async function svgToVector(
     return tapeBounds(scratch.ops) ?? {x: 0, y: 0, width: 0, height: 0};
   };
 
+  /** A <pattern> by id, with what its href chain lends it: the attributes it leaves out, and children if it has none. */
+  const patternFor = (value: string | undefined): INode | null => {
+    const id = urlRef(value);
+    let node = id == null ? undefined : elementsById.get(id);
+    if (node?.name !== 'pattern') return null;
+    const patternAttributes: Attributes = {};
+    let children: INode[] | null = null;
+    const seen = new Set<INode>();
+    while (node?.name === 'pattern' && !seen.has(node)) {
+      seen.add(node);
+      for (const [key, value] of Object.entries(node.attributes || {}))
+        if (!(key in patternAttributes)) patternAttributes[key] = value;
+      if (
+        !children &&
+        (node.children || []).some(child => child.type === 'element')
+      )
+        children = node.children;
+      const href = hrefOf(node.attributes || {});
+      node = href.startsWith('#') ? elementsById.get(href.slice(1)) : undefined;
+    }
+    return {
+      name: 'pattern',
+      type: 'element',
+      value: '',
+      attributes: patternAttributes,
+      children: children ?? [],
+    };
+  };
+
+  /**
+   * Fills a shape with a pattern: its tiles' shapes, under a clip of the shape. Tiles whose shapes stay inside them
+   * are drawn as one shape per shape of the tile; shapes that reach past their tile take a clip of it, per tile.
+   */
+  const bakePattern = (
+    pattern: INode,
+    shapeOps: readonly number[],
+    matrix: Matrix,
+    paint: Paint,
+    masks: readonly MaskGroup[],
+    target: Target,
+  ): void => {
+    const patternAttributes = pattern.attributes;
+    const box = opsBBox(shapeOps);
+    const boxUnits =
+      (patternAttributes.patternUnits || 'objectBoundingBox') !==
+      'userSpaceOnUse';
+    const place = (
+      key: 'x' | 'y' | 'width' | 'height',
+      start: number,
+      size: number,
+      viewport: number,
+    ): number =>
+      boxUnits
+        ? start + fraction(patternAttributes[key], 0) * size
+        : length(patternAttributes[key], viewport);
+    const tileX = place('x', box.x, box.width, viewBoxWidth);
+    const tileY = place('y', box.y, box.height, viewBoxHeight);
+    const tileWidth = place('width', 0, box.width, viewBoxWidth);
+    const tileHeight = place('height', 0, box.height, viewBoxHeight);
+    if (!(tileWidth > 0 && tileHeight > 0)) return;
+
+    // Its shapes' space within a tile.
+    let content: Matrix = IDENTITY;
+    const viewBox = parseViewBox(patternAttributes.viewBox);
+    if (viewBox) {
+      const fitted = viewBoxMatrix(
+        viewBox,
+        tileWidth,
+        tileHeight,
+        patternAttributes.preserveAspectRatio,
+      );
+      if (!fitted) return;
+      content = fitted.matrix;
+    } else if (patternAttributes.patternContentUnits === 'objectBoundingBox')
+      content = [box.width, 0, 0, box.height, 0, 0];
+
+    // The tiles that reach the shape's box.
+    const patternMatrix = parseTransform(patternAttributes.patternTransform);
+    const toPattern = invert(patternMatrix);
+    if (!toPattern) return;
+    const reached = boxCorners(
+      [box.width, 0, 0, box.height, box.x, box.y],
+      1,
+      1,
+    ).map(([x, y]) => pt(toPattern, x, y));
+    const firstColumn = Math.floor(
+      (Math.min(...reached.map(([x]) => x)) - tileX) / tileWidth,
+    );
+    const firstRow = Math.floor(
+      (Math.min(...reached.map(([, y]) => y)) - tileY) / tileHeight,
+    );
+    const columns = Math.max(
+      1,
+      Math.ceil((Math.max(...reached.map(([x]) => x)) - tileX) / tileWidth) -
+        firstColumn,
+    );
+    const rows = Math.max(
+      1,
+      Math.ceil((Math.max(...reached.map(([, y]) => y)) - tileY) / tileHeight) -
+        firstRow,
+    );
+    if (!(columns * rows <= PATTERN_TILES_MAX)) {
+      dropped.add(`pattern of more than ${PATTERN_TILES_MAX} tiles`);
+      return;
+    }
+
+    // Whether its shapes reach past a tile.
+    const contentPaint = resolvePaint(patternAttributes, DEFAULT_PAINT);
+    const measure: Target = {ops: [], mode: 'bounds', writer: null, reach: 0};
+    walk(pattern, content, contentPaint, [], measure);
+    const contentBox = tapeBounds(measure.ops);
+    if (!contentBox) return;
+    const overflows =
+      !overflowVisible(patternAttributes) &&
+      reachesPast(contentBox, measure.reach ?? 0, tileWidth, tileHeight);
+
+    // The first tile's shapes, in place; the others are copies of them moved along the pattern's axes.
+    const placed = mul(matrix, patternMatrix);
+    const tileAt = (column: number, row: number): Matrix =>
+      mul(placed, [
+        1,
+        0,
+        0,
+        1,
+        tileX + column * tileWidth,
+        tileY + row * tileHeight,
+      ]);
+    const firstPaint = paints.length / PAINT_STRIDE;
+    const tile: Target = {ops: [], mode: 'pattern', writer: null};
+    walk(
+      pattern,
+      mul(tileAt(firstColumn, firstRow), content),
+      contentPaint,
+      [],
+      tile,
+    );
+    const pieces = tapePieces(tile.ops);
+
+    // The fill's opacity fades everything in it.
+    const fade =
+      clamp01(num(paint.opacity, 1)) * clamp01(num(paint['fill-opacity'], 1));
+    if (fade < 1) {
+      for (
+        let index = firstPaint * PAINT_STRIDE;
+        index < paints.length;
+        index += PAINT_STRIDE
+      ) {
+        paints[index] = applyAlpha(paints[index], fade);
+        paints[index + 1] = applyAlpha(paints[index + 1], fade);
+      }
+      for (const piece of pieces) if ('image' in piece) piece.image[2] *= fade;
+    }
+
+    const copy = (
+      piece: (typeof pieces)[number],
+      column: number,
+      row: number,
+    ): number[] => {
+      const stepX = (column - firstColumn) * tileWidth;
+      const stepY = (row - firstRow) * tileHeight;
+      const shiftX = placed[0] * stepX + placed[2] * stepY;
+      const shiftY = placed[1] * stepX + placed[3] * stepY;
+      if ('image' in piece) {
+        const image = piece.image.slice();
+        image[7] += shiftX;
+        image[8] += shiftY;
+        return image;
+      }
+      return transformOps(piece.path, [1, 0, 0, 1, shiftX, shiftY]);
+    };
+    const tiles: Array<[number, number]> = [];
+    for (let row = firstRow; row < firstRow + rows; row++)
+      for (let column = firstColumn; column < firstColumn + columns; column++)
+        tiles.push([column, row]);
+
+    const fillMasks = [
+      ...masks,
+      maskGroup(
+        MASK_CLIP,
+        [
+          VOP_SHAPE,
+          clipPaint(paint['fill-rule']),
+          ...transformOps(shapeOps, matrix),
+        ],
+        1,
+      ),
+    ];
+    if (!overflows) {
+      target.writer?.use(fillMasks);
+      for (const piece of pieces) {
+        if (!('image' in piece)) target.ops.push(...piece.head);
+        for (const [column, row] of tiles)
+          target.ops.push(...copy(piece, column, row));
+      }
+      return;
+    }
+    for (const [column, row] of tiles) {
+      const tileClip = quadShape(
+        clipPaint('nonzero'),
+        boxCorners(tileAt(column, row), tileWidth, tileHeight),
+      );
+      target.writer?.use([...fillMasks, maskGroup(MASK_CLIP, tileClip, 1)]);
+      for (const piece of pieces)
+        target.ops.push(
+          ...('image' in piece ? [] : piece.head),
+          ...copy(piece, column, row),
+        );
+    }
+  };
+
+  // The elements a <use> is expanding, so one that contains itself stops.
+  const expanding = new Set<INode>();
+
+  /** Draws what a <use> references in its place. A <symbol> takes the use's size as its viewport. */
+  const bakeUse = (
+    node: INode,
+    matrix: Matrix,
+    paint: Paint,
+    masks: readonly MaskGroup[],
+    target: Target,
+  ): void => {
+    const useAttributes = node.attributes || {};
+    const href = hrefOf(useAttributes);
+    const referenced = href.startsWith('#')
+      ? elementsById.get(href.slice(1))
+      : undefined;
+    if (!referenced) return;
+    if (expanding.has(referenced)) {
+      dropped.add('use that contains itself');
+      return;
+    }
+    let placed = mul(matrix, [
+      1,
+      0,
+      0,
+      1,
+      length(useAttributes.x, viewBoxWidth),
+      length(useAttributes.y, viewBoxHeight),
+    ]);
+    let instance: INode = {
+      name: 'g',
+      type: 'element',
+      value: '',
+      attributes: {},
+      children: [referenced],
+    };
+    let instancePaint = paint;
+    let instanceMasks = masks;
+    if (referenced.name === 'symbol') {
+      const symbolAttributes = referenced.attributes || {};
+      const width = length(
+        useAttributes.width ?? symbolAttributes.width ?? '100%',
+        viewBoxWidth,
+      );
+      const height = length(
+        useAttributes.height ?? symbolAttributes.height ?? '100%',
+        viewBoxHeight,
+      );
+      let viewport: Matrix = IDENTITY;
+      const viewBox = parseViewBox(symbolAttributes.viewBox);
+      if (viewBox) {
+        const fitted = viewBoxMatrix(
+          viewBox,
+          width,
+          height,
+          symbolAttributes.preserveAspectRatio,
+        );
+        if (!fitted) return;
+        viewport = fitted.matrix;
+      }
+      instance = {...referenced, name: 'g', attributes: {}};
+      instancePaint = resolvePaint(symbolAttributes, paint);
+
+      // What reaches past the viewport is cut, unless its overflow shows.
+      if (target.mode !== 'bounds' && !overflowVisible(symbolAttributes)) {
+        const measure: Target = {
+          ops: [],
+          mode: 'bounds',
+          writer: null,
+          reach: 0,
+        };
+        expanding.add(referenced);
+        walk(instance, viewport, instancePaint, [], measure);
+        expanding.delete(referenced);
+        const reached = tapeBounds(measure.ops);
+        if (
+          reached &&
+          reachesPast(reached, measure.reach ?? 0, width, height)
+        ) {
+          if (target.mode !== 'draw')
+            dropped.add(`symbol past its viewport inside a ${target.mode}`);
+          instanceMasks = [
+            ...masks,
+            maskGroup(
+              MASK_CLIP,
+              quadShape(
+                clipPaint('nonzero'),
+                boxCorners(placed, width, height),
+              ),
+              1,
+            ),
+          ];
+        }
+      }
+      placed = mul(placed, viewport);
+    }
+    expanding.add(referenced);
+    walk(instance, placed, instancePaint, instanceMasks, target);
+    expanding.delete(referenced);
+  };
+
+  /** Draws an <image> embedded as a data: URL, fitted to its box by preserveAspectRatio. */
+  const bakeImage = (
+    node: INode,
+    matrix: Matrix,
+    paint: Paint,
+    masks: readonly MaskGroup[],
+    target: Target,
+  ): void => {
+    // A clip takes shapes and text only.
+    if (target.mode === 'clip') return;
+    if (target.mode === 'mask') {
+      dropped.add('image inside a mask');
+      return;
+    }
+    const imageAttributes = node.attributes || {};
+    const image = embedded.get(hrefOf(imageAttributes));
+    if (image === undefined) return;
+    if (typeof image === 'string') {
+      dropped.add(image);
+      return;
+    }
+    const filter = styled(imageAttributes, 'filter');
+    if (filter && filter !== 'none') dropped.add('filter');
+
+    const given = (value: string | undefined, reference: number) =>
+      value == null || value === 'auto' ? undefined : length(value, reference);
+    let width = given(imageAttributes.width, viewBoxWidth);
+    let height = given(imageAttributes.height, viewBoxHeight);
+    if (width == null && height == null) {
+      width = image.width;
+      height = image.height;
+    } else if (width == null) width = (height! * image.width) / image.height;
+    else if (height == null) height = (width * image.height) / image.width;
+    if (!(width > 0 && height! > 0)) return;
+    const fitted = viewBoxMatrix(
+      [0, 0, image.width, image.height],
+      width,
+      height!,
+      imageAttributes.preserveAspectRatio,
+    );
+    if (!fitted) return;
+    const viewport = mul(matrix, [
+      1,
+      0,
+      0,
+      1,
+      length(imageAttributes.x, viewBoxWidth),
+      length(imageAttributes.y, viewBoxHeight),
+    ]);
+    const placed = mul(viewport, fitted.matrix);
+    if (target.mode === 'bounds') {
+      target.ops.push(
+        ...(fitted.slice
+          ? quadShape(0, boxCorners(viewport, width, height!))
+          : quadShape(0, boxCorners(placed, image.width, image.height))),
+      );
+      return;
+    }
+
+    // A sliced image is cut to its box.
+    let imageMasks = masks;
+    if (fitted.slice) {
+      if (target.mode !== 'draw') {
+        dropped.add(`sliced image inside a ${target.mode}`);
+        return;
+      }
+      imageMasks = [
+        ...masks,
+        maskGroup(
+          MASK_CLIP,
+          quadShape(clipPaint('nonzero'), boxCorners(viewport, width, height!)),
+          1,
+        ),
+      ];
+    }
+    if (!images.has(image.name))
+      images.set(image.name, {
+        name: image.name,
+        png: writeRasterPng(image.name, image.png),
+      });
+    target.writer?.use(imageMasks);
+    target.ops.push(
+      VOP_IMAGE,
+      image.id,
+      clamp01(num(paint.opacity, 1)),
+      ...placed,
+    );
+  };
+
   const walk = (
     node: INode,
     matrix: Matrix,
@@ -1175,6 +1858,14 @@ export async function svgToVector(
         bakeText(child, childMatrix, childPaint, childMasks, target);
         continue;
       }
+      if (child.name === 'use') {
+        bakeUse(child, childMatrix, childPaint, childMasks, target);
+        continue;
+      }
+      if (child.name === 'image') {
+        bakeImage(child, childMatrix, childPaint, childMasks, target);
+        continue;
+      }
 
       let d = '';
       if (child.name === 'path') d = childAttributes.d || '';
@@ -1221,6 +1912,7 @@ export async function svgToVector(
       files: [...usedFonts].map(fontFile),
       family: usedFonts.size ? fontFamilyName([...usedFonts][0]) : '',
     },
+    images: [...images.values()],
   };
 }
 

@@ -2135,6 +2135,11 @@ function emitSvgSource(
     return node;
   }
 
+  // Its embedded images go in the package like any other.
+  for (const image of artifact.images ?? []) {
+    output.images.set(image.name, image.png);
+  }
+
   // Scale the vector artifact to the box and bake its ops, paints and gradients into const tables.
   const scaled = scaleVectorArtifact(artifact, width, height);
   const nodeId = `n${output.allocateNodeId()}`;

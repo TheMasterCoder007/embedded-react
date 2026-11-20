@@ -724,11 +724,38 @@ static void test_tape_dashes(void)
     EXPECT(ERB_ERROR_TAPE, "a dash cut off from its gap");
 }
 
+static void test_tape_images(void)
+{
+    /* An image, then a shape of one point. */
+    const float pictured[] = {10.0f, 43794.0f, 1.0f, 2.0f, 0.0f, 0.0f, 2.0f, 5.0f, 5.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    float tape[64];
+    memcpy(tape, pictured, sizeof(pictured));
+    set_tape(tape, 14u);
+    EXPECT(ERB_OK, "an image, then a shape");
+    set_tape(tape, 8u);
+    EXPECT(ERB_ERROR_TAPE, "an image cut short");
+    tape[1] = 1.5f;
+    set_tape(tape, 14u);
+    EXPECT(ERB_ERROR_TAPE, "an image id that isn't whole");
+    tape[1] = (float)ER_VECTOR_IMAGE_ID_MAX + 1.0f;
+    set_tape(tape, 14u);
+    EXPECT(ERB_ERROR_TAPE, "an image id past six hex digits");
+    /* MASK kind 1 of one shape, then the image where the shape should be. */
+    const float in_mask[] = {7.0f, 1.0f, 1.0f, 10.0f, 1.0f, 1.0f, 2.0f, 0.0f, 0.0f, 2.0f, 5.0f, 5.0f};
+    set_tape(in_mask, 12u);
+    EXPECT(ERB_ERROR_TAPE, "an image among a mask's shapes");
+    /* An image between a shape's points and a dash. */
+    const float in_shape[] = {0.0f, 0.0f, 10.0f, 1.0f, 1.0f, 2.0f, 0.0f, 0.0f, 2.0f, 5.0f, 5.0f, 8.0f, 4.0f, 2.0f};
+    set_tape(in_shape, 14u);
+    EXPECT(ERB_ERROR_TAPE, "a dash after an image, outside a shape");
+}
+
 static void test_tapes(void)
 {
     test_tape_masks();
     test_tape_dashes();
-    base()->tape_floats[0] = 10.0f;
+    test_tape_images();
+    base()->tape_floats[0] = 11.0f;
     EXPECT(ERB_ERROR_TAPE, "an unknown vector op");
     base()->tape_floats[1] = 3.0f;
     EXPECT(ERB_ERROR_TAPE, "a shape naming no paint");

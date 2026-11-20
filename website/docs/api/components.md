@@ -445,7 +445,7 @@ import gauge from './gauge.svg';
 
 | Prop              | Type              | Notes                                                                                                                                                                           |
 | ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`          | imported `.svg`   | Baked at build time to a vector tape, [text](#text), clips and masks included (or a raster, if the file uses filters). Scaled to the render box; shape children are ignored     |
+| `source`          | imported `.svg`   | Baked at build time to a vector tape, [text](#text), clips, masks, [patterns and images](#in-an-svg-file) included (or a raster, if the file uses filters). Scaled to the render box; shape children are ignored |
 | `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source` |
 | `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then         |
 | paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                              |
@@ -641,6 +641,28 @@ is applied; ligatures are not. A file with `<textPath>`, per-glyph positions, `r
 Outlines are large: a glyph takes roughly 40 to 250 of the 1024 tape values an `<Svg>` holds by default
 (`ERUI_VECTOR_TAPE_MAX`), so a dial's cardinal letters fit and a sentence does not. In Flow B a drawing over the
 limit fails the build; set `ER_AOT_VECTOR_TAPE_MAX` to match a board that changes it.
+
+### In an `.svg` file
+
+A file's `<use>` and `<symbol>`, `<pattern>` fills and embedded `<image>`s are drawn as vectors too.
+
+- **`<use>`** draws what it references in its place, moved by its `x` and `y`, with its own paint passed
+  down. A `<symbol>` takes the use's `width` and `height` as its viewport, fits its `viewBox` into it by
+  `preserveAspectRatio`, and is cut to it unless its `overflow` is `visible`. A `<use>` that contains
+  itself falls back to a raster.
+- **A `<pattern>` fill** is cut into tiles at build time: each tile's shapes are copied across the shape
+  it fills, under a clip of that shape, and the shape's stroke is drawn over them. `patternUnits`,
+  `patternContentUnits`, `patternTransform`, `viewBox` and `href` to another pattern are honoured, and
+  `fill-opacity` fades the tiles. A tile whose shapes reach past it takes a clip of its own, which costs
+  more tape. Every copy counts toward the tape, so keep tiles large against the shape. A file falls back to
+  a raster for a pattern on a stroke, a gradient or a pattern inside a pattern, or more than 1024 tiles.
+- **An `<image>`** embedded as a `data:` URL (PNG, JPEG or GIF) is registered as an image asset and drawn
+  in place, in order with the shapes around it, under any clip on it, fitted by `preserveAspectRatio`.
+  It is sampled with a bilinear filter. An image in a `<clipPath>` is ignored, as in a browser; one in a
+  `<mask>`, or an embedded SVG, falls back to a raster.
+
+A file that references anything outside itself, such as `<image href="photo.png">` or
+`<use href="icons.svg#star">`, fails the build with the reference.
 
 ## Intentionally absent React Native APIs
 

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">
+  <defs>
+    <symbol id="star" viewBox="0 0 10 10">
+      <path d="M5 0 L6.2 3.6 L10 3.8 L7 6.1 L8 10 L5 7.7 L2 10 L3 6.1 L0 3.8 L3.8 3.6 Z"/>
+    </symbol>
+    <pattern id="dots" width="10" height="10" patternUnits="userSpaceOnUse">
+      <circle cx="5" cy="5" r="2.5" fill="#2060c0"/>
+    </pattern>
+    <pattern id="stripes" width="40" height="8" patternUnits="userSpaceOnUse">
+      <path d="M0 0 H40 V4 H0 Z" fill="#e0a020"/>
+    </pattern>
+    <clipPath id="round">
+      <circle cx="72" cy="72" r="22"/>
+    </clipPath>
+  </defs>
+  <rect x="10" y="10" width="30" height="30" rx="5" fill="url(#dots)" stroke="#203040" stroke-width="2"/>
+  <circle cx="74" cy="26" r="20" fill="url(#stripes)" stroke="#203040" stroke-width="2"/>
+  <image x="50" y="50" width="44" height="44" clip-path="url(#round)" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAN0lEQVR4AWO8Y2PznwEJiPS8YUAGTAwEABMDAcDEQACw+KSIMKCAOQsYkAETAwHAxEAAMDEQAADVqAXx9QlFxgAAAABJRU5ErkJggg=="/>
+  <use href="#star" x="6" y="54" width="18" height="18" fill="#c03030"/>
+  <use href="#star" x="26" y="72" width="18" height="18" fill="#30a040" transform="rotate(15 35 81)"/>
+</svg>
