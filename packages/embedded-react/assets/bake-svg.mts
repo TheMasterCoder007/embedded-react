@@ -42,6 +42,10 @@ import {
   VOP_QUAD,
   VOP_CUBIC,
   VOP_CLOSE,
+  VOP_DASH,
+  VOP_DASH_OFFSET,
+  DASH_MAX,
+  dashPattern,
   CAP,
   JOIN,
   PAINT_STRIDE,
@@ -341,6 +345,7 @@ const PAINT_KEYS = [
   'fill-opacity',
   'stroke-opacity',
   'stroke-dasharray',
+  'stroke-dashoffset',
   'clip-rule',
   'font-family',
   'font-size',
@@ -732,16 +737,35 @@ export async function svgToVector(
       );
       return;
     }
-    // A dashed stroke can't be represented in the op-tape (the stroke is baked solid). Flag it so the SVG
-    // falls back to raster (resvg renders the dashes) — but only when a visible stroke is actually dashed
-    // by a positive pattern, so a stray stroke-dasharray on an unstroked/zero-width shape isn't penalized.
+    // A visible stroke's dashes go in the tape, scaled like its width. A pattern the tape cannot hold (a
+    // percentage, or more dashes than the engine keeps) flags the file for the raster fallback.
     const dash = paint['stroke-dasharray'];
     const stroked =
       paint.stroke &&
       paint.stroke !== 'none' &&
       num(paint['stroke-width'], DEFAULT_STROKE_WIDTH) > 0;
-    if (stroked && dash && dash !== 'none' && /[1-9]/.test(dash))
-      dropped.add('stroke-dasharray');
+    const dashOps: number[] = [];
+    if (stroked && dash && dash !== 'none') {
+      const pattern = dashPattern(dash);
+      const dashOffset = paint['stroke-dashoffset'];
+      if (
+        /%/.test(dash) ||
+        /%/.test(dashOffset ?? '') ||
+        (pattern && pattern.length > 2 * DASH_MAX)
+      )
+        dropped.add('stroke-dasharray');
+      else if (pattern) {
+        const dashScale = scaleOf(matrix);
+        for (let index = 0; index < pattern.length; index += 2)
+          dashOps.push(
+            VOP_DASH,
+            pattern[index] * dashScale,
+            pattern[index + 1] * dashScale,
+          );
+        const offset = num(dashOffset, 0) * dashScale;
+        if (offset !== 0) dashOps.push(VOP_DASH_OFFSET, offset, 0);
+      }
+    }
 
     const paintIndex = paints.length / PAINT_STRIDE;
     const opacity = clamp01(num(paint.opacity, 1));
@@ -759,7 +783,12 @@ export async function svgToVector(
     const fillGradient = gradientIndex(urlRef(paint.fill));
     const strokeGradient = gradientIndex(urlRef(paint.stroke));
     target.writer?.use(masks);
-    target.ops.push(VOP_SHAPE, paintIndex, ...transformOps(shapeOps, matrix));
+    target.ops.push(
+      VOP_SHAPE,
+      paintIndex,
+      ...dashOps,
+      ...transformOps(shapeOps, matrix),
+    );
     paints.push(
       applyAlpha(
         colorOf(paint.fill ?? 'black'),

@@ -401,6 +401,11 @@ static bool read_numeric_value(ERNode* node, ERAnimationProp prop, float* value)
                 return false;
             *value = node->arc_value_start;
             return true;
+        case ER_PROP_VECTOR_DASH_OFFSET:
+            if (node->type != ER_NODE_VECTOR)
+                return false;
+            *value = node->vector_dash_offset;
+            return true;
         default:
             return false;
     }
@@ -563,6 +568,11 @@ static bool apply_numeric_value(ERNode* node, ERAnimationProp prop, float value)
             return er_arc_apply_value(node, value);
         case ER_PROP_ARC_VALUE_START:
             return er_arc_apply_value_start(node, value);
+        case ER_PROP_VECTOR_DASH_OFFSET:
+            if (node->type != ER_NODE_VECTOR || node->vector_dash_offset == value)
+                return false;
+            node->vector_dash_offset = value;
+            return true;
         default:
             return false;
     }

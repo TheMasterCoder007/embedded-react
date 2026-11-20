@@ -27,6 +27,11 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `clip-path` and `mask` in an `.svg` file are drawn by the vector rasteriser, so a file that uses them
   stays a vector.
 - `<ClipPath>` and `<Mask>` clip and mask shapes inside an `<Svg>`, in both flows.
+- `strokeDasharray` and `strokeDashoffset` dash a stroke inside an `<Svg>`, in both flows, and
+  `updateVector` shapes take `dash` and `dashOffset`.
+- `strokeDashoffset` takes an animated value, which moves the dashes with no re-render.
+- Dashed strokes in an `.svg` file are drawn by the vector rasteriser, so a file that uses them stays a
+  vector.
 
 ### Changed
 
@@ -35,7 +40,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `ErAssetsStorage` holds fonts only.
 - Flow B: the font-size check reports against the family a text uses.
 - Flow B: a package with more fonts than the firmware reserves reports both counts.
-- Flow B packages are now format minor 18. Firmware built before this version does not load them.
+- Flow B packages are now format minor 19 and engine ABI 3. Firmware built before this version does not
+  load them.
 
 ### Fixed
 

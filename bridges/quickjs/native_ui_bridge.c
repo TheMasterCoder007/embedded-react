@@ -4405,8 +4405,9 @@ static bool anim_prop_from_name(const char* name, ERAnimationProp* out)
         {"rotateY", ER_PROP_ROTATE_Y},
         {"backgroundColor", ER_PROP_BACKGROUND_COLOR},
         {"color", ER_PROP_COLOR},
-        {"value", ER_PROP_ARC_VALUE},            /* Dial value (ER_NODE_ARC) */
-        {"valueStart", ER_PROP_ARC_VALUE_START}, /* Dial RANGE low end */
+        {"value", ER_PROP_ARC_VALUE},                     /* Dial value (ER_NODE_ARC) */
+        {"valueStart", ER_PROP_ARC_VALUE_START},          /* Dial RANGE low end */
+        {"strokeDashoffset", ER_PROP_VECTOR_DASH_OFFSET}, /* an <Svg>'s dashed strokes */
     };
     for (size_t entry_index = 0; entry_index < sizeof(k_animatable_props) / sizeof(k_animatable_props[0]);
          entry_index++)

@@ -51,7 +51,8 @@ interpolation onto colors: a value bound to one directly is ignored with a warni
 AOT). The wrappers are pass-through, kept for
 React Native parity: a plain `View` or `Pressable` binds an animated style the same way, in both flows.
 **Flow B** binds `scale`, `scaleX`, `scaleY`, `translateX`, `translateY` and `rotate`/`rotateZ`, not
-`rotateX`/`rotateY`. `Dial` also accepts one in `value` and `valueStart`.
+`rotateX`/`rotateY`. `Dial` also accepts one in `value` and `valueStart`, and a shape in an `<Svg>` in
+[`strokeDashoffset`](./components.md#dashed-strokes).
 `Animated.createAnimatedComponent` wraps another component. A `TouchableOpacity` owns its own `opacity` for the press feedback, so animate opacity on
 a `Pressable` instead.
 

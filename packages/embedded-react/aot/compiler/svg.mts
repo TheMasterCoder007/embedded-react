@@ -22,6 +22,8 @@ import {settledOf} from './typing.mts';
 import {check, checkNumber} from './check.mts';
 import {lowerStyle, NODE_TYPES, TRANSFORM_FIELDS} from '../style-map.mts';
 import {
+  DASH_MAX,
+  dashPattern,
   flattenSvg,
   maskReference,
   parseColor,
@@ -33,6 +35,8 @@ import {
   tapeMaskProblem,
   VOP_ARC,
   VOP_CUBIC,
+  VOP_DASH,
+  VOP_DASH_OFFSET,
   VOP_LINE,
   VOP_MASK,
   VOP_MOVE,
@@ -59,6 +63,7 @@ import {
   styleWrites,
 } from './style-text.mts';
 import {checkInterpolations, lowerRefBinds} from './nodes.mts';
+import {parseInterp} from './animations.mts';
 import {
   at,
   checkAttributes,
@@ -74,6 +79,7 @@ import type {IrNode} from './ir/nodes.mts';
 import type {IrExpr} from './ir/expressions.mts';
 import {FLOAT} from './ir/types.mts';
 import type {DynAssign} from './types.mts';
+import type {AnimBind} from './style-text.mts';
 import type {
   IrDrawingGradient,
   IrDrawingPaint,
@@ -109,6 +115,11 @@ interface DynamicAttr {
   node: t.Expression | t.JSXEmptyExpression;
 }
 
+/** A `strokeDashoffset` an animated value drives: the node's dash offset is bound to it. */
+interface AnimatedAttr {
+  bind: AnimBind;
+}
+
 /** A gradient attribute (fillGradient / strokeGradient), kept as its expression for gradAttr to read. */
 interface GradientAttr {
   gradientNode: t.Expression | t.JSXEmptyExpression;
@@ -116,7 +127,7 @@ interface GradientAttr {
 
 /**
  * An SVG element's attributes, as svgAttrs reads them: a folded value (number, string, `true` for a bare
- * attribute), a DynamicAttr, or a GradientAttr.
+ * attribute), a DynamicAttr, a GradientAttr, or an AnimatedAttr.
  */
 type SvgAttrs = Record<string, unknown>;
 
@@ -294,17 +305,135 @@ function evalDrawing(node: t.Node, scope: Scope): unknown {
 }
 
 /**
+ * The binding of a `strokeDashoffset` an animated value drives, directly or through `.interpolate()`.
+ *
+ * @param attribute  The attribute.
+ * @param environment  The expression environment.
+ *
+ * @returns The binding, or null when the attribute is not one.
+ */
+function dashOffsetBind(
+  attribute: t.JSXAttribute | t.JSXSpreadAttribute,
+  environment: Env,
+): AnimBind | null {
+  if (
+    attribute.type !== 'JSXAttribute' ||
+    attribute.name.name !== 'strokeDashoffset' ||
+    attribute.value?.type !== 'JSXExpressionContainer'
+  ) {
+    return null;
+  }
+
+  const node = attribute.value.expression;
+  const prop = 'ER_PROP_VECTOR_DASH_OFFSET';
+  if (node.type === 'Identifier' && environment.animations?.has(node.name)) {
+    return {slotName: environment.animations.get(node.name)!.slotName, prop};
+  }
+
+  if (
+    node.type === 'CallExpression' &&
+    node.callee.type === 'MemberExpression' &&
+    !node.callee.computed &&
+    (node.callee.property as t.Identifier).name === 'interpolate' &&
+    node.callee.object.type === 'Identifier' &&
+    environment.animations?.has(node.callee.object.name)
+  ) {
+    const interpolation = parseInterp(node.arguments[0], environment);
+    if (interpolation.colors) {
+      throw at(
+        aotError(
+          'AOT: an animated strokeDashoffset takes an outputRange of numbers',
+        ),
+        attribute,
+      );
+    }
+
+    return {
+      slotName: environment.animations.get(node.callee.object.name)!.slotName,
+      prop,
+      interpolation,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Keeps the binding of an <Svg>'s animated dash offset. A node has one dash offset, so a second animated
+ * value fails the build.
+ *
+ * @param binds  The <Svg>'s dash offset bindings so far: none, or one.
+ * @param bind  The binding a shape asks for.
+ * @param attribute  Its attribute.
+ */
+function addDashOffsetBind(
+  binds: AnimBind[],
+  bind: AnimBind,
+  attribute: t.Node,
+): void {
+  if (!binds.length) {
+    binds.push(bind);
+    return;
+  }
+
+  if (JSON.stringify(binds[0]) !== JSON.stringify(bind)) {
+    throw at(
+      aotError(
+        'AOT: an <Svg> takes one animated strokeDashoffset',
+        'a node has one dash offset, which every animated strokeDashoffset in it follows: give each ' +
+          'animated value an <Svg> of its own.',
+      ),
+      attribute,
+    );
+  }
+}
+
+/**
+ * Refuses a dash pattern longer than the engine keeps.
+ *
+ * @param pattern  The pattern's dash and gap lengths, or null for none.
+ *
+ * @returns The pattern.
+ */
+function checkedDashPattern(pattern: number[] | null): number[] | null {
+  if (pattern && pattern.length > 2 * DASH_MAX) {
+    throw aotError(
+      `AOT: a strokeDasharray of ${pattern.length / 2} dashes is more than the engine keeps (${DASH_MAX})`,
+      'an odd count is repeated to make pairs, so give an even one, or a shorter pattern.',
+    );
+  }
+
+  return pattern;
+}
+
+/**
+ * Refuses a folded <Svg> whose dash patterns the engine would cut short.
+ *
+ * @param root  The <Svg>, folded.
+ */
+function checkSvgDashes(root: SvgElement): void {
+  checkedDashPattern(dashPattern(root.props.strokeDasharray));
+  for (const child of (root.props.children as SvgElement[]) ?? []) {
+    checkSvgDashes(child);
+  }
+}
+
+/**
  * Converts an SVG JSX element (Svg/Circle/Path/Rect/Line/Arc/G/…) to flattenSvg's `{type, props}` shape,
  * statically evaluating every attribute; it serves the static path, so an unfoldable attribute throws.
  *
  * @param element  The element.
  * @param scope  Compile-time constants in reach.
+ * @param environment  The expression environment.
+ * @param dashBinds  Receives the binding of an animated `strokeDashoffset`.
  *
  * @returns The element, its subtree included.
  */
 function jsxToSvgElement(
   element: t.JSXElement,
   scope: Scope,
+  environment: Env,
+  dashBinds: AnimBind[],
 ): SvgElement | null {
   if (element.type !== 'JSXElement') return null;
 
@@ -320,6 +449,14 @@ function jsxToSvgElement(
 
     const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'ref' || name === 'key' || name === 'style') continue; // the box's, not the drawing's
+
+    // An animated dash offset is the node's: the tape only says the shape follows it.
+    const dashBind = dashOffsetBind(attribute, environment);
+    if (dashBind) {
+      addDashOffsetBind(dashBinds, dashBind, attribute);
+      props[name] = {__animated: true};
+      continue;
+    }
 
     if (attribute.value == null) {
       props[name] = true;
@@ -345,7 +482,7 @@ function jsxToSvgElement(
   // Convert the shape children the same way, with fragments inlined.
   const children = [];
   for (const child of svgShapeChildren(element.children)) {
-    children.push(jsxToSvgElement(child, scope));
+    children.push(jsxToSvgElement(child, scope, environment, dashBinds));
   }
 
   if (children.length) {
@@ -572,6 +709,12 @@ function svgAttrs(
       continue;
     }
 
+    const dashBind = dashOffsetBind(attribute, environment);
+    if (dashBind) {
+      attributes[name] = {bind: dashBind};
+      continue;
+    }
+
     // Fold everything else; an expression that does not fold is state-driven.
     if (valueNode == null) {
       attributes[name] = true;
@@ -586,7 +729,8 @@ function svgAttrs(
       } catch (error) {
         if (error instanceof SvgScreenError) throw error;
         // Defer a state-driven `d` so pathEntries raises the error naming the fix, not the expression's own error.
-        if (name === 'd') {
+        // A dash pattern likewise: dashTape names its fix.
+        if (name === 'd' || name === 'strokeDasharray') {
           attributes[name] = {value: null, node: valueNode.expression};
           continue;
         }
@@ -1253,6 +1397,81 @@ const pathShape = (attributes: SvgAttrs): IrGeometry => {
   };
 };
 
+/**
+ * A state-driven <Svg> shape's dash ops: its pattern, which must be constant, and its offset, which may be a
+ * constant, a state-driven value, or an animated one (left to the node's dash offset).
+ *
+ * @param attributes  The shape's attributes, the root's paint included.
+ * @param dashBinds  Receives the binding of an animated offset.
+ * @param child  The shape.
+ *
+ * @returns The tape slots; none for a solid stroke.
+ */
+function dashTape(
+  attributes: SvgAttrs,
+  dashBinds: AnimBind[],
+  child: t.JSXElement,
+): IrTapeValue[] {
+  if (isDynamicAttr(attributes.strokeDasharray)) {
+    throw at(
+      aotError(
+        'AOT: a state-driven strokeDasharray is not supported',
+        'keep the pattern constant and drive strokeDashoffset from state, or from an animated value.',
+      ),
+      child,
+    );
+  }
+
+  const offset = attributes.strokeDashoffset;
+  if (offset != null && typeof offset === 'object' && 'bind' in offset) {
+    const entries = dashEntries(attributes.strokeDasharray, TAPE_ZERO, 1);
+    if (entries.length) {
+      addDashOffsetBind(dashBinds, (offset as AnimatedAttr).bind, child);
+    }
+
+    return entries;
+  }
+
+  return dashEntries(
+    attributes.strokeDasharray,
+    isDynamicAttr(offset)
+      ? {kind: 'float', value: offset.value!}
+      : checkedTapeNumber(svgNum(offset, 0)),
+  );
+}
+
+/**
+ * A shape's dash ops, for a tape state rebuilds.
+ *
+ * @param dasharray  The pattern, as a `strokeDasharray` gives it.
+ * @param offset  How far into it the stroke starts.
+ * @param scale  How much of the node's dash offset is added to that.
+ *
+ * @returns The tape slots; none for a solid stroke.
+ */
+export function dashEntries(
+  dasharray: unknown,
+  offset: IrTapeValue,
+  scale = 0,
+): IrTapeValue[] {
+  const pattern = checkedDashPattern(dashPattern(dasharray));
+  if (!pattern) return [];
+  const entries: IrTapeValue[] = [];
+  for (let index = 0; index < pattern.length; index += 2) {
+    entries.push(
+      tapeOp('ER_VECTOR_OP_DASH'),
+      checkedTapeNumber(pattern[index]),
+      checkedTapeNumber(pattern[index + 1]),
+    );
+  }
+
+  if (scale !== 0 || tapeLiteral(offset) !== 0) {
+    entries.push(tapeOp('ER_VECTOR_OP_DASH_OFFSET'), offset, tapeNumber(scale));
+  }
+
+  return entries;
+}
+
 /** The shapes a state-driven <Svg> can hold, by tag. */
 const SHAPE_TAPES: Record<
   string,
@@ -1270,10 +1489,15 @@ const SHAPE_TAPES: Record<
  *
  * @param element  The <Svg>.
  * @param scope  Compile-time constants in reach.
+ * @param environment  The expression environment.
  *
  * @returns Whether an attribute does not fold.
  */
-function svgHasDynamic(element: t.JSXElement, scope: Scope): boolean {
+function svgHasDynamic(
+  element: t.JSXElement,
+  scope: Scope,
+  environment: Env,
+): boolean {
   let hasDynamic = false;
   const walk = (node: t.Node): void => {
     // A fragment holds no attributes of its own, but its shapes' attributes still count.
@@ -1292,7 +1516,8 @@ function svgHasDynamic(element: t.JSXElement, scope: Scope): boolean {
         (attribute.name as t.JSXIdentifier).name !== 'ref' &&
         (attribute.name as t.JSXIdentifier).name !== 'key' &&
         (attribute.name as t.JSXIdentifier).name !== 'style' &&
-        attribute.value?.type === 'JSXExpressionContainer'
+        attribute.value?.type === 'JSXExpressionContainer' &&
+        !dashOffsetBind(attribute, environment) // the native driver's, not state's
       ) {
         try {
           evalStatic(attribute.value.expression, scope, 'boot');
@@ -1418,6 +1643,7 @@ function svgBootSizes(width: unknown, height: unknown): DynAssign[] {
  * @param scope  Compile-time constants in reach.
  * @param environment  The expression environment.
  * @param bootSizes  Its width and height writes worked out at boot.
+ * @param dashBinds  The binding of its animated dash offset, if it has one.
  *
  * @returns The node, with its refs wired.
  */
@@ -1430,6 +1656,7 @@ function lowerSvgBox(
   scope: Scope,
   environment: Env,
   bootSizes: DynAssign[] = [],
+  dashBinds: AnimBind[] = [],
 ): IrNode {
   const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
     openingElement,
@@ -1437,6 +1664,7 @@ function lowerSvgBox(
     environment,
     elementSpec('Svg')!,
   );
+  binds.push(...dashBinds);
   // A value worked out at boot is set once, so only one state drives is refused, a transform aside.
   const readsOnlyBoot = (assign: DynAssign): boolean =>
     (assign.value.kind === 'dimension' || assign.value.kind === 'opacity') &&
@@ -1531,7 +1759,7 @@ export function emitSvg(
   if (sourceAttribute)
     return emitSvgSource(element, sourceAttribute, scope, output, environment);
 
-  return svgHasDynamic(element, scope)
+  return svgHasDynamic(element, scope, environment)
     ? emitSvgDynamic(element, scope, output, environment, state)
     : emitSvgStatic(element, scope, output, environment);
 }
@@ -1571,6 +1799,7 @@ function viewBoxScale(size: unknown, view: number): IrTapeValue | null {
  * @param scope  Compile-time constants in reach.
  * @param output  Everything emitted so far.
  * @param environment  The expression environment.
+ * @param dashBinds  The binding of its animated dash offset, if it has one.
  *
  * @returns The node, or null when no viewBox drawing is sized at boot.
  */
@@ -1580,6 +1809,7 @@ function emitSvgScaled(
   scope: Scope,
   output: Out,
   environment: Env,
+  dashBinds: AnimBind[],
 ): IrNode | null {
   const {width, height, viewBox} = svgElement.props;
   if (!viewBox || !width || !height || (!isBoot(width) && !isBoot(height))) {
@@ -1611,11 +1841,27 @@ function emitSvgScaled(
     [VOP_CUBIC]: 'ER_VECTOR_OP_CUBIC',
     [VOP_ARC]: 'ER_VECTOR_OP_ARC',
   };
+  // A stroke scales by the two sides' mean, as flattenSvg's does.
+  const sideStroke = tapeChain(tapeChain(sideX, ['+', sideY]), [
+    '*',
+    tapeNumber(0.5),
+  ]);
   const tape: IrTapeValue[] = [];
   for (let index = 0; index < ops.length;) {
     const operation = ops[index++];
     if (operation === VOP_SHAPE) {
       tape.push(tapeOp('ER_VECTOR_OP_SHAPE'), tapeNumber(ops[index++]));
+    } else if (operation === VOP_DASH || operation === VOP_DASH_OFFSET) {
+      // Lengths, and the scale an animated offset is taken at, grow with the stroke.
+      tape.push(
+        tapeOp(
+          operation === VOP_DASH
+            ? 'ER_VECTOR_OP_DASH'
+            : 'ER_VECTOR_OP_DASH_OFFSET',
+        ),
+        along(ops[index++], sideStroke),
+        along(ops[index++], sideStroke),
+      );
     } else if (operation === VOP_MASK) {
       tape.push(
         tapeOp('ER_VECTOR_OP_MASK'),
@@ -1647,11 +1893,6 @@ function emitSvgScaled(
     }
   }
 
-  // A stroke scales by the two sides' mean, as flattenSvg's does.
-  const sideStroke = tapeChain(tapeChain(sideX, ['+', sideY]), [
-    '*',
-    tapeNumber(0.5),
-  ]);
   const nodeId = `n${output.allocateNodeId()}`;
   checkTapeSize(tape.length, environment);
   checkTapeMasks(ops);
@@ -1697,6 +1938,7 @@ function emitSvgScaled(
     scope,
     environment,
     svgBootSizes(width, height),
+    dashBinds,
   );
   node.wiring.push({kind: 'stateDrivenVector', vector});
   return node;
@@ -1719,9 +1961,18 @@ function emitSvgStatic(
   environment: Env,
 ): IrNode {
   // Flatten the subtree and bake its ops and paints into const tables.
-  const svgElement = jsxToSvgElement(element, scope)!;
+  const dashBinds: AnimBind[] = [];
+  const svgElement = jsxToSvgElement(element, scope, environment, dashBinds)!;
   checkSvgMasks(svgElement);
-  const scaled = emitSvgScaled(element, svgElement, scope, output, environment);
+  checkSvgDashes(svgElement);
+  const scaled = emitSvgScaled(
+    element,
+    svgElement,
+    scope,
+    output,
+    environment,
+    dashBinds,
+  );
   if (scaled) return scaled;
   const {ops, paints, gradients} = flattenSvg({
     ...svgElement.props,
@@ -1756,6 +2007,7 @@ function emitSvgStatic(
     scope,
     environment,
     svgBootSizes(svgElement.props.width, svgElement.props.height),
+    dashBinds,
   );
   node.wiring.push({kind: 'vectorTables', tables});
   return node;
@@ -1937,6 +2189,7 @@ function emitSvgDynamic(
   }
 
   // Lower each shape to tape slots (after an ER_VECTOR_OP_SHAPE marker naming its paint) and its paint.
+  const dashBinds: AnimBind[] = [];
   const tape: IrTapeValue[] = [];
   const locals: IrGeometry['locals'] = []; // declared ahead of the tape (rounded-rect radii)
   const shapePaints: ShapePaint[] = [];
@@ -1964,16 +2217,17 @@ function emitSvgDynamic(
     // The builder is this <Svg>'s own function, so the shape index alone keeps a local's name unique.
     const shape = lowerShape(attributes, `s${shapePaints.length}`);
     if (!shape.entries.length) continue;
-    locals.push(...shape.locals);
-    tape.push(
-      tapeOp('ER_VECTOR_OP_SHAPE'),
-      tapeNumber(shapePaints.length),
-      ...shape.entries,
-    );
     // The root's paint cascades to each shape, as flattenSvg does.
     const paintAttributes = {...attributes};
     for (const name of PAINT_PROPS)
       paintAttributes[name] ??= rootAttributes[name];
+    locals.push(...shape.locals);
+    tape.push(
+      tapeOp('ER_VECTOR_OP_SHAPE'),
+      tapeNumber(shapePaints.length),
+      ...dashTape(paintAttributes, dashBinds, child),
+      ...shape.entries,
+    );
     shapePaints.push(lowerShapePaint(paintAttributes, environment, scope));
   }
 
@@ -2016,6 +2270,7 @@ function emitSvgDynamic(
     scope,
     environment,
     svgBootSizes(rootAttributes.width, rootAttributes.height),
+    dashBinds,
   );
   node.wiring.push({kind: 'stateDrivenVector', vector});
 

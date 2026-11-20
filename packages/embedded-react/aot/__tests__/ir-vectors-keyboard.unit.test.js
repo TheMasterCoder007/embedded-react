@@ -118,6 +118,41 @@ describe('vector IR: updateVector', () => {
     ).toThrow('AOT: updateVector "rect" has an empty slot at position 4');
   });
 
+  it('dashes a shape after its header, with an offset state can drive', () => {
+    const tapeOf = source =>
+      lowerHandler(source).context.output.vectors[0].update.tape;
+    const tape = tapeOf(
+      "updateVector(art, [{line: [0, 0, 9, 0], stroke: '#fff', dash: [4, 2], dashOffset: n}]);",
+    );
+    expect(tape.slice(0, 5)).toEqual([
+      {kind: 'op', operation: 'ER_VECTOR_OP_SHAPE'},
+      {kind: 'number', value: 0},
+      {kind: 'op', operation: 'ER_VECTOR_OP_DASH'},
+      {kind: 'number', value: 4},
+      {kind: 'number', value: 2},
+    ]);
+    expect(tape[5]).toEqual({
+      kind: 'op',
+      operation: 'ER_VECTOR_OP_DASH_OFFSET',
+    });
+    expect(tape[6].kind).toBe('float');
+    expect(tape[7]).toEqual({kind: 'number', value: 0});
+    expect(tape[8]).toEqual({kind: 'op', operation: 'ER_VECTOR_OP_MOVE'});
+
+    // No offset writes none, and a dashOffset alone dashes nothing.
+    const plain = tapeOf(
+      "updateVector(art, [{line: [0, 0, 9, 0], dash: '4'}]);",
+    );
+    expect(plain[5]).toEqual({kind: 'op', operation: 'ER_VECTOR_OP_MOVE'});
+    const solid = tapeOf(
+      'updateVector(art, [{line: [0, 0, 9, 0], dashOffset: 3}]);',
+    );
+    expect(solid[2]).toEqual({kind: 'op', operation: 'ER_VECTOR_OP_MOVE'});
+    expect(() =>
+      lowerHandler('updateVector(art, [{line: [0, 0, 9, 0], dash: [n, 2]}]);'),
+    ).toThrow('AOT: updateVector paint "dash" must be static');
+  });
+
   it('rejects an empty slot in the dirty rect', () => {
     expect(() =>
       lowerHandler('updateVector(art, [{circle: [1, 2, 3]}], [0, , 40, 40]);'),

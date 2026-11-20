@@ -210,7 +210,7 @@ describe('package format copy', () => {
           : {id: Number(id), kind: kind.toLowerCase()},
       ]),
     );
-    expect(props.size).toBe(151);
+    expect(props.size).toBe(152);
     const spanFields = enumValues(propsHeader);
     const spanKinds = [
       ...propsSource.matchAll(

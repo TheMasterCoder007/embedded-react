@@ -192,6 +192,8 @@ const SVG_PAINT = [
   'strokeLinejoin',
   'strokeMiterlimit',
   'fillRule',
+  'strokeDasharray',
+  'strokeDashoffset',
   'fillGradient',
   'strokeGradient',
 ];

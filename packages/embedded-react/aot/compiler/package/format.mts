@@ -26,10 +26,10 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 18;
+export const FORMAT_MINOR = 19;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
-export const ENGINE_ABI = 2;
+export const ENGINE_ABI = 3;
 
 export const PACKAGE_TAG = 'erb';
 
@@ -228,6 +228,7 @@ export const ANIMATION_PROP_FIELDS: ReadonlyMap<string, string> = new Map([
   ['ER_PROP_SWITCH_THUMB', 'switch_value'],
   ['ER_PROP_ARC_VALUE', 'arc_value'],
   ['ER_PROP_ARC_VALUE_START', 'arc_value_start'],
+  ['ER_PROP_VECTOR_DASH_OFFSET', 'vector_dash_offset'],
 ]);
 
 /** Function kinds. Below `query`, a kind is the EREventType its handler is bound to. */
@@ -674,6 +675,7 @@ const PROPS_IN_ORDER: [field: string, kind: PropKindName, max?: number][] = [
   ['gradient_stops[2].position', 'float'],
   ['gradient_stops[3].position', 'float'],
   ['gradient_corner', 'enum', 4],
+  ['vector_dash_offset', 'float'],
 ];
 
 /** Span props start at this id, SPAN_STRIDE ids per span. */

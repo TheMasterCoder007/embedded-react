@@ -701,6 +701,16 @@ export interface SvgPaintProps {
   strokeLinejoin?: 'miter' | 'round' | 'bevel';
   strokeMiterlimit?: SvgNumber;
   fillRule?: 'nonzero' | 'evenodd';
+  /**
+   * Dash and gap lengths along the stroke: a number, a list, or a string of them (`'6 3'`). Each dash
+   * takes `strokeLinecap`. `'none'` is solid.
+   */
+  strokeDasharray?: SvgNumber | readonly SvgNumber[];
+  /**
+   * How far into its dashes the stroke starts. An animated value moves them on the native driver, with
+   * no re-render; every animated one in an `<Svg>` follows the same value.
+   */
+  strokeDashoffset?: SvgNumber | AnimatedNode;
   /** Fills with a gradient instead of the solid `fill`. */
   fillGradient?: VectorGradient;
   /** Strokes with a gradient instead of the solid `stroke`. */
@@ -1373,6 +1383,10 @@ export interface VectorShape {
   cap?: 'butt' | 'round' | 'square';
   join?: 'miter' | 'round' | 'bevel';
   fillRule?: 'nonzero' | 'evenodd';
+  /** Dash and gap lengths along the stroke. */
+  dash?: number[];
+  /** How far into its dashes the stroke starts. */
+  dashOffset?: number;
   fillGradient?: VectorGradient;
   strokeGradient?: VectorGradient;
 }

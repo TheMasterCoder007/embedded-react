@@ -111,7 +111,7 @@ extern "C"
  * Bump ER_ABI when a prop, node type, event, animated property or enum value is added. Raise ER_ABI_MIN when
  * one is removed or changes meaning. The prop ids a package names are listed in runtime/erb_props.c.
  */
-#define ER_ABI 2
+#define ER_ABI 3
 #define ER_ABI_MIN 1
 
     /*----------------------------------------------------------------------------------------------------------------------
@@ -198,6 +198,13 @@ extern "C"
      *   ER_VECTOR_OP_ARC    cx cy r a0 a1 ccw       circular arc (radians, clockwise-from-+X; ccw!=0 reverses)
      *   ER_VECTOR_OP_CLOSE                          close the current subpath
      *   ER_VECTOR_OP_MASK   kind count              put a clip or mask over the shapes after it
+     *   ER_VECTOR_OP_DASH   dash gap                add a dash and the gap after it to this shape's stroke
+     *   ER_VECTOR_OP_DASH_OFFSET offset scale       how far into its dashes this shape's stroke starts
+     *
+     * A shape with an ER_VECTOR_OP_DASH in its run is stroked in dashes that follow the path's length, each
+     * one capped by the paint's cap. Up to ER_VECTOR_DASH_MAX of them make the pattern, which repeats. The
+     * stroke starts `offset + scale * the node's dash offset` into it (ER_PROP_VECTOR_DASH_OFFSET), so a
+     * scale of 0 leaves the shape out of the node's animated offset. A pattern of no length draws solid.
      *
      * ER_VECTOR_OP_MASK takes the next `count` shapes out of the drawing and makes a mask of them. It adds to
      * the masks already in force, and a shape after it is drawn only where every one of them lets it through.
@@ -214,6 +221,10 @@ extern "C"
 #define ER_VECTOR_OP_ARC 5.0f
 #define ER_VECTOR_OP_CLOSE 6.0f
 #define ER_VECTOR_OP_MASK 7.0f
+#define ER_VECTOR_OP_DASH 8.0f
+#define ER_VECTOR_OP_DASH_OFFSET 9.0f
+
+#define ER_VECTOR_DASH_MAX 8 /**< Dash and gap pairs in one shape's pattern. */
 
 #define ER_VECTOR_MASK_NONE 0
 #define ER_VECTOR_MASK_CLIP 1
@@ -560,19 +571,20 @@ extern "C"
      */
     typedef enum
     {
-        ER_PROP_OPACITY = 0,      /**< Transparency (0.0–1.0); View family, Text, Image and TextInput. */
-        ER_PROP_TRANSLATE_X,      /**< Horizontal translation in pixels. */
-        ER_PROP_TRANSLATE_Y,      /**< Vertical translation in pixels. */
-        ER_PROP_SCALE_X,          /**< Horizontal scale factor. */
-        ER_PROP_SCALE_Y,          /**< Vertical scale factor. */
-        ER_PROP_ROTATE_Z,         /**< Rotation around the Z axis in degrees. */
-        ER_PROP_ROTATE_X,         /**< Rotation around the X axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
-        ER_PROP_ROTATE_Y,         /**< Rotation around the Y axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
-        ER_PROP_BACKGROUND_COLOR, /**< Background ARGB8888 color packed as float bits. */
-        ER_PROP_COLOR,            /**< Foreground ARGB8888 color packed as float bits. */
-        ER_PROP_SWITCH_THUMB,     /**< Switch thumb position 0.0 (off) – 1.0 (on). */
-        ER_PROP_ARC_VALUE,        /**< Arc value in [arc_min, arc_max] units (ER_NODE_ARC only). */
-        ER_PROP_ARC_VALUE_START,  /**< Arc range-mode low end, same units (ER_NODE_ARC with arc_range). */
+        ER_PROP_OPACITY = 0,        /**< Transparency (0.0–1.0); View family, Text, Image and TextInput. */
+        ER_PROP_TRANSLATE_X,        /**< Horizontal translation in pixels. */
+        ER_PROP_TRANSLATE_Y,        /**< Vertical translation in pixels. */
+        ER_PROP_SCALE_X,            /**< Horizontal scale factor. */
+        ER_PROP_SCALE_Y,            /**< Vertical scale factor. */
+        ER_PROP_ROTATE_Z,           /**< Rotation around the Z axis in degrees. */
+        ER_PROP_ROTATE_X,           /**< Rotation around the X axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
+        ER_PROP_ROTATE_Y,           /**< Rotation around the Y axis in degrees (3D; requires ERUI_3D_TRANSFORMS). */
+        ER_PROP_BACKGROUND_COLOR,   /**< Background ARGB8888 color packed as float bits. */
+        ER_PROP_COLOR,              /**< Foreground ARGB8888 color packed as float bits. */
+        ER_PROP_SWITCH_THUMB,       /**< Switch thumb position 0.0 (off) – 1.0 (on). */
+        ER_PROP_ARC_VALUE,          /**< Arc value in [arc_min, arc_max] units (ER_NODE_ARC only). */
+        ER_PROP_ARC_VALUE_START,    /**< Arc range-mode low end, same units (ER_NODE_ARC with arc_range). */
+        ER_PROP_VECTOR_DASH_OFFSET, /**< Dash offset in pixels, added to its dashed strokes (ER_NODE_VECTOR only). */
     } ERAnimationProp;
 
     /**
@@ -888,6 +900,9 @@ extern "C"
         uint8_t arc_adjustable;         /**< 1 => built-in drag-to-set; emits ER_EVENT_VALUE_CHANGE. */
         uint8_t arc_range;              /**< 1 => the indicator spans [arc_value_start, arc_value] and carries a knob
                                              at EACH end (a dual-setpoint dial); 0 => it spans [start, arc_value]. */
+
+        /* --- Vector (ER_NODE_VECTOR) --- */
+        float vector_dash_offset; /**< Pixels added to the offset of its dashed strokes (ER_VECTOR_OP_DASH_OFFSET). */
 
         /* --- Gradient (View-family; requires ERUI_GRADIENT at build time) --- */
         uint8_t gradient_type;       /**< ERGradientType — default ER_GRADIENT_NONE. */

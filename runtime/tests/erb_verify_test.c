@@ -696,10 +696,39 @@ static void test_tape_masks(void)
     EXPECT(ERB_OK, "as many masks at once as the engine keeps");
 }
 
+static void test_tape_dashes(void)
+{
+    /* A shape with a dash, its offset, and one point. */
+    const float dashed[] = {0.0f, 0.0f, 8.0f, 4.0f, 2.0f, 9.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f};
+    float tape[64];
+    set_tape(dashed, 11u);
+    EXPECT(ERB_OK, "a dashed shape");
+    set_tape(dashed + 2, 9u);
+    EXPECT(ERB_ERROR_TAPE, "a dash before any shape");
+    /* MASK kind 1 of no shapes, then the dash. */
+    const float after_mask[] = {0.0f, 0.0f, 7.0f, 1.0f, 0.0f, 8.0f, 4.0f, 2.0f};
+    set_tape(after_mask, 8u);
+    EXPECT(ERB_ERROR_TAPE, "a dash after a mask op, outside a shape");
+    uint16_t count = 2u;
+    memcpy(tape, dashed, 2u * sizeof(float));
+    for (int dash = 0; dash <= ER_VECTOR_DASH_MAX; dash++)
+    {
+        memcpy(tape + count, dashed + 2, 3u * sizeof(float));
+        count += 3u;
+    }
+    set_tape(tape, count);
+    EXPECT(ERB_ERROR_TAPE, "more dashes in a pattern than the engine keeps");
+    set_tape(tape, (uint16_t)(count - 3u));
+    EXPECT(ERB_OK, "as many dashes in a pattern as the engine keeps");
+    set_tape(tape, 4u);
+    EXPECT(ERB_ERROR_TAPE, "a dash cut off from its gap");
+}
+
 static void test_tapes(void)
 {
     test_tape_masks();
-    base()->tape_floats[0] = 9.0f;
+    test_tape_dashes();
+    base()->tape_floats[0] = 10.0f;
     EXPECT(ERB_ERROR_TAPE, "an unknown vector op");
     base()->tape_floats[1] = 3.0f;
     EXPECT(ERB_ERROR_TAPE, "a shape naming no paint");

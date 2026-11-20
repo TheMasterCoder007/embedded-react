@@ -105,6 +105,7 @@ import {
   rectTape,
   lineTape,
   checkedTapeNumber,
+  dashEntries,
   checkVectorPaints,
   vectorPaintOf,
   DEFAULT_MITER_LIMIT,
@@ -1525,8 +1526,8 @@ function refTarget(
 
 /**
  * An imperative updateVector shape `{ arc:[…]|circle:[…]|rect:[x, y, w, h, rx?, ry?]|line:[…]|path:'…', fill, … }`:
- * its tape slots, the locals they need, and its static paint. Geometry coords may reference state, refs or event
- * fields; the paint must be static. The geometry is the same as the JSX path's. `tag` names any locals and must
+ * its tape slots, the locals they need, and its static paint. Geometry coords and a `dashOffset` may reference
+ * state, refs or event fields; the paint and the `dash` pattern must be static. The geometry is the same as the JSX path's. `tag` names any locals and must
  * be unique in the handler block they are written into.
  *
  * @param shapeNode  The shape's object literal.
@@ -1637,7 +1638,15 @@ function imperativeShape(
     paintValue('fillRule', 'nonzero') === 'evenodd' ? 1 : 0,
   ]);
 
-  return {...geometry, paint};
+  // The dash pattern is static too; its offset may be a runtime value.
+  const dash = dashEntries(
+    paintValue('dash', null),
+    props.dashOffset
+      ? {kind: 'float', value: lowerExpr(props.dashOffset, environment)}
+      : checkedTapeNumber(0),
+  );
+
+  return {...geometry, entries: [...dash, ...geometry.entries], paint};
 }
 
 /**

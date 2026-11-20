@@ -97,6 +97,11 @@ interface PathEntry {
 
 type PaintProp = keyof SvgPaintProps;
 
+/** An animated value, as far as a tape reads one: the host config binds it to the node. */
+interface AnimatedOffset {
+  __animated: boolean;
+}
+
 /** A shape's paint with every prop resolved. */
 type ResolvedPaint = Required<
   Omit<SvgPaintProps, 'fillGradient' | 'strokeGradient'>
@@ -161,6 +166,8 @@ export const VOP_CUBIC = 4;
 export const VOP_ARC = 5;
 export const VOP_CLOSE = 6;
 export const VOP_MASK = 7;
+export const VOP_DASH = 8;
+export const VOP_DASH_OFFSET = 9;
 
 // Mask kinds and limits — MUST match the engine's ER_VECTOR_MASK_* (er_scene.h).
 export const MASK_NONE = 0;
@@ -170,8 +177,11 @@ export const MASK_ALPHA = 3;
 export const MASK_GROUPS_MAX = 4;
 export const MASK_SHAPES_MAX = 16;
 
+// Dash and gap pairs in one shape's pattern — MUST match the engine's ER_VECTOR_DASH_MAX (er_scene.h).
+export const DASH_MAX = 8;
+
 /** How many values follow each opcode. */
-const OP_OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2];
+const OP_OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2, 2, 2];
 
 // Control-point ratio for approximating a quarter (circular or elliptical) arc with one cubic:
 // 4/3 * (sqrt(2) - 1). Used by rounded-rect corners.
@@ -210,10 +220,11 @@ const DEFAULT_MITER_LIMIT = 4;
 const FILL_RULE_NONZERO = 0;
 const FILL_RULE_EVEN_ODD = 1;
 
-// A shape's tape starts with VOP_SHAPE and its paint index.
-const SHAPE_HEADER_LENGTH = 2;
-// Where strokeWidth sits in a paint record (see PAINT_STRIDE).
+// Where the stroke's color, width and gradient sit in a paint record (see PAINT_STRIDE).
+const PAINT_STROKE_SLOT = 1;
 const PAINT_STROKE_WIDTH_SLOT = 2;
+const PAINT_STROKE_GRADIENT_SLOT = 8;
+const ALPHA_SHIFT = 24;
 
 /** Linearly interpolates two straight-alpha ARGB8888 colors, per channel. */
 function lerpArgb(
@@ -948,6 +959,8 @@ export function shapesToVector(shapes: readonly VectorShape[]): VectorTape {
     const opStart = ops.length;
     const paintIndex = paints.length / PAINT_STRIDE;
     ops.push(VOP_SHAPE, paintIndex);
+    if (shape.dash) pushDash(ops, shape.dash, shape.dashOffset, 1);
+    const headerEnd = ops.length;
     if (shape.arc) {
       const cx = shape.arc[0];
       const cy = shape.arc[1];
@@ -1017,7 +1030,7 @@ export function shapesToVector(shapes: readonly VectorShape[]): VectorTape {
       for (let index = 0; index < pathOps.length; index++)
         ops.push(pathOps[index]);
     }
-    if (ops.length <= opStart + SHAPE_HEADER_LENGTH) {
+    if (ops.length <= headerEnd) {
       ops.length = opStart; // nothing emitted — roll back the SHAPE header
       continue;
     }
@@ -1058,6 +1071,123 @@ function pushGrad(
     })),
   });
   return gradients.length;
+}
+
+// --- Dashed strokes --------------------------------------------------------------------------------
+
+/**
+ * A `strokeDasharray` as dash and gap lengths, or null for a solid stroke. An odd count repeats to make
+ * pairs, as in SVG. A negative length, a percentage or a pattern of no length is solid.
+ */
+export function dashPattern(value: unknown): number[] | null {
+  if (value == null || value === 'none' || typeof value === 'boolean')
+    return null;
+  const entries: unknown[] = Array.isArray(value)
+    ? value
+    : typeof value === 'number'
+      ? [value]
+      : String(value)
+          .trim()
+          .split(/[\s,]+/)
+          .filter(Boolean);
+  const lengths: number[] = [];
+  let total = 0;
+  for (const entry of entries) {
+    if (typeof entry === 'string' && entry.includes('%')) return null;
+    const length =
+      typeof entry === 'number' ? entry : parseFloat(String(entry));
+    if (!Number.isFinite(length) || length < 0) return null;
+    lengths.push(length);
+    total += length;
+  }
+  if (!(total > 0)) return null;
+  return lengths.length % 2 ? [...lengths, ...lengths] : lengths;
+}
+
+/** True for an animated value given as a `strokeDashoffset`. */
+function isAnimatedOffset(value: unknown): value is AnimatedOffset {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    (value as AnimatedOffset).__animated === true
+  );
+}
+
+let _warnedDashCount = false;
+
+/**
+ * Appends a shape's dash ops, lengths scaled by `scale`. An animated offset is left to the node's dash
+ * offset, which the engine adds at `scale`. Returns false, having written nothing, for a solid stroke.
+ */
+function pushDash(
+  ops: number[],
+  dasharray: unknown,
+  dashoffset: unknown,
+  scale: number,
+): boolean {
+  const pattern = dashPattern(dasharray);
+  if (!pattern) return false;
+  if (pattern.length > 2 * DASH_MAX && !_warnedDashCount) {
+    _warnedDashCount = true;
+    console.warn(
+      `embedded-react: a strokeDasharray has more than ${DASH_MAX} dashes; the rest are left off.`,
+    );
+  }
+  const count = Math.min(pattern.length, 2 * DASH_MAX);
+  for (let index = 0; index < count; index += 2)
+    ops.push(VOP_DASH, pattern[index] * scale, pattern[index + 1] * scale);
+  if (isAnimatedOffset(dashoffset)) ops.push(VOP_DASH_OFFSET, 0, scale);
+  else {
+    const offset = num(dashoffset, 0) * scale;
+    if (offset !== 0) ops.push(VOP_DASH_OFFSET, offset, 0);
+  }
+  return true;
+}
+
+/**
+ * The animated value an <Svg>'s dashed strokes follow, or null: the first animated `strokeDashoffset` on
+ * the <Svg> or a shape under it. A node has one dash offset, so every animated one in an <Svg> moves
+ * with it; a second, different value warns once.
+ */
+export function svgDashOffset<Value extends AnimatedOffset>(
+  props: SvgProps,
+): Value | null {
+  let found: Value | null = null;
+  const visit = (elementProps: {
+    strokeDashoffset?: unknown;
+    children?: unknown;
+  }): void => {
+    const offset = elementProps.strokeDashoffset;
+    if (isAnimatedOffset(offset)) {
+      if (found === null) found = offset as Value;
+      else if (found !== offset && !sameAnimated(found, offset))
+        warnDashOffsets();
+    }
+    walkChildren(elementProps.children);
+  };
+  const walkChildren = (child: unknown): void => {
+    if (Array.isArray(child)) for (const item of child) walkChildren(item);
+    else if (isElement(child)) visit(child.props);
+  };
+  visit(props);
+  return found;
+}
+
+/** Whether two animated values are one binding: the same value, or interpolations that say they agree. */
+function sameAnimated(first: AnimatedOffset, second: AnimatedOffset): boolean {
+  const compare = (first as {__bindEq?: (other: unknown) => boolean}).__bindEq;
+  return typeof compare === 'function' && compare.call(first, second);
+}
+
+let _warnedDashOffsets = false;
+
+function warnDashOffsets(): void {
+  if (_warnedDashOffsets) return;
+  _warnedDashOffsets = true;
+  console.warn(
+    'embedded-react: an <Svg> has two different animated strokeDashoffset values. A node has one dash ' +
+      'offset, so every animated one follows the first. Give each its own <Svg>.',
+  );
 }
 
 // --- Clips and masks -------------------------------------------------------------------------------
@@ -1139,7 +1269,7 @@ export function tapeShapeCount(ops: readonly number[]): number {
   return shapes;
 }
 
-/** The box around a tape's points (SHAPE and MASK headers skipped), or null for a tape with none. */
+/** The box around a tape's points (SHAPE, MASK and dash ops skipped), or null for a tape with none. */
 export function tapeBounds(ops: readonly number[]): TapeBounds | null {
   let minX = Infinity;
   let minY = Infinity;
@@ -1158,7 +1288,12 @@ export function tapeBounds(ops: readonly number[]): TapeBounds | null {
       const radius = Math.abs(ops[index + 3]);
       add(ops[index + 1] - radius, ops[index + 2] - radius);
       add(ops[index + 1] + radius, ops[index + 2] + radius);
-    } else if (opcode !== VOP_SHAPE && opcode !== VOP_MASK) {
+    } else if (
+      opcode !== VOP_SHAPE &&
+      opcode !== VOP_MASK &&
+      opcode !== VOP_DASH &&
+      opcode !== VOP_DASH_OFFSET
+    ) {
       for (let operand = 1; operand < operands; operand += 2)
         add(ops[index + operand], ops[index + operand + 1]);
     }
@@ -1186,6 +1321,8 @@ const PAINT_DEFAULT: ResolvedPaint = {
   strokeLinejoin: 'miter',
   strokeMiterlimit: DEFAULT_MITER_LIMIT,
   fillRule: 'nonzero',
+  strokeDasharray: 'none',
+  strokeDashoffset: 0,
   fillGradient: null,
   strokeGradient: null,
 };
@@ -1732,16 +1869,31 @@ export function flattenSvg(props: SvgProps): VectorTape {
       ? transformCached(entry, transform)
       : transformOps(baseOps, transform);
     let paintIndex = 0;
+    let dashScale = 0; // above 0 for a shape whose stroke is drawn
     if (target.mode === 'clip') paintIndex = clipPaint(childRule);
     else if (target.mode !== 'bounds') {
       paintIndex = target.paints.length / PAINT_STRIDE;
       const scale = (transform.scaleX + transform.scaleY) / 2; // stroke-width scale (uniform assumed)
-      target.paints.push(...paintRecord(merged, scale, target.gradients));
+      const record = paintRecord(merged, scale, target.gradients);
+      target.paints.push(...record);
+      if (
+        record[PAINT_STROKE_WIDTH_SLOT] > 0 &&
+        (record[PAINT_STROKE_SLOT] >>> ALPHA_SHIFT !== 0 ||
+          record[PAINT_STROKE_GRADIENT_SLOT] !== 0)
+      )
+        dashScale = scale;
     }
     target.writer?.use(childMasks);
     // Appended one at a time: `shapeTape` can be a long cached tape, and spreading it into push() both
     // copies it into an argument list and risks the call-argument limit.
     target.ops.push(VOP_SHAPE, paintIndex);
+    if (dashScale > 0 && merged.strokeDasharray !== 'none')
+      pushDash(
+        target.ops,
+        merged.strokeDasharray,
+        merged.strokeDashoffset,
+        dashScale,
+      );
     for (let index = 0; index < shapeTape.length; index++)
       target.ops.push(shapeTape[index]);
   };
@@ -1761,11 +1913,15 @@ export function flattenSvg(props: SvgProps): VectorTape {
 
 // --- Imported SVG artifacts (<Svg source>) -------------------------------------------------------
 
-/** Scales a full op-tape (with SHAPE headers) by (scaleX, scaleY): coordinates only, paint indices untouched. */
+/**
+ * Scales a full op-tape (with SHAPE headers) by (scaleX, scaleY): coordinates, and dash lengths by
+ * `strokeScale`; paint indices untouched.
+ */
 function scaleTape(
   ops: readonly number[],
   scaleX: number,
   scaleY: number,
+  strokeScale: number,
 ): number[] {
   const scaled: number[] = [];
   let index = 0;
@@ -1776,6 +1932,8 @@ function scaleTape(
       scaled.push(ops[index++]); // paint index — copy, do not scale
     else if (opcode === VOP_MASK)
       scaled.push(ops[index++], ops[index++]); // kind and shape count
+    else if (opcode === VOP_DASH || opcode === VOP_DASH_OFFSET)
+      scaled.push(ops[index++] * strokeScale, ops[index++] * strokeScale);
     else if (opcode === VOP_MOVE || opcode === VOP_LINE)
       scaled.push(ops[index++] * scaleX, ops[index++] * scaleY);
     else if (opcode === VOP_QUAD)
@@ -1848,7 +2006,11 @@ export function scaleVectorArtifact(
         ? gradient.r || 0
         : (gradient.r || 0) * strokeScale,
   }));
-  return {ops: scaleTape(artifact.ops, scaleX, scaleY), paints, gradients};
+  return {
+    ops: scaleTape(artifact.ops, scaleX, scaleY, strokeScale),
+    paints,
+    gradients,
+  };
 }
 
 // --- Bridge-cap diagnostics ----------------------------------------------------------------------

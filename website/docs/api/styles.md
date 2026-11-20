@@ -182,8 +182,8 @@ per-corner radii. `backgroundImage` works on the first five. `borderRadius`, the
 ## Animated values in styles
 
 An `Animated.Value` can sit directly in any `transform` axis on any element, in `opacity` on a `View`,
-`ScrollView`, `Pressable`, `Modal`, `Text`, `Image` or `TextInput`, and in a `Dial`'s
-`value`/`valueStart`. `backgroundColor` on a `View`, `ScrollView`, `Pressable` or `Modal` and `color` on
+`ScrollView`, `Pressable`, `Modal`, `Text`, `Image` or `TextInput`, in a `Dial`'s
+`value`/`valueStart`, and in the `strokeDashoffset` of an `<Svg>` shape. `backgroundColor` on a `View`, `ScrollView`, `Pressable` or `Modal` and `color` on
 a `Text` take an interpolation onto colors:
 `v.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']})`. The engine animates nothing else,
 so Flow B rejects it. The `Animated.*`

@@ -452,7 +452,8 @@ import gauge from './gauge.svg';
 
 **Paint props**, on `<Svg>`, `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`
 (`butt`/`round`/`square`), `strokeLinejoin` (`miter`/`round`/`bevel`), `strokeMiterlimit`,
-`fillRule` (`nonzero`/`evenodd`), and `fillGradient`/`strokeGradient`, a gradient
+`fillRule` (`nonzero`/`evenodd`), `strokeDasharray`/`strokeDashoffset` (see
+[Dashed strokes](#dashed-strokes)), and `fillGradient`/`strokeGradient`, a gradient
 `{type: 1 linear | 2 radial | 3 conic, stops: [{color, offset}], ax, ay, bx, by, r}` with up to 8
 stops. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and the
 [named colours](./styles.md#colours).
@@ -476,6 +477,58 @@ Limits: 16 shapes per `<Svg>` and 8 vector nodes at once, by default (`ERUI_VECT
 **Flow B:** a state-driven `<Svg>` uses absolute pixels (no `viewBox`, no `<G>`) and literal shape
 children; a state-driven `<Path d>` is not supported, and `visible` or an event on an `<Svg>` is
 rejected (wrap it in a `View` or `Pressable`).
+
+### Dashed strokes
+
+`strokeDasharray` cuts a stroke into dashes that follow the path's length: a number, a list, or a
+string of dash and gap lengths (`'6 3'`), in the drawing's units. An odd count repeats, as in SVG,
+and `'none'` is solid. Each dash takes `strokeLinecap`, so a dash of `0` under a round cap is a dot.
+`strokeDashoffset` is how far into the pattern the stroke starts.
+
+```tsx
+const AROUND = 2 * Math.PI * 40;
+
+function Ring() {
+  const left = useAnimatedValue(AROUND);
+  useEffect(() => {
+    Animated.timing(left, {toValue: AROUND * 0.25, duration: 600}).start();
+  }, []);
+  return (
+    <Svg
+      width={120}
+      height={120}
+      viewBox="0 0 100 100"
+      fill="none"
+      strokeWidth={8}>
+      <Circle cx={50} cy={50} r={40} stroke="#d0d4d8" />
+      <Circle
+        cx={50}
+        cy={50}
+        r={40}
+        stroke="#3060d0"
+        strokeLinecap="round"
+        strokeDasharray={[AROUND, AROUND]}
+        strokeDashoffset={left}
+      />
+    </Svg>
+  );
+}
+```
+
+`strokeDashoffset` takes an animated value or an interpolation of one. The engine then moves the
+dashes itself, with no re-render and no tape upload, which is what a progress ring or a marching
+outline needs. A node has one dash offset, so every animated `strokeDashoffset` in an `<Svg>` follows
+the same value: give a second value its own `<Svg>`. A circle starts at 3 o'clock and runs clockwise.
+
+Limits: 8 dashes in one pattern (an odd count takes twice its length), and a pattern shorter than a
+quarter of a pixel is drawn solid. Dashes that stay put are cached like any stroke; an `<Svg>` with an
+animated offset is rebuilt each frame it is drawn.
+
+**Flow B:** the pattern must be constant. The offset may be a constant, a state-driven value, or an
+animated one; a second animated value in one `<Svg>`, or a pattern past the limit, fails the build.
+
+In an `.svg` file, `stroke-dasharray` and `stroke-dashoffset` bake the same way. A file falls back to a
+raster when a pattern has a percentage in it or more than 8 dashes.
 
 ### Clips and masks
 
@@ -670,7 +723,7 @@ updateVector(
 - **`updateVector(handle, shapes, dirtyRect?)`** sets an `<Svg>` node's geometry from primitive
   descriptors, skipping React and the `d` parser. Each shape has exactly one geometry key (`arc`,
   `circle`, `line`, `rect`, `path`) plus paint in the short spellings (`fill`, `stroke`, `strokeWidth`,
-  `cap`, `join`, `miter`, `fillRule`, `fillGradient`, `strokeGradient`). The optional `dirtyRect`
+  `cap`, `join`, `miter`, `fillRule`, `dash`, `dashOffset`, `fillGradient`, `strokeGradient`). The optional `dirtyRect`
   `[x, y, w, h]`, in node-local pixels, limits the repaint to that region.
 - **`updateText(handle, text)`** sets a `<Text>` node's content without touching its style. A later
   React render reverts it cleanly.
