@@ -24,10 +24,18 @@ import {lowerStyle, NODE_TYPES, TRANSFORM_FIELDS} from '../style-map.mts';
 import {
   DASH_MAX,
   dashPattern,
+  elementStops,
+  fadeColor,
   flattenSvg,
-  maskReference,
+  GRAD_MAX_STOPS,
+  gradientSource,
+  isGradientTag,
+  opacityOf,
+  shapeBounds,
+  urlReference,
   parseColor,
   parsePath,
+  polyPathD,
   KAPPA,
   PAINT_PROPS,
   PAINT_STRIDE,
@@ -43,7 +51,12 @@ import {
   VOP_QUAD,
   VOP_SHAPE,
 } from '../../src/embedded-react/svg-ops.mts';
-import type {ColorInput} from '../../src/embedded-react/svg-ops.mts';
+import type {
+  ColorInput,
+  GradientElement,
+  PackedGradient,
+  PaintSource,
+} from '../../src/embedded-react/svg-ops.mts';
 import type {SvgNumber} from '../../src/embedded-react/index.d.ts';
 import {aotError, currentLoc} from './diagnostics.mts';
 import {
@@ -75,7 +88,7 @@ import {MAX_GRADIENT_STOPS} from './ir/vectors.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
-import type {IrNode} from './ir/nodes.mts';
+import type {IrNode, IrPropValue} from './ir/nodes.mts';
 import type {IrExpr} from './ir/expressions.mts';
 import {FLOAT} from './ir/types.mts';
 import type {DynAssign} from './types.mts';
@@ -191,8 +204,9 @@ function checkShape(child: t.JSXElement): void {
     throw at(
       aotError(
         `AOT: <${tag ?? 'this element'}> is not a shape an <Svg> draws`,
-        'an <Svg> draws Path, Circle, Ellipse, Rect, Line, Arc and SvgText, grouped by G. A component is not ' +
-          'rendered inside one: inline its shapes.',
+        'an <Svg> draws Path, Circle, Ellipse, Rect, Line, Polygon, Polyline, Arc and SvgText, grouped by G, ' +
+          'with ClipPath, Mask, LinearGradient and RadialGradient as definitions. A component is not rendered ' +
+          'inside one: inline its shapes.',
       ),
       child,
     );
@@ -543,7 +557,7 @@ function checkSvgMasks(root: SvgElement): void {
         );
       }
 
-      const id = maskReference(value);
+      const id = urlReference(value);
       if (id == null || definitions.get(id) !== tag) {
         throw aotError(
           `AOT: ${name}=${JSON.stringify(value)} names no <${tag}> in its <Svg>`,
@@ -557,6 +571,125 @@ function checkSvgMasks(root: SvgElement): void {
     }
   };
   visit(root, false);
+}
+
+/**
+ * Refuses gradients the drawing cannot paint as written: a <Stop> outside a gradient, anything but <Stop>s in one,
+ * more stops than the engine keeps, and a `url(#id)` fill or stroke that names no gradient in its <Svg>. A clip's
+ * shapes are not painted, so their fill and stroke are not read.
+ *
+ * @param root  The <Svg>, folded, or a stand-in holding its definitions.
+ */
+function checkSvgGradients(root: SvgElement): void {
+  const gradients = new Set<string>();
+  const collect = (element: SvgElement): void => {
+    if (isGradientTag(element.type) && element.props.id != null) {
+      gradients.add(String(element.props.id));
+    }
+    for (const child of (element.props.children as SvgElement[]) ?? []) {
+      collect(child);
+    }
+  };
+  collect(root);
+
+  const visit = (
+    element: SvgElement,
+    parent: string,
+    inClip: boolean,
+  ): void => {
+    if (element.type === 'Stop' && !isGradientTag(parent)) {
+      throw aotError(
+        'AOT: a <Stop> goes inside a <LinearGradient> or <RadialGradient>',
+      );
+    }
+
+    if (isGradientTag(parent) && element.type !== 'Stop') {
+      throw aotError(
+        `AOT: a <${parent}> holds only <Stop>s, not <${element.type}>`,
+      );
+    }
+
+    const children = (element.props.children as SvgElement[]) ?? [];
+    if (isGradientTag(element.type) && children.length > GRAD_MAX_STOPS) {
+      throw aotError(
+        `AOT: a <${element.type}> of ${children.length} stops is more than the engine keeps (${GRAD_MAX_STOPS})`,
+        'drop the stops that a straight blend between their neighbours already gives.',
+      );
+    }
+
+    for (const name of inClip ? [] : ['fill', 'stroke']) {
+      const value = element.props[name];
+      if (typeof value !== 'string' || !value.trim().startsWith('url(')) {
+        continue;
+      }
+
+      const id = urlReference(value);
+      if (id == null || !gradients.has(id)) {
+        throw aotError(
+          `AOT: ${name}=${JSON.stringify(value)} names no <LinearGradient> or <RadialGradient> in its <Svg>`,
+          `give a gradient in the same <Svg> an id, and refer to it as ${name}="url(#id)".`,
+        );
+      }
+    }
+
+    for (const child of children) {
+      visit(child, element.type, inClip || element.type === 'ClipPath');
+    }
+  };
+  visit(root, '', false);
+}
+
+/**
+ * A packed gradient as a drawing's gradient, every value constant.
+ *
+ * @param gradient  The gradient.
+ *
+ * @returns The drawing's gradient.
+ */
+const drawingGradientOf = (gradient: PackedGradient): IrDrawingGradient => ({
+  type: gradient.type,
+  stops: (gradient.stops || []).map(stop => ({
+    color: {kind: 'static' as const, argb: stop.color >>> 0},
+    offset: tapeNumber(stop.offset),
+  })),
+  ax: tapeNumber(gradient.ax || 0),
+  ay: tapeNumber(gradient.ay || 0),
+  bx: tapeNumber(gradient.bx || 0),
+  by: tapeNumber(gradient.by || 0),
+  r: tapeNumber(gradient.r || 0),
+});
+
+/**
+ * A color with its alpha multiplied by `opacity`: a constant one now, and each constant a state-driven one picks
+ * between.
+ *
+ * @param color  The color.
+ * @param opacity  0 to 1.
+ *
+ * @returns The faded color.
+ */
+function fadePaintColor(color: IrPaintColor, opacity: number): IrPaintColor {
+  if (opacity >= 1) return color;
+  if (color.kind === 'static') {
+    return {kind: 'static', argb: fadeColor(color.argb, opacity)};
+  }
+
+  const fade = (value: IrPropValue): IrPropValue => {
+    if (value.kind === 'constant' && typeof value.value === 'number') {
+      return {kind: 'constant', value: fadeColor(value.value, opacity)};
+    }
+
+    if (value.kind === 'select') {
+      return {
+        ...value,
+        whenTrue: fade(value.whenTrue),
+        whenFalse: fade(value.whenFalse),
+      };
+    }
+
+    throw aotError('AOT: this color cannot take an opacity');
+  };
+  return {kind: 'state', value: fade(color.value)};
 }
 
 /**
@@ -730,7 +863,7 @@ function svgAttrs(
         if (error instanceof SvgScreenError) throw error;
         // Defer a state-driven `d` so pathEntries raises the error naming the fix, not the expression's own error.
         // A dash pattern likewise: dashTape names its fix.
-        if (name === 'd' || name === 'strokeDasharray') {
+        if (name === 'd' || name === 'points' || name === 'strokeDasharray') {
           attributes[name] = {value: null, node: valueNode.expression};
           continue;
         }
@@ -960,29 +1093,17 @@ function lowerShapePaint(
   attributes: SvgAttrs,
   environment: Env,
   scope: Scope,
+  referenced: (id: string, name: string, opacity: number) => PaintSource,
 ): ShapePaint {
-  // Colors and the stroke width are the only paint attributes that may be state-driven.
-  const color = (attributeValue: unknown, fallback: string): IrPaintColor =>
-    isDynamicAttr(attributeValue)
-      ? {
-          kind: 'state',
-          value: lowerColorValue(attributeValue.node, environment),
-        }
-      : {
-          kind: 'static',
-          argb: parseColor((attributeValue ?? fallback) as ColorInput) >>> 0,
-        };
-
-  const strokeWidth: IrTapeValue = isDynamicAttr(attributes.strokeWidth)
-    ? {kind: 'float', value: attributes.strokeWidth.value!}
-    : checkedTapeNumber(svgNum(attributes.strokeWidth, 1));
-
   // The rest of the paint must be static.
   for (const attributeName of [
     'strokeLinecap',
     'strokeLinejoin',
     'strokeMiterlimit',
     'fillRule',
+    'fillOpacity',
+    'strokeOpacity',
+    'opacity',
   ]) {
     if (isDynamicAttr(attributes[attributeName])) {
       throw new Error(
@@ -992,8 +1113,49 @@ function lowerShapePaint(
     }
   }
 
-  const fill = color(attributes.fill, 'black');
-  const stroke = color(attributes.stroke, 'none');
+  // Colors and the stroke width are the only paint attributes that may be state-driven. A `url(#id)` paints the
+  // gradient it names.
+  const opacity = opacityOf(attributes.opacity);
+  const fillOpacity = opacity * opacityOf(attributes.fillOpacity);
+  const strokeOpacity = opacity * opacityOf(attributes.strokeOpacity);
+  const sources: Record<string, PaintSource> = {};
+  const color = (
+    name: 'fill' | 'stroke',
+    fallback: string,
+    fade: number,
+  ): IrPaintColor => {
+    const attributeValue = attributes[name];
+    if (isDynamicAttr(attributeValue)) {
+      return fadePaintColor(
+        {
+          kind: 'state',
+          value: lowerColorValue(attributeValue.node, environment),
+        },
+        fade,
+      );
+    }
+
+    const id = urlReference(attributeValue);
+    if (id != null) {
+      sources[name] = referenced(id, name, fade);
+      return {kind: 'static', argb: sources[name].color};
+    }
+
+    return {
+      kind: 'static',
+      argb: fadeColor(
+        parseColor((attributeValue ?? fallback) as ColorInput),
+        fade,
+      ),
+    };
+  };
+
+  const strokeWidth: IrTapeValue = isDynamicAttr(attributes.strokeWidth)
+    ? {kind: 'float', value: attributes.strokeWidth.value!}
+    : checkedTapeNumber(svgNum(attributes.strokeWidth, 1));
+
+  const fill = color('fill', 'black', fillOpacity);
+  const stroke = color('stroke', 'none', strokeOpacity);
   const miter = svgNum(attributes.strokeMiterlimit, DEFAULT_MITER_LIMIT);
   checkNumber(miter);
   const paint = {
@@ -1005,18 +1167,36 @@ function lowerShapePaint(
     join: JOIN_MAP[attributes.strokeLinejoin as string] ?? 0,
     fillRule: attributes.fillRule === 'evenodd' ? 1 : 0,
   };
-  const fillGradient = lowerGradientAttr(
-    attributes.fillGradient as GradientAttr | undefined,
-    scope,
-    environment,
-    'fillGradient',
-  );
-  const strokeGradient = lowerGradientAttr(
-    attributes.strokeGradient as GradientAttr | undefined,
-    scope,
-    environment,
-    'strokeGradient',
-  );
+  // A gradient descriptor wins over a `url(#id)`, as in Flow A; either is faded by its opacity.
+  const gradientOf = (
+    descriptor: string,
+    name: 'fill' | 'stroke',
+    fade: number,
+  ): ShapeGradient | null => {
+    const lowered = lowerGradientAttr(
+      attributes[descriptor] as GradientAttr | undefined,
+      scope,
+      environment,
+      descriptor,
+    );
+    if (lowered) {
+      return {
+        ...lowered,
+        gradient: {
+          ...lowered.gradient,
+          stops: lowered.gradient.stops.map(stop => ({
+            ...stop,
+            color: fadePaintColor(stop.color, fade),
+          })),
+        },
+      };
+    }
+
+    const placed = sources[name]?.gradient;
+    return placed ? {gradient: drawingGradientOf(placed), when: null} : null;
+  };
+  const fillGradient = gradientOf('fillGradient', 'fill', fillOpacity);
+  const strokeGradient = gradientOf('strokeGradient', 'stroke', strokeOpacity);
 
   return {paint, fillGradient, strokeGradient};
 }
@@ -1397,6 +1577,22 @@ const pathShape = (attributes: SvgAttrs): IrGeometry => {
   };
 };
 
+const polyShape = (attributes: SvgAttrs, tag: string): IrGeometry => {
+  if (isDynamicAttr(attributes.points)) {
+    throw new Error(
+      `AOT: a state-driven <${tag} points=…> is not supported (keep the points constant, or use Line for a ` +
+        'segment that moves)',
+    );
+  }
+
+  return {
+    entries: parsePath(polyPathD(attributes.points, tag === 'Polygon')).map(
+      (value: number) => checkedTapeNumber(value),
+    ),
+    locals: [],
+  };
+};
+
 /**
  * A state-driven <Svg> shape's dash ops: its pattern, which must be constant, and its offset, which may be a
  * constant, a state-driven value, or an animated one (left to the node's dash offset).
@@ -1482,6 +1678,8 @@ const SHAPE_TAPES: Record<
   Rect: rectShape,
   Line: lineShape,
   Path: pathShape,
+  Polygon: (attributes: SvgAttrs) => polyShape(attributes, 'Polygon'),
+  Polyline: (attributes: SvgAttrs) => polyShape(attributes, 'Polyline'),
 };
 
 /**
@@ -1914,18 +2112,7 @@ function emitSvgScaled(
       fillGradient: {index: paint.fillGradient, when: null},
       strokeGradient: {index: paint.strokeGradient, when: null},
     })),
-    gradients: (gradients as IrVectorTables['gradients']).map(gradient => ({
-      type: gradient.type,
-      stops: (gradient.stops || []).map(stop => ({
-        color: {kind: 'static' as const, argb: stop.color >>> 0},
-        offset: tapeNumber(stop.offset),
-      })),
-      ax: tapeNumber(gradient.ax || 0),
-      ay: tapeNumber(gradient.ay || 0),
-      bx: tapeNumber(gradient.bx || 0),
-      by: tapeNumber(gradient.by || 0),
-      r: tapeNumber(gradient.r || 0),
-    })),
+    gradients: gradients.map(drawingGradientOf),
   };
   output.vectors.push({kind: 'drawing', vector});
 
@@ -1964,6 +2151,7 @@ function emitSvgStatic(
   const dashBinds: AnimBind[] = [];
   const svgElement = jsxToSvgElement(element, scope, environment, dashBinds)!;
   checkSvgMasks(svgElement);
+  checkSvgGradients(svgElement);
   checkSvgDashes(svgElement);
   const scaled = emitSvgScaled(
     element,
@@ -2167,7 +2355,54 @@ function emitSvgSource(
 }
 
 /**
- * State-driven <Svg> (flat Arc/Circle/Rect/Line/static-Path; no viewBox/<G>): emit a mutable op-tape
+ * A state-driven <Svg>'s gradients by id, from its children and any <Defs> among them. They are folded, so each must
+ * be constant, and checked as a static drawing's are.
+ *
+ * @param element  The <Svg>.
+ * @param scope  Compile-time constants in reach.
+ * @param environment  The expression environment.
+ *
+ * @returns The gradients, folded.
+ */
+function svgGradients(
+  element: t.JSXElement,
+  scope: Scope,
+  environment: Env,
+): Map<string, SvgElement> {
+  const definitions: SvgElement[] = [];
+  for (const child of svgShapeChildren(element.children)) {
+    const type = (child.openingElement.name as t.JSXIdentifier).name;
+    if (type !== 'Defs' && !isGradientTag(type) && type !== 'Stop') continue;
+    try {
+      definitions.push(jsxToSvgElement(child, scope, environment, [])!);
+    } catch (error) {
+      if (error instanceof SvgScreenError) throw error;
+      throw at(
+        aotError(
+          `AOT: a <${type}> in a state-driven <Svg> must be constant`,
+          'for a gradient that follows state, give the shape a fillGradient or strokeGradient instead.',
+        ),
+        child,
+      );
+    }
+  }
+
+  checkSvgGradients({type: 'Svg', props: {children: definitions}});
+  const found = new Map<string, SvgElement>();
+  const collect = (definition: SvgElement): void => {
+    if (isGradientTag(definition.type) && definition.props.id != null) {
+      found.set(String(definition.props.id), definition);
+    }
+    for (const child of (definition.props.children as SvgElement[]) ?? []) {
+      collect(child);
+    }
+  };
+  definitions.forEach(collect);
+  return found;
+}
+
+/**
+ * State-driven <Svg> (flat Arc/Circle/Rect/Line/Polygon/Polyline/static-Path; no viewBox/<G>): emit a mutable op-tape
  * that is recomputed from state, at build and on each update.
  *
  * @param element  The <Svg>.
@@ -2193,6 +2428,9 @@ function emitSvgDynamic(
     );
   }
 
+  // Gradients, which must be constant, by id. A <Defs> holds nothing else this path draws.
+  const definitions = svgGradients(element, scope, environment);
+
   // Lower each shape to tape slots (after an ER_VECTOR_OP_SHAPE marker naming its paint) and its paint.
   const dashBinds: AnimBind[] = [];
   const tape: IrTapeValue[] = [];
@@ -2200,6 +2438,7 @@ function emitSvgDynamic(
   const shapePaints: ShapePaint[] = [];
   for (const child of svgShapeChildren(element.children)) {
     const type = (child.openingElement.name as t.JSXIdentifier).name;
+    if (type === 'Defs' || isGradientTag(type)) continue;
     const lowerShape = SHAPE_TAPES[type];
     if (!lowerShape) {
       throw new Error(
@@ -2222,10 +2461,18 @@ function emitSvgDynamic(
     // The builder is this <Svg>'s own function, so the shape index alone keeps a local's name unique.
     const shape = lowerShape(attributes, `s${shapePaints.length}`);
     if (!shape.entries.length) continue;
-    // The root's paint cascades to each shape, as flattenSvg does.
+    // The root's paint cascades to each shape, as flattenSvg does; an opacity multiplies into the root's.
     const paintAttributes = {...attributes};
     for (const name of PAINT_PROPS)
       paintAttributes[name] ??= rootAttributes[name];
+    if (attributes.opacity != null && rootAttributes.opacity != null) {
+      paintAttributes.opacity = isDynamicAttr(rootAttributes.opacity)
+        ? rootAttributes.opacity // refused with the shape's paint
+        : isDynamicAttr(attributes.opacity)
+          ? attributes.opacity
+          : opacityOf(attributes.opacity) * opacityOf(rootAttributes.opacity);
+    }
+
     locals.push(...shape.locals);
     tape.push(
       tapeOp('ER_VECTOR_OP_SHAPE'),
@@ -2233,7 +2480,54 @@ function emitSvgDynamic(
       ...dashTape(paintAttributes, dashBinds, child),
       ...shape.entries,
     );
-    shapePaints.push(lowerShapePaint(paintAttributes, environment, scope));
+
+    // A gradient a fill or stroke names is placed on the shape now, so one across its box needs its box.
+    const referenced = (
+      id: string,
+      name: string,
+      opacity: number,
+    ): PaintSource => {
+      const found = definitions.get(id);
+      if (!found) {
+        throw at(
+          aotError(
+            `AOT: ${name}="url(#${id})" names no <LinearGradient> or <RadialGradient> in its <Svg>`,
+            `give a gradient in the same <Svg> an id, and refer to it as ${name}="url(#id)".`,
+          ),
+          child,
+        );
+      }
+
+      const box = (): ReturnType<typeof shapeBounds> => {
+        const moves = Object.entries(attributes).some(
+          ([attributeName, value]) =>
+            !(PAINT_PROPS as string[]).includes(attributeName) &&
+            isDynamicAttr(value),
+        );
+        if (moves) {
+          throw at(
+            aotError(
+              `AOT: a gradient across a state-driven shape's box is not supported`,
+              'give the gradient gradientUnits="userSpaceOnUse" and coordinates in the <Svg>\'s pixels, or ' +
+                'keep the shape constant.',
+            ),
+            child,
+          );
+        }
+
+        return shapeBounds(type, attributes);
+      };
+      return gradientSource(
+        found as unknown as GradientElement,
+        elementStops(found.props.children),
+        opacity,
+        box,
+        {scaleX: 1, scaleY: 1, translateX: 0, translateY: 0},
+      );
+    };
+    shapePaints.push(
+      lowerShapePaint(paintAttributes, environment, scope, referenced),
+    );
   }
 
   // Allocate the node and this <Svg>'s table names.

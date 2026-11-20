@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="216" height="104" viewBox="0 0 207.69 100">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="100%">
+      <stop offset="0" stop-color="#f0b020"/>
+      <stop offset="100%" stop-color="#e04030"/>
+    </linearGradient>
+    <linearGradient id="wire" x1="5" y1="0" x2="95" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3060d0"/>
+      <stop offset="1" stop-color="#30a060" stop-opacity="0.4"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="35%" cy="35%" r="0.6">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#3060d0"/>
+      <stop offset="1" stop-color="#102040"/>
+    </radialGradient>
+  </defs>
+  <polygon points="50,6 61,38 95,38 68,58 78,92 50,72 22,92 32,58 5,38 39,38" fill="url(#sky)"
+    stroke="#202020" stroke-width="2" stroke-linejoin="round"/>
+  <polyline points="5 96 30 80 50 96 70 80 95 96" fill="none" stroke="url(#wire)" stroke-width="5"
+    stroke-linecap="round" stroke-linejoin="bevel"/>
+  <g transform="translate(107.69 0)">
+    <circle cx="30" cy="30" r="26" fill="url(#glow)"/>
+    <g opacity="0.6">
+      <rect x="40" y="40" width="50" height="50" fill="#e04030" stroke="#202020" stroke-width="4"
+        stroke-opacity="0.5"/>
+      <rect x="20" y="60" width="40" height="30" fill="#30a060" fill-opacity="0.5"/>
+    </g>
+  </g>
+</svg>

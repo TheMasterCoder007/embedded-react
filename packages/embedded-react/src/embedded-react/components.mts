@@ -39,7 +39,14 @@ export const Circle = 'Circle';
 export const Ellipse = 'Ellipse';
 export const Rect = 'Rect';
 export const Line = 'Line';
+export const Polygon = 'Polygon';
+export const Polyline = 'Polyline';
 export const G = 'G';
+// Definitions: gradients a fill or stroke names as url(#id), and <Defs> to hold them. None draws where it sits.
+export const Defs = 'Defs';
+export const LinearGradient = 'LinearGradient';
+export const RadialGradient = 'RadialGradient';
+export const Stop = 'Stop';
 // Text drawn as glyph outlines. The build bakes it to a path, so it reaches the device with a `d`.
 export const SvgText = 'SvgText';
 // A clip and a mask: shapes another element is shown through. Neither draws anything where it sits.

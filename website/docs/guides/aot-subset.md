@@ -295,6 +295,10 @@ has ASCII plus what `assets.config.js` adds. The build warns about any character
   Its paint may come from state.
 - `<ClipPath>` and `<Mask>` need a static `<Svg>`. A `clipPath` or `mask` that names nothing in its
   `<Svg>`, or more than 4 of them on one shape, fails the build.
+- In a state-driven `<Svg>`, a `<LinearGradient>` or `<RadialGradient>` must be constant, and one across a
+  shape's box needs that shape constant (use `gradientUnits="userSpaceOnUse"` for one state moves). A
+  `<Polygon>` or `<Polyline>` takes constant `points`, and the opacities must be constant. A `fill` or
+  `stroke` that names no gradient, or a gradient of more than 8 stops, fails the build.
 - A `strokeDasharray` must be constant. A `strokeDashoffset` may come from state or from an animated
   value, and an `<Svg>` takes one animated value for it.
 - A state-driven `<Path d>` is not supported. Use `<Arc>`, `<Circle>`, `<Rect>` and `<Line>` for

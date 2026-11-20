@@ -187,6 +187,9 @@ const SPAN_STYLE = ['color', 'fontSize', 'fontWeight', 'letterSpacing'];
 const SVG_PAINT = [
   'fill',
   'stroke',
+  'fillOpacity',
+  'strokeOpacity',
+  'opacity',
   'strokeWidth',
   'strokeLinecap',
   'strokeLinejoin',
@@ -459,6 +462,8 @@ const SVG_SHAPES: Record<string, ElementSpec> = {
   Ellipse: shape('Ellipse', ['cx', 'cy', 'rx', 'ry']),
   Rect: shape('Rect', ['x', 'y', 'width', 'height', 'rx', 'ry']),
   Line: shape('Line', ['x1', 'y1', 'x2', 'y2']),
+  Polygon: shape('Polygon', ['points']),
+  Polyline: shape('Polyline', ['points']),
   Arc: shape('Arc', ['cx', 'cy', 'r', 'startAngle', 'endAngle']),
   G: {
     ...shape('G', ['x', 'y', 'translateX', 'translateY', 'scale']),
@@ -466,8 +471,23 @@ const SVG_SHAPES: Record<string, ElementSpec> = {
   },
 };
 
-/** What other shapes are shown through, by tag: each holds shapes and draws nothing where it sits. */
+/** Definitions, by tag: clips, masks and gradients other shapes name, and what holds them. None draws where it sits. */
 const SVG_DEFINITIONS: Record<string, ElementSpec> = {
+  Defs: {...shape('Defs', []), props: new Set(), children: 'shapes'},
+  LinearGradient: {
+    ...shape('LinearGradient', []),
+    props: new Set(['id', 'x1', 'y1', 'x2', 'y2', 'gradientUnits']),
+    children: 'shapes',
+  },
+  RadialGradient: {
+    ...shape('RadialGradient', []),
+    props: new Set(['id', 'cx', 'cy', 'r', 'gradientUnits']),
+    children: 'shapes',
+  },
+  Stop: {
+    ...shape('Stop', []),
+    props: new Set(['offset', 'stopColor', 'stopOpacity']),
+  },
   ClipPath: {
     ...shape('ClipPath', []),
     props: new Set(['id', 'clipPathUnits', ...SVG_MASKED]),

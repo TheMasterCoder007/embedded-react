@@ -1433,6 +1433,18 @@ const SCENARIOS: Scenario[] = [
     file: fixture('svg-dash-source'),
     screen: PORTRAIT,
   },
+  // Polygons, polylines, gradients by reference and opacity: inline, which Flow A draws the same, and from a .svg file.
+  {
+    name: 'svg-elements',
+    file: fixture('svg-elements'),
+    screen: PORTRAIT,
+    flowA: true,
+  },
+  {
+    name: 'svg-elements-source',
+    file: fixture('svg-elements-source'),
+    screen: PORTRAIT,
+  },
   // A .svg file's symbols, patterns and embedded image.
   {
     name: 'svg-sampler-source',
