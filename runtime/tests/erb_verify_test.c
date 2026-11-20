@@ -806,7 +806,10 @@ static void test_tape_repeats(void)
     tape[3] = 2.0f;
     tape[4] = 2.0f;
     set_tape(tape, 25u);
-    EXPECT(ERB_ERROR_TAPE, "an unknown cut");
+    EXPECT(ERB_OK, "a tile whose copies are drawn apart");
+    tape[4] = 3.0f;
+    set_tape(tape, 25u);
+    EXPECT(ERB_ERROR_TAPE, "an unknown kind of repeat");
     /* A clip of no shapes where the tile's shape should be. */
     const float mask_in_tile[] = {
         11.0f, 1.0f, 2.0f, 1.0f, 0.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f, 10.0f, 7.0f, 1.0f, 0.0f};

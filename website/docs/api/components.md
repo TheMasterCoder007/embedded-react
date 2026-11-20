@@ -733,7 +733,8 @@ element with a `filter` is drawn as an image among them.
   clip of that shape, and the shape's stroke is drawn over them. `patternUnits`, `patternContentUnits`,
   `patternTransform`, `viewBox` and `href` to another pattern are honoured, and `fill-opacity` fades the
   tiles. A pattern costs about one tile of tape however many tiles it covers. A tile whose shapes reach past
-  it has each copy cut to it, which counts as one more clip on the shape. A file falls back to a raster for a
+  it has each copy cut to it, which counts as one more clip on the shape; with `overflow="visible"` the copies
+  are drawn uncut, one tile after another, so where they overlap each is drawn whole over the last. A file falls back to a raster for a
   pattern on a stroke, a gradient or a pattern inside a pattern, or when its patterns repeat more than 16,384
   shapes in all (each tile's shapes times its tiles).
 - **An `<image>`** embedded as a `data:` URL (PNG, JPEG or GIF) is registered as an image asset and drawn

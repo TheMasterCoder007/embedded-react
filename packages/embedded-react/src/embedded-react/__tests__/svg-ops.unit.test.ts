@@ -1185,9 +1185,11 @@ describe('clips and masks', () => {
     expect(tapeMaskProblem([...masks, ...group, ...tile])).toMatch(
       /more than 4 clips and masks/,
     );
-    const uncut = tile.slice();
-    uncut[4] = 0;
-    expect(tapeMaskProblem([...masks, ...group, ...uncut])).toBeNull();
+    for (const kind of [0, 2]) {
+      const uncut = tile.slice();
+      uncut[4] = kind;
+      expect(tapeMaskProblem([...masks, ...group, ...uncut])).toBeNull();
+    }
   });
 });
 

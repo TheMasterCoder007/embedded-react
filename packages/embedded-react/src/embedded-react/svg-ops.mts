@@ -201,8 +201,12 @@ export const MASK_SHAPES_MAX = 16;
 // Dash and gap pairs in one shape's pattern — MUST match the engine's ER_VECTOR_DASH_MAX (er_scene.h).
 export const DASH_MAX = 8;
 
-// Shapes and images a drawing's repeat ops copy in all — MUST match the engine's ER_VECTOR_REPEAT_MAX (er_scene.h).
+// Shapes and images a drawing's repeat ops copy in all, and how a repeat draws its copies — MUST match the engine's
+// ER_VECTOR_REPEAT_* (er_scene.h).
 export const REPEAT_MAX = 16384;
+export const REPEAT_MERGED = 0;
+export const REPEAT_CUT = 1;
+export const REPEAT_APART = 2;
 
 /** How many values follow each opcode. */
 export const OP_OPERANDS = [1, 2, 2, 4, 6, 6, 0, 2, 2, 2, 8, 10];
@@ -1437,7 +1441,7 @@ export function tapeMaskProblem(ops: readonly number[]): string | null {
         return `the clips and masks on one shape hold more than ${MASK_SHAPES_MAX} shapes`;
     }
     // A cut repeat puts a clip of each copy's tile over it.
-    if (opcode === VOP_REPEAT && ops[index + 4]) {
+    if (opcode === VOP_REPEAT && ops[index + 4] === REPEAT_CUT) {
       if (groups + 1 > MASK_GROUPS_MAX)
         return `more than ${MASK_GROUPS_MAX} clips and masks apply to one shape`;
       if (shapes + 1 > MASK_SHAPES_MAX)
@@ -2348,7 +2352,7 @@ function scaleTape(
     else if (opcode === VOP_DASH || opcode === VOP_DASH_OFFSET)
       scaled.push(ops[index++] * strokeScale, ops[index++] * strokeScale);
     else if (opcode === VOP_REPEAT)
-      // Count, columns, rows and cut, then the first tile's corner and its two sides.
+      // Count, columns, rows and kind, then the first tile's corner and its two sides.
       scaled.push(
         ops[index++],
         ops[index++],

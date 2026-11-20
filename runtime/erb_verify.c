@@ -1693,12 +1693,13 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
                 const float pieces = erb_f32(table + floats + (float_index + 1u) * sizeof(float));
                 const float columns = erb_f32(table + floats + (float_index + 2u) * sizeof(float));
                 const float rows = erb_f32(table + floats + (float_index + 3u) * sizeof(float));
-                const float cut = erb_f32(table + floats + (float_index + 4u) * sizeof(float));
+                const float kind = erb_f32(table + floats + (float_index + 4u) * sizeof(float));
                 if (mask_owed > 0u || repeat_owed > 0u || !(pieces >= 0.0f && pieces <= (float)float_count)
                     || (float)(int)pieces != pieces || !(columns >= 1.0f && columns <= (float)ER_VECTOR_REPEAT_MAX)
                     || (float)(int)columns != columns || !(rows >= 1.0f && rows <= (float)ER_VECTOR_REPEAT_MAX)
                     || (float)(int)rows != rows || pieces * columns * rows > repeat_left
-                    || (cut != 0.0f && cut != 1.0f))
+                    || !(kind == (float)ER_VECTOR_REPEAT_MERGED || kind == (float)ER_VECTOR_REPEAT_CUT
+                         || kind == (float)ER_VECTOR_REPEAT_APART))
                 {
                     return fail(error, ERB_ERROR_TAPE, "repeat");
                 }

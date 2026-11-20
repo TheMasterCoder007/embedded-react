@@ -52,6 +52,9 @@ import {
   OP_OPERANDS,
   DASH_MAX,
   REPEAT_MAX,
+  REPEAT_MERGED,
+  REPEAT_CUT,
+  REPEAT_APART,
   dashPattern,
   CAP,
   JOIN,
@@ -1443,7 +1446,8 @@ export async function svgToVector(
 
   /**
    * Fills a shape with a pattern, under a clip of the shape: one tile's shapes, which the engine repeats across the
-   * shape's box. Shapes that reach past their tile have each copy cut to its tile.
+   * shape's box. Shapes that reach past their tile have each copy cut to its tile, or drawn copy by copy when the
+   * pattern's overflow is visible.
    */
   const bakePattern = (
     pattern: INode,
@@ -1520,9 +1524,19 @@ export async function svgToVector(
     walk(pattern, content, contentPaint, [], measure);
     const contentBox = tapeBounds(measure.ops);
     if (!contentBox) return;
-    const overflows =
-      !overflowVisible(patternAttributes) &&
-      reachesPast(contentBox, measure.reach ?? 0, tileWidth, tileHeight);
+    // Copies that stay in their tiles are drawn together; ones that reach past are cut to their tiles, or with
+    // overflow visible drawn one after another, as they may overlap.
+    const reaches = reachesPast(
+      contentBox,
+      measure.reach ?? 0,
+      tileWidth,
+      tileHeight,
+    );
+    const repeatKind = !reaches
+      ? REPEAT_MERGED
+      : overflowVisible(patternAttributes)
+        ? REPEAT_APART
+        : REPEAT_CUT;
 
     // The first tile's shapes, in place; the others are copies of them moved along the pattern's axes.
     const placed = mul(matrix, patternMatrix);
@@ -1587,7 +1601,7 @@ export async function svgToVector(
       pieces.length,
       columns,
       rows,
-      overflows ? 1 : 0,
+      repeatKind,
       cornerX,
       cornerY,
       placed[0] * tileWidth,

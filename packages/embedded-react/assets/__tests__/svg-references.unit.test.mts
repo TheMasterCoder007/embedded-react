@@ -237,7 +237,7 @@ describe('svgToVector — pattern', () => {
     expect(rowY).toBeCloseTo(0);
   });
 
-  it('cuts each copy to its tile when its shapes reach past it', async () => {
+  it('cuts each copy to its tile when its shapes reach past it, or draws them apart when overflow is visible', async () => {
     const artifact = await svgToVector(
       svg(
         '<pattern id="p" width="10" height="10" patternUnits="userSpaceOnUse">' +
@@ -259,8 +259,17 @@ describe('svgToVector — pattern', () => {
           '<rect width="20" height="10" fill="url(#p)"/>',
       ),
     );
+    // Copies that may overlap are drawn one after another, uncut.
     expect(count(visible.ops, MASK)).toBe(1);
-    expect(repeatOf(visible.ops)[3]).toBe(0);
+    expect(repeatOf(visible.ops)[3]).toBe(2);
+    const inside = await svgToVector(
+      svg(
+        '<pattern id="p" width="10" height="10" patternUnits="userSpaceOnUse" overflow="visible">' +
+          '<rect x="2" y="2" width="6" height="6"/></pattern>' +
+          '<rect width="20" height="10" fill="url(#p)"/>',
+      ),
+    );
+    expect(repeatOf(inside.ops)[3]).toBe(0);
   });
 
   it('follows a pattern’s href for its tile and its shapes, and fits a viewBox to the tile', async () => {

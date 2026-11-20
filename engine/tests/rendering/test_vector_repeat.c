@@ -171,13 +171,13 @@ static void tape_mask(int kind, int count)
     tape_push(mask, 3);
 }
 
-static void tape_repeat(int count, float columns, float rows, int cut, float x, float y, const float lattice[4])
+static void tape_repeat(int count, float columns, float rows, int kind, float x, float y, const float lattice[4])
 {
     const float repeat[] = {ER_VECTOR_OP_REPEAT,
                             (float)count,
                             columns,
                             rows,
-                            (float)cut,
+                            (float)kind,
                             x,
                             y,
                             lattice[0],
@@ -199,6 +199,7 @@ enum
     PAINT_BLUE,
     PAINT_WHITE,
     PAINT_STROKE,
+    PAINT_EVEN_ODD,
     PAINT_COUNT
 };
 
@@ -206,6 +207,7 @@ static const ERVectorPaint s_paints[PAINT_COUNT] = {
     {0xFF0000FFu, 0x00000000u, 0.0f, 0.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_MITER, ER_VECTOR_FILL_NONZERO, 0, 0},
     {WHITE, 0x00000000u, 0.0f, 0.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_MITER, ER_VECTOR_FILL_NONZERO, 0, 0},
     {0x00000000u, WHITE, 3.0f, 0.0f, ER_VECTOR_CAP_ROUND, ER_VECTOR_JOIN_ROUND, ER_VECTOR_FILL_NONZERO, 0, 0},
+    {WHITE, 0x00000000u, 0.0f, 0.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_MITER, ER_VECTOR_FILL_EVENODD, 0, 0},
 };
 
 static void render_bands(int origin_x, int origin_y, const ERVectorTransform* transform, int band)
@@ -342,6 +344,37 @@ static int check_cut(void)
         return fail("a cut copy draws outside its tile");
     if ((get_pixel(38, 28) >> 24) == 0U)
         return fail("a cut copy is missing inside its tile");
+    return EXIT_SUCCESS;
+}
+
+/** @brief Copies drawn apart are each drawn whole, in turn: overlaps neither cancel nor take the shapes out of order.
+ */
+static int check_apart(void)
+{
+    static const float lattice[4] = {8.0f, 0.0f, 0.0f, 20.0f};
+
+    /* Even-odd squares 12 wide, 8 apart: merged, their overlaps cancel. */
+    tape_begin();
+    tape_repeat(1, 3, 1, ER_VECTOR_REPEAT_MERGED, 0.0f, 0.0f, lattice);
+    tape_rect(PAINT_EVEN_ODD, 2.0f, 2.0f, 14.0f, 12.0f);
+    render();
+    if (get_pixel(12, 6) != 0U)
+        return fail("merged even-odd copies do not cancel where they overlap");
+    tape_begin();
+    tape_repeat(1, 3, 1, ER_VECTOR_REPEAT_APART, 0.0f, 0.0f, lattice);
+    tape_rect(PAINT_EVEN_ODD, 2.0f, 2.0f, 14.0f, 12.0f);
+    render();
+    if (get_pixel(12, 6) != WHITE || get_pixel(28, 6) != WHITE || get_pixel(32, 6) != 0U)
+        return fail("copies drawn apart cancel where they overlap");
+
+    /* A blue square, then a white bar on its right: the next copy's square covers this copy's bar. */
+    tape_begin();
+    tape_repeat(2, 2, 1, ER_VECTOR_REPEAT_APART, 0.0f, 0.0f, lattice);
+    tape_rect(PAINT_BLUE, 2.0f, 2.0f, 14.0f, 12.0f);
+    tape_rect(PAINT_WHITE, 9.0f, 2.0f, 13.0f, 12.0f);
+    render();
+    if (get_pixel(11, 6) != 0xFF0000FFu || get_pixel(19, 6) != WHITE)
+        return fail("copies drawn apart are not drawn whole, one after another");
     return EXIT_SUCCESS;
 }
 
@@ -539,7 +572,7 @@ int main(void)
 
     if (check_merged(s_square_lattice, "copies differ from the same shapes merged") != EXIT_SUCCESS
         || check_merged(s_sheared_lattice, "sheared copies differ from the same shapes merged") != EXIT_SUCCESS
-        || check_seamless() != EXIT_SUCCESS || check_cut() != EXIT_SUCCESS
+        || check_seamless() != EXIT_SUCCESS || check_cut() != EXIT_SUCCESS || check_apart() != EXIT_SUCCESS
         || check_bands_and_transform() != EXIT_SUCCESS || check_many_copies() != EXIT_SUCCESS
         || check_limits() != EXIT_SUCCESS || check_image() != EXIT_SUCCESS)
         return EXIT_FAILURE;
