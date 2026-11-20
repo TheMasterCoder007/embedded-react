@@ -335,23 +335,28 @@ holds what the debug section holds, and what the package leaves out: each state'
 line.
 
 It is JSON. The top level has `format` (1), `buildId`, the program's `build_id`, so a tool can refuse a file
-from another build, `file`, the source file, and `panels`, one per layout in the package's order. Each panel
-has:
+from another build, `file`, the source file, `nodeTypes`, the engine's node types by number, and `panels`, one
+per layout in the package's order. Each panel has:
 
-- `width` and `height`, the size the layout was compiled at.
+- `width` and `height`, the size the layout was compiled at, and `arenaBytes`.
+- `regions`, the arena's regions by name (`slots`, `dirty`, `strings`, `lists`, `handles`, `timers`,
+  `animations`, `stack`, `tape`, `events`), each with its `offset`, `bytes` and `count`.
 - `functions`, in the `functions` table's order: each one's `name`, and `lines`, its debug entries as
-  `offset` (in words), `line` and `column` (1-based).
+  `offset` (in words), `line` and `column` (1-based). A handler is named as the source writes it: a callback's
+  own name, or the event prop an arrow is written in (`onPress`).
 - `states`, in the app's order. Each has its `name`, its `storage` name (the name, prefixed for an inlined
   component's instance), and for an instance's state, `component`: the component's `name` and the `line` of
   the instance's element. `hidden` marks state the compiler made: a filtered or sorted list, a split, a
   constant array, a memo's loop, an alert. `slot` is its index in the `slots` table, `type` its value type
-  (`int`, `bool`, `float`, `int64`, `string`, `enum` or `list`), and `offset` its byte offset in the arena. A
-  string has its `cap`, an enum its `values` by number, and a list its `cap`, `rowBytes` and `fields`, each
+  (`int`, `bool`, `float`, `int64`, `string`, `enum` or `list`), `offset` its byte offset in the arena, and
+  `dirtyBit` its bit in the dirty words, for state a node or an effect reads. A string has its `cap`, an enum its `values` by number, and a list its `cap`, `rowBytes` and `fields`, each
   with its `name` (`key?` for an optional field's flag), `type`, `offset` in the row, and a string's `cap`.
 - `templates`, in the `templates` table's order: each one's `kind` (`root`, `branch` or `row`) and `nodes`,
-  each with its `type` (an `ER_NODE_*` name), the `line` and `column` of its element (`null` for the root
-  template's own node), and `handle`, the slot holding its handle, for a node code reaches. Rows of the same
-  shape share a template, which keeps the first row's lines.
+  each with its `type` (an `ER_NODE_*` name), its `children` (which follow it, each after the one before and
+  everything under that), the `line` and `column` of its element (`null` for the root template's own node), and
+  for a node code reaches, `handle`: its `slot`, and the `offset` in the arena of its `count` handles, one per
+  row for a row's node, each the engine tag plus 1 and the serial (`u32` each). Rows of the same shape share a
+  template, which keeps the first row's lines.
 
 `embedded-react where <function> <offset>` reads it to print the source line of a fault, from the numbers
 the error screen or the log shows. It reads `dist/app.erdbg` unless `--debug` names another, and
@@ -855,6 +860,26 @@ options. The runtime reads them at load time, so each is set once; its image nam
 `erb_input_find("steps")` looks an input up once, and `erb_input_set_int()` (or `_bool`, `_float`,
 `_string`) sets it after that. `erb_set_wall_clock()` sets the time `Date.now()` starts from.
 `erb_set_screen_size()` gives the running app [a new screen size](#a-new-screen-size).
+
+### The debugger's descriptors
+
+The runtime exports `erb_debug` (`erb_debug.h`) and the engine `er_debug` (`er_debug.h`), so a debugger can read a
+halted app by these two symbols alone, whatever the runtime's and engine's private names and struct layouts. Each
+starts with a magic number and a version, raised when a field changes. Nothing on the board reads them; `erb_load()`
+reads the magic once, so a link that drops unused data keeps them.
+
+- `erb_debug` points at the running app: whether one is loaded, faulted, or in the VM; its `build_id` and layout;
+  the arena; where the VM is (its function, instruction, and frame on the register stack, which the VM sets on each
+  call and return); the last error, with each field's offset; each status's reason; and the engine's descriptor. A
+  frame's first three cells are its caller (-1 for none), where the caller resumes, and the caller's frame. Its
+  `update` flag, set by a debugger after it writes state, has the next `erb_tick()` run the update.
+- `er_debug` points at the engine's pools (nodes, vector nodes, animations, animation groups, animated values,
+  images and font families), each an array of records with an in-use flag at an offset, the offsets of a node's
+  fields, and the root's tag.
+
+`gdb/erb.py`, in the npm package, reads them with an app's `app.erdbg` to show its source line, state, pools and
+nodes, and refuses a descriptor version or a `build_id` it doesn't match. CI runs it against the Linux host
+(`npm run erb:gdb`).
 
 ### Package slots
 

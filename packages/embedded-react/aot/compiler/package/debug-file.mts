@@ -24,7 +24,14 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {ENGINE_VALUES, NONE, TemplateKind, ValueType} from './format.mts';
+import {
+  ENGINE_VALUES,
+  NONE,
+  Region,
+  SlotFlag,
+  TemplateKind,
+  ValueType,
+} from './format.mts';
 import type {Program} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -69,6 +76,8 @@ export interface DebugState {
   type: string;
   /** Its byte offset in the arena. */
   offset: number;
+  /** Its bit in the dirty words, for state a node or an effect reads. */
+  dirtyBit?: number;
   /** A string's most bytes, without its NUL; a list's most rows. */
   cap?: number;
   /** An interned string's values, by the number its slot holds. */
@@ -81,11 +90,28 @@ export interface DebugState {
 export interface DebugNode {
   /** The engine node type, an ER_NODE_* name. */
   type: string;
+  /** Its children, which follow it in the template, each after the one before and everything under that. */
+  children: number;
   /** Where its element is, or null for one no element made: the root template's own node. */
   line: number | null;
   column: number | null;
-  /** The slot that holds its handle, for a node code reaches. */
-  handle?: number;
+  /** Where its handle is, for a node code reaches: one handle, or one per row for a row's node. */
+  handle?: DebugHandle;
+}
+
+/** A node handle's slot: `count` 8-byte handles from `offset` in the arena, each the tag + 1 and the serial. */
+export interface DebugHandle {
+  slot: number;
+  offset: number;
+  count: number;
+}
+
+/** An arena region. */
+export interface DebugRegion {
+  offset: number;
+  bytes: number;
+  /** What it holds: timers, running animations, queued events, or 0. */
+  count: number;
 }
 
 export interface DebugTemplate {
@@ -98,6 +124,9 @@ export interface DebugPanel {
   /** The size it was compiled at. */
   width: number;
   height: number;
+  arenaBytes: number;
+  /** The arena's regions, by name. */
+  regions: Record<string, DebugRegion>;
   /** In the functions table's order. */
   functions: DebugFunction[];
   states: DebugState[];
@@ -111,6 +140,8 @@ export interface DebugFile {
   buildId: number;
   /** The source file the lines are in. */
   file: string;
+  /** The engine's node types, by the number a node holds. */
+  nodeTypes: string[];
   /** In the package's panel order. */
   panels: DebugPanel[];
 }
@@ -141,6 +172,10 @@ const NODE_TYPES = new Map<number, string>(
     .map(([name, type]) => [type, name]),
 );
 
+const REGION_NAMES = new Map<number, string>(
+  Object.entries(Region).map(([name, kind]) => [kind, name]),
+);
+
 const TEMPLATE_KINDS = new Map<number, DebugTemplate['kind']>(
   Object.entries(TemplateKind).map(([name, kind]) => [
     kind,
@@ -160,7 +195,7 @@ const TEMPLATE_KINDS = new Map<number, DebugTemplate['kind']>(
  * @returns The panel.
  */
 function debugPanel(program: Program): DebugPanel {
-  const {width, height} = program.panels[0];
+  const {width, height, arenaBytes} = program.panels[0];
   const typeName = (type: number): string => TYPE_NAMES.get(type) ?? `${type}`;
   const states = (program.states ?? []).map(state => {
     const slot = program.slots[state.slot];
@@ -172,6 +207,7 @@ function debugPanel(program: Program): DebugPanel {
       slot: state.slot,
       type: typeName(slot.type),
       offset: slot.offset,
+      ...(slot.flags & SlotFlag.tracked && {dirtyBit: slot.dirtyBit}),
     };
     if (slot.type === ValueType.string || slot.type === ValueType.list) {
       described.cap = slot.cap;
@@ -193,9 +229,17 @@ function debugPanel(program: Program): DebugPanel {
     }
     return described;
   });
+  const regions = Object.fromEntries(
+    program.regions.map(region => [
+      REGION_NAMES.get(region.kind) ?? `${region.kind}`,
+      {offset: region.offset, bytes: region.bytes, count: region.count},
+    ]),
+  );
   return {
     width,
     height,
+    arenaBytes,
+    regions,
     functions: program.functions.map(programFunction => ({
       name: programFunction.debug?.name ?? '',
       lines: (programFunction.debug?.lines ?? []).map(line => ({
@@ -209,9 +253,16 @@ function debugPanel(program: Program): DebugPanel {
       kind: TEMPLATE_KINDS.get(template.kind)!,
       nodes: template.nodes.map(node => ({
         type: NODE_TYPES.get(node.type) ?? `${node.type}`,
+        children: node.children,
         line: node.debug?.line ?? null,
         column: node.debug?.column ?? null,
-        ...(node.handle !== NONE && {handle: node.handle}),
+        ...(node.handle !== NONE && {
+          handle: {
+            slot: node.handle,
+            offset: program.slots[node.handle].offset,
+            count: Math.max(program.slots[node.handle].cap, 1),
+          },
+        }),
       })),
     })),
   };
@@ -235,6 +286,10 @@ export function writeDebugFile(
     format: DEBUG_FILE_FORMAT,
     buildId,
     file,
+    nodeTypes: Array.from(
+      {length: Math.max(...NODE_TYPES.keys()) + 1},
+      (_, type) => NODE_TYPES.get(type) ?? '',
+    ),
     panels: programs.map(debugPanel),
   };
   return `${JSON.stringify(debugFile)}\n`;
@@ -266,6 +321,9 @@ function shapeFault(debugFile: DebugFile): string | null {
       return `${where} has no functions or states`;
     }
     if (!isList(panel.templates)) return `${where} has no templates`;
+    if (!isRecord(panel.regions) || !isNumber(panel.arenaBytes)) {
+      return `${where} has no arena`;
+    }
     for (const [functionIndex, programFunction] of panel.functions.entries()) {
       if (
         !isRecord(programFunction) ||

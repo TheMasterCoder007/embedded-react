@@ -290,6 +290,21 @@ interface Lowering {
 /** The most a u16 count or size in the format holds: a row's bytes, a panel's nodes, the row fields. */
 const MAX_U16 = 0xffff;
 
+/** Each engine event as the prop that takes it: ER_EVENT_LONG_PRESS → onLongPress. */
+const EVENT_NAMES = new Map<number, string>(
+  [...ENGINE_VALUES]
+    .filter(([name]) => name.startsWith('ER_EVENT_'))
+    .map(([name, value]) => [
+      value,
+      `on${name
+        .slice('ER_EVENT_'.length)
+        .toLowerCase()
+        .replace(/(?:^|_)([a-z])/g, (_, letter: string) =>
+          letter.toUpperCase(),
+        )}`,
+    ]),
+);
+
 /** BUILD's instance operand when the template is no list row's. */
 const NO_REGISTER = 0xff;
 
@@ -2191,6 +2206,25 @@ function requestUpdate(codegen: Codegen, lowering: Lowering): void {
 }
 
 /**
+ * A handler's name in the debug table, as the source writes it: a callback's own name, or the event prop an arrow
+ * is written in.
+ *
+ * @param handler  The handler.
+ *
+ * @returns The name.
+ */
+function handlerName(handler: HandlerFunction): string {
+  const callback = /^(?:layout_|scroll_)?callback_(?:c\d+_)?(.+)$/.exec(
+    handler.name,
+  );
+  if (callback) {
+    return callback[1];
+  }
+  const event = EVENT_NAMES.get(handler.event);
+  return /^handler_\d+$/.test(handler.name) && event ? event : handler.name;
+}
+
+/**
  * A handler's function.
  *
  * @param handler  The handler.
@@ -2202,7 +2236,7 @@ function handlerBody(
   handler: HandlerFunction,
   lowering: Lowering,
 ): ProgramFunction {
-  const builder = new FunctionBuilder(handler.event, `handler ${handler.name}`);
+  const builder = new FunctionBuilder(handler.event, handlerName(handler));
   // A row's handler is entered with its row, in its first register.
   const row = handler.inRow ? builder.reserved('int') : undefined;
   const codegen = new Codegen(builder, lowering.slots, {
@@ -2821,7 +2855,9 @@ function keyboardTable(
  */
 function debugStates(app: IrApp, slots: ProgramSlots): ProgramState[] {
   return app.state.map(state => {
-    const prefix = /^c\d+_/.exec(state.slotName)?.[0];
+    const prefix =
+      (state.kind === 'list' ? state.instancePrefix : undefined) ??
+      /^c\d+_/.exec(state.slotName)?.[0];
     const component = prefix ? app.output.instances.get(prefix) : undefined;
     const hidden =
       state.name.startsWith('#') ||

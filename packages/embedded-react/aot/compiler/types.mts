@@ -178,6 +178,8 @@ export interface ListState extends StateSlot {
   derived?: DerivedList;
   /** A list a handler, effect or timer splits a string into, filled where its `const` is. */
   handlerSplit?: boolean;
+  /** The storage prefix of the inlined instance a list the compiler made belongs to, whose name doesn't carry it. */
+  instancePrefix?: string;
 }
 
 /** One `filter` or `sort` of a list, and the environment its function is read in. */

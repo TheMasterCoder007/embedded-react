@@ -15,6 +15,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: every `build --aot` and `dev --aot` writes `app.erdbg` beside the package, with each state's name
   and each node's source line, for host tools.
 - `embedded-react where <function> <offset>` prints the source line of a Flow B fault.
+- Flow B: a GDB script in the npm package (`gdb/erb.py`) reads a halted app on a board: its source line and
+  call chain, last error, state, pools and nodes, and stops when a state changes. A backtrace shows the app's
+  line in the VM's frame.
+- Flow B: the debug table names handlers as the source writes them (`onPress`, or a callback's own name).
 
 ## [0.25.0] - 2026-11-20
 ### Added

@@ -862,18 +862,16 @@ static bool copy_capped(char* destination, uint32_t capacity, const char* text)
  - The interpreter
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Where the running instruction is, for faults and reports. */
-static uint16_t s_function;
-static uint32_t s_program_counter;
+ErbVmPlace g_erb_vm;
 
 static ErbStatus fault(ErbStatus status, const char* detail, const char* name)
 {
-    return erb_rt_fault(status, detail, name, s_function, s_program_counter);
+    return erb_rt_fault(status, detail, name, g_erb_vm.function, g_erb_vm.program_counter);
 }
 
 static void report(const char* what)
 {
-    erb_rt_report(what, s_function, s_program_counter);
+    erb_rt_report(what, g_erb_vm.function, g_erb_vm.program_counter);
 }
 
 /** @brief A node handle that doesn't resolve: a fault in a debug package, a reported skip in a release one. */
@@ -1098,7 +1096,8 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
         memcpy(registers, arguments, record[ERB_FUNCTION_PARAMS_AT] * sizeof(int32_t));
     }
     stack[FRAME_CALLER] = FRAME_NO_CALLER;
-    s_function = function;
+    g_erb_vm.function = function;
+    g_erb_vm.frame_base = 0;
     s_format_length = 0;
     s_piece = 0;
     s_format[0] = '\0';
@@ -1113,7 +1112,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
         const uint8_t operand_b = ERB_B(word);
         const uint8_t operand_c = ERB_C(word);
         const uint16_t operand_bx = ERB_BX(word);
-        s_program_counter = program_counter;
+        g_erb_vm.program_counter = program_counter;
         if (counting)
         {
             if (budget_left == 0u)
@@ -1645,7 +1644,8 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                            &callee_registers[operand_a],
                            cells * sizeof(int32_t));
                 }
-                s_function = caller;
+                g_erb_vm.function = caller;
+                g_erb_vm.frame_base = base;
                 next = return_program_counter;
                 break;
             }
@@ -1656,7 +1656,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 const uint8_t* callee = erb_function(program, operand_bx);
                 const uint32_t callee_base = base + ERB_FRAME_CELLS + record[ERB_FUNCTION_REGISTERS_AT];
                 int32_t* callee_registers = stack + callee_base + ERB_FRAME_CELLS;
-                stack[callee_base + FRAME_CALLER] = s_function;
+                stack[callee_base + FRAME_CALLER] = g_erb_vm.function;
                 stack[callee_base + FRAME_RETURN_PC] = (int32_t)next;
                 stack[callee_base + FRAME_CALLER_BASE] = (int32_t)base;
                 memset(callee_registers, 0, callee[ERB_FUNCTION_REGISTERS_AT] * sizeof(int32_t));
@@ -1665,7 +1665,8 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 code = program->code + erb_u32(record + ERB_FUNCTION_CODE_AT);
                 base = callee_base;
                 registers = callee_registers;
-                s_function = operand_bx;
+                g_erb_vm.function = operand_bx;
+                g_erb_vm.frame_base = base;
                 next = 0;
                 break;
             }

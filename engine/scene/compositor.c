@@ -17,6 +17,7 @@
 #include "arc.h"
 #include "arc_widget.h"
 #include "er_damage_internal.h"
+#include "er_debug.h"
 #include "er_error_screen.h"
 #include "er_limits.h"
 #include "er_node_internal.h"
@@ -77,6 +78,46 @@ static uint16_t s_free_list[ERUI_MAX_NODES]; /**< LIFO stack of destroyed node s
 static uint16_t s_free_count = 0;            /**< Number of entries currently in s_free_list. */
 static uint32_t s_node_serial = 1;           /**< Next ERNode::serial, never 0; er_reset keeps it. */
 static uint16_t s_root_tag = ER_INVALID_TAG;
+
+/* The other pools' records, each beside its array. */
+extern const ERDebugPool er_debug_vector_pool;
+extern const ERDebugPool er_debug_animation_pool;
+extern const ERDebugPool er_debug_group_pool;
+extern const ERDebugPool er_debug_value_pool;
+extern const ERDebugPool er_debug_image_pool;
+extern const ERDebugPool er_debug_font_pool;
+
+static const ERDebugPool s_debug_node_pool = {s_nodes, ERUI_MAX_NODES, sizeof(ERNode), offsetof(ERNode, in_use), 0u};
+
+const ERDebug er_debug = {
+    .magic = ER_DEBUG_MAGIC,
+    .version = ER_DEBUG_VERSION,
+    .pool_count = ER_DEBUG_POOL_COUNT_,
+    .pools =
+        {
+            [ER_DEBUG_POOL_NODES] = &s_debug_node_pool,
+            [ER_DEBUG_POOL_VECTOR_NODES] = &er_debug_vector_pool,
+            [ER_DEBUG_POOL_ANIMATIONS] = &er_debug_animation_pool,
+            [ER_DEBUG_POOL_ANIMATION_GROUPS] = &er_debug_group_pool,
+            [ER_DEBUG_POOL_ANIMATION_VALUES] = &er_debug_value_pool,
+            [ER_DEBUG_POOL_IMAGES] = &er_debug_image_pool,
+            [ER_DEBUG_POOL_FONTS] = &er_debug_font_pool,
+        },
+    .node =
+        {
+            .tag_at = offsetof(ERNode, tag),
+            .parent_at = offsetof(ERNode, parent_tag),
+            .first_child_at = offsetof(ERNode, first_child_tag),
+            .next_sibling_at = offsetof(ERNode, next_sibling_tag),
+            .serial_at = offsetof(ERNode, serial),
+            .type_at = offsetof(ERNode, type),
+            .type_bytes = sizeof(ERNodeType),
+            .rect_at = offsetof(ERNode, computed),
+            .scroll_x_at = offsetof(ERNode, scroll_offset_x),
+            .scroll_y_at = offsetof(ERNode, scroll_offset_y),
+        },
+    .root_tag = &s_root_tag,
+};
 static int16_t s_bounds_width = 0; /**< er_set_screen_bounds(): the largest the root may be; 0 = no limit. */
 static int16_t s_bounds_height = 0;
 static uint64_t s_now_ms = 0;
