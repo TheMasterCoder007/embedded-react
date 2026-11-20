@@ -147,6 +147,7 @@ import type {
   ProgramKeyboard,
   ProgramPropEntry,
   ProgramRow,
+  ProgramState,
   ProgramTemplate,
   ProgramTemplateNode,
 } from './writer.mts';
@@ -1433,6 +1434,10 @@ function templateNodes(
       handle: handle?.index ?? NONE,
       bindings: bindings.length ? lowering.bindings.length : 0,
       bindingCount: bindings.length,
+      debug: node.location && {
+        line: node.location.line,
+        column: node.location.column + 1,
+      },
     });
     lowering.bindings.push(...bindings);
   } catch (error) {
@@ -1461,6 +1466,7 @@ function rowTemplates(lowering: Lowering): void {
         nodes: nodes.map(node => ({
           ...node,
           bindings: node.bindingCount ? node.bindings - first : 0,
+          debug: undefined,
         })),
         bindings: lowering.bindings.slice(first),
       });
@@ -2805,6 +2811,38 @@ function keyboardTable(
   };
 }
 
+/**
+ * Each state as the debug file names it, once the arena is laid out.
+ *
+ * @param app  The app.
+ * @param slots  The program's slots.
+ *
+ * @returns The states, in the app's order.
+ */
+function debugStates(app: IrApp, slots: ProgramSlots): ProgramState[] {
+  return app.state.map(state => {
+    const prefix = /^c\d+_/.exec(state.slotName)?.[0];
+    const component = prefix ? app.output.instances.get(prefix) : undefined;
+    const hidden =
+      state.name.startsWith('#') ||
+      (state.kind === 'list'
+        ? Boolean(state.derived || state.handlerSplit || state.constant)
+        : Boolean(state.worked));
+    return {
+      name: state.name,
+      storage: state.slotName,
+      ...(component && {component}),
+      hidden,
+      slot: stateSlotOf(state, slots).index,
+      ...(state.kind === 'list' && {
+        fields: rowEntries(state.struct).map(({field, presence}) =>
+          presence ? `${field.key}?` : field.key,
+        ),
+      }),
+    };
+  });
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Program
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -3046,5 +3084,6 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     interpolations: animations.interpolations,
     tapes: lowering.slots.vectors.tapes,
     keyboard: app.keyboard ? keyboardTable(app.keyboard, tables) : null,
+    states: debugStates(app, lowering.slots),
   };
 }

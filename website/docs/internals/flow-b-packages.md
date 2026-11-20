@@ -7,7 +7,8 @@ This page is the spec for Flow B's package: the file the compiler emits, and the
 checks it and runs it. It is written for the people working on the loader, the VM, and the compiler's package backend.
 
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in `erb_format.h`).
-`embedded-react build --aot` writes a package, with a layout for every panel size, and its debug table. It takes state,
+`embedded-react build --aot` writes a package, with a layout for every panel size, its debug table, and a
+[debug file](#the-debug-file) beside it. It takes state,
 handlers, timers, effects, lists, animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the
 screen size. `--release` and `--bake` build the package too, and `embedded-react flash` writes it to a
 [slot](#package-slots).
@@ -320,12 +321,42 @@ Before format minor 5, the section is one table for all panels, with a 16-byte h
 `function_count u32` and no `panel` or `length`.
 
 The error screen uses the panel's table to turn a fault's function and offset into `App.jsx:41`. Without
-one, the screen shows the function index, the offset, and the `build_id`. `--release` writes the same bytes
-beside the package instead, as `app.erdbg`, and clears the debug flag, so the host can still map a fault
-back to the source.
+one, the screen shows the function index, the offset, and the `build_id`. `--release` leaves the section out
+and clears the debug flag; the [debug file](#the-debug-file) still maps a fault back to the source.
 
 A debug table that doesn't match its program, or is malformed, fails the load like any other
 section: a package is checked whole.
+
+### The debug file
+
+Every `build --aot` and `dev --aot` writes `app.erdbg` beside the package (`dev --aot` in `dist/`), release or
+not. It is for host tools, not the board: the package doesn't change, and nothing on the board reads it. It
+holds what the debug section holds, and what the package leaves out: each state's name and each node's source
+line.
+
+It is JSON. The top level has `format` (1), `buildId`, the program's `build_id`, so a tool can refuse a file
+from another build, `file`, the source file, and `panels`, one per layout in the package's order. Each panel
+has:
+
+- `width` and `height`, the size the layout was compiled at.
+- `functions`, in the `functions` table's order: each one's `name`, and `lines`, its debug entries as
+  `offset` (in words), `line` and `column` (1-based).
+- `states`, in the app's order. Each has its `name`, its `storage` name (the name, prefixed for an inlined
+  component's instance), and for an instance's state, `component`: the component's `name` and the `line` of
+  the instance's element. `hidden` marks state the compiler made: a filtered or sorted list, a split, a
+  constant array, a memo's loop, an alert. `slot` is its index in the `slots` table, `type` its value type
+  (`int`, `bool`, `float`, `int64`, `string`, `enum` or `list`), and `offset` its byte offset in the arena. A
+  string has its `cap`, an enum its `values` by number, and a list its `cap`, `rowBytes` and `fields`, each
+  with its `name` (`key?` for an optional field's flag), `type`, `offset` in the row, and a string's `cap`.
+- `templates`, in the `templates` table's order: each one's `kind` (`root`, `branch` or `row`) and `nodes`,
+  each with its `type` (an `ER_NODE_*` name), the `line` and `column` of its element (`null` for the root
+  template's own node), and `handle`, the slot holding its handle, for a node code reaches. Rows of the same
+  shape share a template, which keeps the first row's lines.
+
+`embedded-react where <function> <offset>` reads it to print the source line of a fault, from the numbers
+the error screen or the log shows. It reads `dist/app.erdbg` unless `--debug` names another, and
+`--build <id>` refuses a file of another build. When the layouts number their functions apart, it prints a
+line for each.
 
 ## Memory
 

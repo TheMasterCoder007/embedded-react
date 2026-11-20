@@ -39,10 +39,11 @@ The package is the React Native analog: hooks come from `react`, everything else
 | `npx embedded-react dev --device` | The same, streamed to a connected board over USB (a firmware built with hot reload). `--aot` sends Flow B packages |
 | `npx embedded-react build` | The Flow A device artifact, `dist/app.erpkg` (bytecode + baked assets + CRC) |
 | `npx embedded-react build --aot` | A Flow B package, `dist/app.erpkg`, for the Flow B runtime to load. State, handlers, timers, effects, lists, animations, PanResponder, `<Svg>` and the keyboard config. It holds every layout the app's breakpoints call for, and `--screen 240x320,320x240` keeps only the ones those sizes pick |
-| `npx embedded-react build --aot --release` | A Flow B package for release, without its debug table, which goes beside it as `dist/app.erdbg` |
+| `npx embedded-react build --aot --release` | A Flow B package for release, without its debug table. Every `--aot` build writes `dist/app.erdbg` beside the package, for host tools |
 | `npx embedded-react build --aot --bake` | A Flow B package as a C array, `dist/app.erpkg.c`, to link into firmware with no spare partition |
 | `npx embedded-react flash --board NAME` | Writes `dist/app.erpkg` to the board's staging slot, through `esptool` or `picotool`. The last good package stays until the new one passes verification |
 | `npx embedded-react pack --board NAME` | Writes a slot's image to a file, as a UF2 on the RP2040, for a factory line or a board that isn't attached |
+| `npx embedded-react where FUNCTION OFFSET` | Prints the source line of a Flow B fault, from the function and offset the error screen shows |
 | `npx embedded-react native-header PACKAGE --out DIR` | Writes a C header for each native module a device package or `.ts` file declares, for the firmware to build against |
 | `npx embedded-react export` | A self-contained static copy of the simulator with your app, for any static host |
 

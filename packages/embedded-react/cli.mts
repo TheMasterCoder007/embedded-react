@@ -83,7 +83,10 @@ Usage:
                                                  --aot --screen <WxH>,<WxH>  keep only the layouts
                                                            those panels pick, to save flash
                                                  --aot --release  → a package without its debug
-                                                           table, written beside it as app.erdbg
+                                                           table
+                                                 --aot writes app.erdbg beside the package in every
+                                                           build: the source lines, state names and
+                                                           node lines, for host tools
                                                  --aot --bake  → app.erpkg.c (the package as a const
                                                            array, for a board with no spare partition)
   embedded-react flash [package] --board <name> [--port <p>]
@@ -93,6 +96,11 @@ Usage:
   embedded-react pack [package] --board <name> [--slot a|b] [--sequence <n>] [--out <dir>]
                                                Write a slot's image to a file, for a factory line or a
                                                  drag-and-drop UF2, without a board attached.
+  embedded-react where <function> <offset> [--debug <file>] [--build <id>]
+                                               Print the source line of a Flow B fault, from the function
+                                                 and offset an error screen or log shows. Reads
+                                                 dist/app.erdbg unless --debug names another; --build
+                                                 refuses a file from another build.
   embedded-react native-header <package or file> [--out <dir>]
                                                Write a C header for each native module a device package
                                                  or a .ts file declares: its records, where each argument
@@ -320,8 +328,13 @@ async function dev(args: string[]): Promise<void> {
         projectRoot: cwd,
         device,
         label: appPath,
-        compilePackage: async () =>
-          Buffer.from((await compileAppPackage(cwd, appPath)).file.bytes),
+        compilePackage: async () => {
+          const {result, file} = await compileAppPackage(cwd, appPath);
+          const distDir = resolve(cwd, 'dist');
+          mkdirSync(distDir, {recursive: true});
+          writeFileSync(resolve(distDir, 'app.erdbg'), result.debugFile);
+          return Buffer.from(file.bytes);
+        },
       });
       return;
     }
@@ -491,8 +504,8 @@ async function compileAppPackage(
 
 /**
  * Flow B (--aot): compile the App component to a Flow B package (app.erpkg) with its assets inside, for the Flow B
- * runtime to load: for release without its debug table (app.erdbg beside it), and baked as a const array
- * (app.erpkg.c) to link into the firmware.
+ * runtime to load: for release without its debug table, and baked as a const array (app.erpkg.c) to link into the
+ * firmware. Its debug file (app.erdbg) goes beside it.
  */
 async function buildAot(
   cwd: string,
@@ -531,12 +544,10 @@ async function buildAot(
       `  font ${font.family} at ${font.sizes.join(', ')} px, ${font.bpp} bpp`,
     );
   }
-  if (release) {
-    writeFileSync(resolve(outDir, 'app.erdbg'), result.debug);
-    console.log(
-      `  Debug table → ${displayDir}/app.erdbg (${result.debug.length} B), to map a fault back to the source`,
-    );
-  }
+  writeFileSync(resolve(outDir, 'app.erdbg'), result.debugFile);
+  console.log(
+    `  Debug file → ${displayDir}/app.erdbg (build ${hexBuildId(result.buildId)}), for \`embedded-react where\` and a debugger`,
+  );
   console.log(resourceReport(result, file).join('\n'));
 }
 
@@ -741,6 +752,82 @@ function flash(args: string[]): void {
   }
 }
 
+/** A build_id as the error screen shows it. */
+const hexBuildId = (buildId: number): string =>
+  (buildId >>> 0).toString(16).padStart(8, '0');
+
+/** `embedded-react where <function> <offset> [--debug file] [--build id]` */
+async function where(args: string[]): Promise<void> {
+  const cwd = process.cwd();
+  const debugPath = resolve(
+    cwd,
+    optValue(args, '--debug')?.value ?? 'dist/app.erdbg',
+  );
+  const buildOption = optValue(args, '--build')?.value;
+  const [functionText, offsetText] = bareArgs(args, ['--debug', '--build']);
+  const isCount = (text: string | undefined): text is string =>
+    text !== undefined && /^\d+$/.test(text);
+  if (!isCount(functionText) || !isCount(offsetText)) {
+    console.error(
+      'Pass the function and offset the error screen shows: embedded-react where 3 12\n',
+    );
+    usage();
+    process.exit(1);
+  }
+  if (!existsSync(debugPath)) {
+    console.error(
+      `No debug file at ${debugPath}. Build the app with: embedded-react build --aot`,
+    );
+    process.exit(1);
+  }
+  const {placeOf, readDebugFile} = await import('./aot/compile.mts');
+  let debugFile;
+  try {
+    debugFile = readDebugFile(readFileSync(debugPath, 'utf8'));
+  } catch (error: any) {
+    console.error(`${relative(cwd, debugPath)}: ${error.message}`);
+    process.exit(1);
+  }
+  const fileBuild = hexBuildId(debugFile.buildId);
+  if (buildOption !== undefined) {
+    const wanted = buildOption.toLowerCase().replace(/^0x/, '');
+    if (!/^[0-9a-f]{1,8}$/.test(wanted)) {
+      console.error(
+        `--build expects the build id the error screen shows (e.g. --build 1a2b3c4d), got: ${buildOption}`,
+      );
+      process.exit(1);
+    }
+    if (wanted.padStart(8, '0') !== fileBuild) {
+      console.error(
+        `${relative(cwd, debugPath)} is build ${fileBuild}, but the board runs build ${wanted.padStart(8, '0')}. ` +
+          'Use the debug file of the build the board runs.',
+      );
+      process.exit(1);
+    }
+  }
+  const places = placeOf(debugFile, Number(functionText), Number(offsetText));
+  if (!places.length) {
+    console.error(
+      `Build ${fileBuild} has no source line for function ${functionText} at ${offsetText}.`,
+    );
+    process.exit(1);
+  }
+  for (const place of places) {
+    // The panels number their functions apart, so each layout says where its own function is.
+    const sizes = place.panels.map(panel => {
+      const {width, height} = debugFile.panels[panel];
+      return `${width}x${height}`;
+    });
+    const layouts =
+      places.length > 1
+        ? `layout${sizes.length > 1 ? 's' : ''} ${sizes.join(', ')}: `
+        : '';
+    console.log(
+      `${layouts}${debugFile.file}:${place.line}:${place.column}  ${place.function}`,
+    );
+  }
+}
+
 /** `embedded-react native-header <package or file> [--out dir]` */
 async function nativeHeader(args: string[]): Promise<void> {
   const cwd = process.cwd();
@@ -787,6 +874,8 @@ if (command === 'dev') {
   pack(commandArgs);
 } else if (command === 'flash') {
   flash(commandArgs);
+} else if (command === 'where') {
+  await where(commandArgs);
 } else if (command === 'native-header') {
   await nativeHeader(commandArgs);
 } else if (
