@@ -1451,6 +1451,12 @@ const SCENARIOS: Scenario[] = [
     file: fixture('svg-sampler-source'),
     screen: PORTRAIT,
   },
+  // A .svg file's filters, drawn as images under or in place of its shapes.
+  {
+    name: 'svg-filter-source',
+    file: fixture('svg-filter-source'),
+    screen: PORTRAIT,
+  },
   {name: 'hooks', file: fixture('hooks'), screen: PORTRAIT},
   {
     name: 'hooks-taps',

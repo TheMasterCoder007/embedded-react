@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="card-shadow" x="0" y="0" width="60" height="44" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="3"/>
+      <feGaussianBlur stdDeviation="3"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.35 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+    </filter>
+    <filter id="drop">
+      <feDropShadow dx="2" dy="2" stdDeviation="1.5" flood-color="#802020" flood-opacity="0.6"/>
+    </filter>
+    <filter id="soft">
+      <feGaussianBlur stdDeviation="2.5"/>
+    </filter>
+    <clipPath id="half">
+      <rect x="50" y="50" width="25" height="50"/>
+    </clipPath>
+  </defs>
+  <rect x="8" y="6" width="44" height="28" rx="5" fill="#ffffff" stroke="#c0c8d0" filter="url(#card-shadow)"/>
+  <g fill="#38bdf8" filter="url(#glow)">
+    <circle cx="74" cy="20" r="8"/>
+    <rect x="62" y="34" width="24" height="5" rx="2"/>
+  </g>
+  <path d="M10 58 L40 58 L25 86 Z" fill="#e0a020" filter="url(#drop)"/>
+  <circle cx="74" cy="74" r="16" fill="#3060c0" filter="url(#soft)" clip-path="url(#half)"/>
+</svg>

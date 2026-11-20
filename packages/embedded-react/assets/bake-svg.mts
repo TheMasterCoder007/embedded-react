@@ -25,9 +25,10 @@
 // inheritance). <text> and <tspan> bake to glyph outlines from a font file (svg-text.mts). `clip-path` and
 // `mask` bake to mask ops over the shapes they apply to. <use> and <symbol> expand in place, a <pattern> fill
 // tiles its shapes under a clip of the shape it fills, and an <image> embedded as a data: URL becomes an image
-// op the caller registers. Features the op-tape can't represent (<filter>, …) are recorded in `dropped` so the
-// caller can rasterize the whole SVG as a fallback image instead. A reference to anything outside the file
-// fails. Primitives are emitted as line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
+// op the caller registers, and so does an element with a `filter`: it is drawn to an image at build time, or only
+// what its filter draws under it is, with the element left a vector on top. Features the op-tape can't represent
+// (<foreignObject>, …) are recorded in `dropped` so the caller can rasterize the whole SVG as a fallback image
+// instead. A reference to anything outside the file fails. Primitives are emitted as line/cubic paths (no native arc op) so an arbitrary matrix bakes cleanly.
 import {parse} from 'svgson';
 import type {INode} from 'svgson';
 import {mkdirSync, writeFileSync} from 'node:fs';
@@ -94,7 +95,8 @@ import {
 } from './svg-text.mts';
 import type {FontSearch, TextAnchor, TextRun} from './svg-text.mts';
 import type opentype from 'opentype.js';
-import {decodeEmbeddedImages} from './svg-images.mts';
+import {decodeEmbeddedImages, namedImage} from './svg-images.mts';
+import {PNG} from 'pngjs';
 import type {EmbeddedImage} from './svg-images.mts';
 
 /** A 2D affine matrix [a, b, c, d, e, f]. */
@@ -169,6 +171,9 @@ const GRADIENT_CENTER = 0.5; // objectBoundingBox defaults
 const GRADIENT_RADIUS = 0.5;
 const MIN_GRADIENT_STOPS = 2;
 const RASTER_HASH_LENGTH = 8;
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const RGBA_BYTES = 4;
+const ALPHA_BYTE = 3;
 /** A <mask>'s box when it gives none: a tenth past its element's on every side. */
 const MASK_REGION_DEFAULT = {x: -0.1, y: -0.1, width: 1.2, height: 1.2};
 /** The most tiles one pattern fill is cut into; past it the file falls back to a raster. */
@@ -945,6 +950,7 @@ export async function svgToVector(
     'mask',
     'symbol',
     'pattern',
+    'filter',
   ]);
   const dropped = new Set<string>();
   const usedFonts = new Set<opentype.Font>();
@@ -976,7 +982,6 @@ export async function svgToVector(
     shapeOps: readonly number[],
     matrix: Matrix,
     paint: Paint,
-    attributes: Attributes,
     masks: readonly MaskGroup[],
     target: Target,
   ): void => {
@@ -993,9 +998,6 @@ export async function svgToVector(
         );
       return;
     }
-    // A filter applied to an otherwise-bakeable shape still loses fidelity as a vector → flag it.
-    const filter = styled(attributes, 'filter');
-    if (filter && filter !== 'none') dropped.add('filter');
     if (target.mode === 'clip') {
       target.ops.push(
         VOP_SHAPE,
@@ -1012,14 +1014,7 @@ export async function svgToVector(
         bakePattern(fillPattern, shapeOps, matrix, paint, masks, target);
       else dropped.add(`pattern inside a ${target.mode}`);
       if (stroked)
-        emitShape(
-          shapeOps,
-          matrix,
-          {...paint, fill: 'none'},
-          attributes,
-          masks,
-          target,
-        );
+        emitShape(shapeOps, matrix, {...paint, fill: 'none'}, masks, target);
       return;
     }
     // A visible stroke's dashes go in the tape, scaled like its width. A pattern the tape cannot hold (a
@@ -1240,14 +1235,7 @@ export async function svgToVector(
 
     for (const shape of shapes) {
       if (shape.ops.length)
-        emitShape(
-          shape.ops,
-          matrix,
-          shape.paint,
-          node.attributes || {},
-          masks,
-          target,
-        );
+        emitShape(shape.ops, matrix, shape.paint, masks, target);
     }
   };
 
@@ -1754,8 +1742,6 @@ export async function svgToVector(
       dropped.add(image);
       return;
     }
-    const filter = styled(imageAttributes, 'filter');
-    if (filter && filter !== 'none') dropped.add('filter');
 
     const given = (value: string | undefined, reference: number) =>
       value == null || value === 'auto' ? undefined : length(value, reference);
@@ -1822,6 +1808,116 @@ export async function svgToVector(
     );
   };
 
+  // Filters are drawn by resvg, loaded only for a file that names one.
+  const Resvg = /filter/i.test(svgString)
+    ? (await import('@resvg/resvg-js')).Resvg
+    : null;
+  const rasterFonts = (): RasterFonts => ({
+    files: [...usedFonts].map(fontFile),
+    family: usedFonts.size ? fontFamilyName([...usedFonts][0]) : '',
+  });
+
+  /**
+   * Draws an element with a `filter` to an image, placed where it lands. A filter that only draws under its
+   * element, such as a glow or a drop shadow, is drawn without the element, which is left to draw as a vector.
+   *
+   * @param matrix  The matrix of the element's parent.
+   * @param paint  The paint the element inherits.
+   * @param masks  The clips and masks around the element; its own are drawn into the image.
+   * @returns Whether the element is still to be drawn, over the image.
+   */
+  const bakeFiltered = (
+    node: INode,
+    matrix: Matrix,
+    paint: Paint,
+    masks: readonly MaskGroup[],
+    target: Target,
+  ): boolean => {
+    if (!Resvg) {
+      dropped.add('filter');
+      return false;
+    }
+    const nodeAttributes = {...node.attributes};
+    const reference = urlReference(styled(nodeAttributes, 'filter'));
+    const definition = reference ? elementsById.get(reference) : undefined;
+    const underneath =
+      definition?.name === 'filter' ? underneathFilter(definition) : null;
+
+    // The fonts its text uses; what the vector baker cannot draw in it does not matter, as resvg draws it.
+    const droppedBefore = new Set(dropped);
+    walk(svgNode('g', {}, [node]), matrix, paint, [], {
+      ops: [],
+      mode: 'bounds',
+      writer: null,
+    });
+    dropped.clear();
+    for (const reason of droppedBefore) dropped.add(reason);
+
+    // The whole file in <defs>, so everything it references is there, and the element alone drawn.
+    const definitions = [...(root.children || [])];
+    delete nodeAttributes.id;
+    if (underneath) {
+      let id = 'underneath';
+      for (let suffix = 1; elementsById.has(id); suffix++)
+        id = `underneath-${suffix}`;
+      definitions.push(
+        svgNode('filter', {...definition!.attributes, id}, underneath),
+      );
+      nodeAttributes.filter = `url(#${id})`;
+      if (nodeAttributes.style)
+        nodeAttributes.style = withoutDeclaration(
+          nodeAttributes.style,
+          'filter',
+        );
+    }
+    const inherited: Attributes = {transform: `matrix(${matrix.join(' ')})`};
+    for (const key of PAINT_KEYS)
+      if (key !== 'opacity' && paint[key] != null) inherited[key] = paint[key];
+    const canvasWidth = Math.ceil(width);
+    const canvasHeight = Math.ceil(height);
+    const document = svgNode(
+      'svg',
+      {
+        ...Object.fromEntries(
+          Object.entries(attributes).filter(([key]) => key.startsWith('xmlns')),
+        ),
+        xmlns: SVG_NAMESPACE,
+        width: String(canvasWidth),
+        height: String(canvasHeight),
+        viewBox: `0 0 ${canvasWidth} ${canvasHeight}`,
+      },
+      [
+        svgNode('defs', {}, definitions),
+        svgNode('g', inherited, [{...node, attributes: nodeAttributes}]),
+      ],
+    );
+
+    const drawn = croppedToContent(
+      renderPng(Resvg, serializeNode(document), rasterFonts()),
+    );
+    if (drawn) {
+      const image = namedImage(drawn.png, drawn.width, drawn.height);
+      if (!images.has(image.name))
+        images.set(image.name, {
+          name: image.name,
+          png: writeRasterPng(image.name, image.png),
+        });
+      target.writer?.use(masks);
+      target.ops.push(
+        VOP_IMAGE,
+        image.id,
+        clamp01(num(paint.opacity, 1)),
+        1,
+        0,
+        0,
+        1,
+        drawn.x,
+        drawn.y,
+      );
+    }
+    return underneath != null;
+  };
+
   const walk = (
     node: INode,
     matrix: Matrix,
@@ -1860,9 +1956,18 @@ export async function svgToVector(
         }
       }
 
+      // A filter is drawn to an image; one that only draws under its element leaves the element to draw on top.
+      const filter = styled(childAttributes, 'filter');
+      if (filter && filter !== 'none' && target.mode !== 'bounds') {
+        if (target.mode === 'clip') {
+          // A clip takes outlines only, so the filter does nothing.
+        } else if (target.mode !== 'draw') {
+          dropped.add(`filter inside a ${target.mode}`);
+          continue;
+        } else if (!bakeFiltered(child, matrix, paint, masks, target)) continue;
+      }
+
       if (child.name === 'g' || child.name === 'svg') {
-        const filter = styled(childAttributes, 'filter');
-        if (filter && filter !== 'none') dropped.add('filter');
         walk(child, childMatrix, childPaint, childMasks, target);
         continue;
       }
@@ -1895,17 +2000,13 @@ export async function svgToVector(
 
       const shapeOps = parsePath(d);
       if (shapeOps.length)
-        emitShape(
-          shapeOps,
-          childMatrix,
-          childPaint,
-          childAttributes,
-          childMasks,
-          target,
-        );
+        emitShape(shapeOps, childMatrix, childPaint, childMasks, target);
     }
   };
 
+  // A filter on the whole drawing leaves the whole file to the raster fallback.
+  const rootFilter = styled(attributes, 'filter');
+  if (rootFilter && rootFilter !== 'none') dropped.add('filter');
   walk(root, rootMatrix, resolvePaint(attributes, DEFAULT_PAINT), [], {
     ops,
     mode: 'draw',
@@ -1920,10 +2021,7 @@ export async function svgToVector(
     width,
     height,
     dropped: [...dropped].sort(),
-    fonts: {
-      files: [...usedFonts].map(fontFile),
-      family: usedFonts.size ? fontFamilyName([...usedFonts][0]) : '',
-    },
+    fonts: rasterFonts(),
     images: [...images.values()],
   };
 }
@@ -1948,7 +2046,18 @@ export async function svgToRaster(
   // SVGs omit it, so inject it when absent or resvg rejects the document ("does not have a root node").
   let svg = String(svgString);
   if (!/<svg\b[^>]*\sxmlns\s*=/i.test(svg))
-    svg = svg.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+    svg = svg.replace(/<svg\b/i, `<svg xmlns="${SVG_NAMESPACE}"`);
+  return renderPng(Resvg, svg, fonts);
+}
+
+type ResvgClass = typeof import('@resvg/resvg-js').Resvg;
+
+/** Draws an SVG document with resvg, on a transparent background, with only the given fonts. */
+function renderPng(
+  Resvg: ResvgClass,
+  svg: string,
+  fonts: RasterFonts,
+): {width: number; height: number; png: Buffer} {
   const resvg = new Resvg(svg, {
     background: 'rgba(0,0,0,0)', // transparent so it composites
     font: {
@@ -1963,6 +2072,157 @@ export async function svgToRaster(
   // Only the wasm build has free().
   (rendered as {free?: () => void}).free?.();
   return {width, height, png};
+}
+
+/** A PNG cut to the pixels it draws, and where they were; null when it draws none. */
+function croppedToContent({png}: {png: Buffer}): {
+  png: Buffer;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} | null {
+  const image = PNG.sync.read(png);
+  let left = image.width;
+  let top = image.height;
+  let right = -1;
+  let bottom = -1;
+  for (let row = 0; row < image.height; row++)
+    for (let column = 0; column < image.width; column++) {
+      if (!image.data[(row * image.width + column) * RGBA_BYTES + ALPHA_BYTE])
+        continue;
+      left = Math.min(left, column);
+      right = Math.max(right, column);
+      top = Math.min(top, row);
+      bottom = Math.max(bottom, row);
+    }
+  if (right < 0) return null;
+  const width = right - left + 1;
+  const height = bottom - top + 1;
+  const cropped = new PNG({width, height});
+  for (let row = 0; row < height; row++) {
+    const start = ((top + row) * image.width + left) * RGBA_BYTES;
+    image.data.copy(
+      cropped.data,
+      row * width * RGBA_BYTES,
+      start,
+      start + width * RGBA_BYTES,
+    );
+  }
+  return {png: PNG.sync.write(cropped), x: left, y: top, width, height};
+}
+
+/** An element, built to be serialized. */
+function svgNode(
+  name: string,
+  attributes: Attributes,
+  children: INode[],
+): INode {
+  return {name, type: 'element', value: '', attributes, children} as INode;
+}
+
+/** Writes a parsed element back out as XML. svgson's own stringify escapes entities it kept as written. */
+function serializeNode(node: INode): string {
+  if (node.type === 'text') return escapeXml(node.value);
+  if (node.type !== 'element') return '';
+  const attributes = Object.entries(node.attributes || {})
+    .map(
+      ([key, value]) =>
+        ` ${key}="${escapeXml(String(value)).replace(/"/g, '&quot;')}"`,
+    )
+    .join('');
+  const children = (node.children || []).map(serializeNode).join('');
+  return `<${node.name}${attributes}>${children}</${node.name}>`;
+}
+
+/** Escapes markup in text, keeping the entities svgson leaves as written. */
+function escapeXml(text: string): string {
+  return text
+    .replace(/&(?!#\d+;|#x[0-9a-f]+;|[a-z][\w.-]*;)/gi, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** A style attribute without one of its declarations. */
+function withoutDeclaration(style: string, name: string): string {
+  return style
+    .split(';')
+    .filter(declaration => declaration.split(':')[0].trim() !== name)
+    .join(';');
+}
+
+/**
+ * A filter's primitives without its last step, when that step only draws the unchanged element over what the
+ * filter made: a glow or drop shadow drawn under its element. Null for any other filter.
+ */
+function underneathFilter(filter: INode): INode[] | null {
+  if (hrefOf(filter.attributes || {})) return null;
+  const primitives = (filter.children || []).filter(
+    child => child.type === 'element',
+  );
+  const last = primitives.at(-1);
+  if (!last) return null;
+  const earlier = primitives.slice(0, -1);
+  const lastAttributes = last.attributes || {};
+  // A primitive without `in` takes the one before it, or the element when it is the first.
+  const input = lastAttributes.in ?? (earlier.length ? null : 'SourceGraphic');
+
+  if (last.name === 'feMerge') {
+    const nodes = (last.children || []).filter(
+      child => child.type === 'element',
+    );
+    if (nodes.at(-1)?.attributes?.in !== 'SourceGraphic') return null;
+    return [...earlier, svgNode('feMerge', lastAttributes, nodes.slice(0, -1))];
+  }
+  const over =
+    (last.name === 'feBlend' &&
+      (lastAttributes.mode ?? 'normal') === 'normal') ||
+    (last.name === 'feComposite' &&
+      (lastAttributes.operator ?? 'over') === 'over');
+  if (over) {
+    if (input !== 'SourceGraphic' || !lastAttributes.in2) return null;
+    return [
+      ...earlier,
+      svgNode(
+        'feMerge',
+        lastAttributes.result ? {result: lastAttributes.result} : {},
+        [svgNode('feMergeNode', {in: lastAttributes.in2}, [])],
+      ),
+    ];
+  }
+  if (last.name === 'feDropShadow') {
+    if (input !== 'SourceGraphic') return null;
+    // The shadow alone: the element's alpha blurred, moved and filled with the flood colour.
+    const deviation = lastAttributes.stdDeviation ?? '2';
+    const flood: Attributes = {result: 'underneath-flood'};
+    for (const key of ['flood-color', 'flood-opacity', 'style'])
+      if (lastAttributes[key] != null) flood[key] = lastAttributes[key];
+    return [
+      ...earlier,
+      svgNode(
+        'feGaussianBlur',
+        {in: 'SourceAlpha', stdDeviation: deviation, result: 'underneath-blur'},
+        [],
+      ),
+      svgNode(
+        'feOffset',
+        {
+          in: 'underneath-blur',
+          dx: lastAttributes.dx ?? '2',
+          dy: lastAttributes.dy ?? '2',
+          result: 'underneath-offset',
+        },
+        [],
+      ),
+      svgNode('feFlood', flood, []),
+      svgNode(
+        'feComposite',
+        {in: 'underneath-flood', in2: 'underneath-offset', operator: 'in'},
+        [],
+      ),
+    ];
+  }
+  return null;
 }
 
 /**

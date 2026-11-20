@@ -33,6 +33,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Dashed strokes in an `.svg` file are drawn by the vector rasteriser, so a file that uses them stays a
   vector.
 - `<use>`, `<symbol>`, `<pattern>` fills and embedded images in an `.svg` file are drawn as vectors.
+- An element with a `filter` in an `.svg` file is drawn as an image, so the rest of the file stays a
+  vector. A glow or drop shadow is an image under the element, which stays a vector.
 - `<Polygon>`, `<Polyline>`, `<Defs>`, `<LinearGradient>`, `<RadialGradient>` and `<Stop>` inside an
   `<Svg>`, in both flows, with `fill="url(#id)"` and `stroke="url(#id)"`.
 - `fillOpacity`, `strokeOpacity` and `opacity` on `<Svg>`, `<G>` and every shape.

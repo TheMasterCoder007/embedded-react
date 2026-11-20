@@ -88,13 +88,21 @@ async function decodeImage(url: string): Promise<EmbeddedImage | string> {
     return `image of type ${type}`;
   }
   if (!(width > 0 && height > 0)) return 'image of no size';
+  return namedImage(png, width, height);
+}
 
+/** Names a PNG the tape draws after a hash of its bytes. */
+export function namedImage(
+  png: Buffer,
+  width: number,
+  height: number,
+): EmbeddedImage {
   const hash = createHash('sha1').update(png).digest('hex');
   const id = parseInt(hash.slice(0, ID_DIGITS), HEX) & IMAGE_ID_MAX;
   const known = hashesById.get(id);
   if (known && known !== hash) {
     throw new Error(
-      `two embedded images share the id ${id.toString(HEX)}; change one of them by a pixel`,
+      `two images in .svg files share the id ${id.toString(HEX)}; change one of them by a pixel`,
     );
   }
   hashesById.set(id, hash);
