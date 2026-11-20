@@ -26,9 +26,11 @@
  */
 
 #include "er_error_screen.h"
+#include "erb_debug.h"
 #include "erb_internal.h"
 #include "erb_props.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -97,6 +99,41 @@ static ERNode* s_root; /**< The running app's root node. */
 static uint16_t s_anim_generation;
 static uint16_t s_tree[ERB_MAX_ANIM_TREE];
 static uint8_t s_tree_parent[ERB_MAX_ANIM_TREE];
+static volatile bool s_debug_update; /**< A debugger wrote state: the next erb_tick() runs the update. */
+
+const ErbDebug erb_debug = {
+    .magic = ERB_DEBUG_MAGIC,
+    .version = ERB_DEBUG_VERSION,
+    .frame_cells = ERB_FRAME_CELLS,
+    .engine = &er_debug,
+    .reasons = erb_status_reasons,
+    .reason_count = ERB_STATUS_COUNT_,
+    .error = &g_erb.error,
+    .error_fields =
+        {
+            .status_at = offsetof(ErbError, status),
+            .status_bytes = sizeof(ErbStatus),
+            .detail_at = offsetof(ErbError, detail),
+            .needed_at = offsetof(ErbError, needed),
+            .available_at = offsetof(ErbError, available),
+            .resource_at = offsetof(ErbError, resource),
+            .function_at = offsetof(ErbError, function),
+            .offset_at = offsetof(ErbError, offset),
+            .name_at = offsetof(ErbError, name),
+            .build_id_at = offsetof(ErbError, build_id),
+        },
+    .loaded = &g_erb.loaded,
+    .faulted = &g_erb.faulted,
+    .in_vm = &g_erb.in_vm,
+    .build_id = &g_erb.program.build_id,
+    .panel = &g_erb.program.panel,
+    .arena = &g_erb.arena,
+    .stack_offset = &g_erb.program.regions[ERB_REGION_STACK].offset,
+    .function = &g_erb_vm.function,
+    .program_counter = &g_erb_vm.program_counter,
+    .frame_base = &g_erb_vm.frame_base,
+    .update = &s_debug_update,
+};
 
 typedef struct
 {
@@ -146,46 +183,47 @@ static uint8_t* slot_data(uint16_t slot)
  - Faults and reports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+const char* const erb_status_reasons[ERB_STATUS_COUNT_] = {
+    [ERB_OK] = "ok",
+    [ERB_ERROR_NO_PACKAGE] = "no package installed",
+    [ERB_ERROR_CORRUPT] = "not a package, or corrupt",
+    [ERB_ERROR_NOT_FLOW_B] = "not a Flow B package",
+    [ERB_ERROR_NEWER_FORMAT] = "built for a newer runtime",
+    [ERB_ERROR_ENGINE_ABI] = "built for another engine ABI",
+    [ERB_ERROR_NO_PANEL] = "no layout for this screen",
+    [ERB_ERROR_TOO_BIG] = "needs more than the firmware reserves",
+    [ERB_ERROR_TABLE] = "malformed table",
+    [ERB_ERROR_STRING] = "malformed string",
+    [ERB_ERROR_ARENA] = "bad arena layout",
+    [ERB_ERROR_STATE] = "bad state layout",
+    [ERB_ERROR_PROP] = "bad prop",
+    [ERB_ERROR_TEMPLATE] = "bad template",
+    [ERB_ERROR_BINDING] = "bad binding",
+    [ERB_ERROR_ANIMATION] = "bad animation",
+    [ERB_ERROR_TAPE] = "bad vector tape",
+    [ERB_ERROR_FUNCTION] = "bad function",
+    [ERB_ERROR_BYTECODE] = "bad bytecode",
+    [ERB_ERROR_CONTROL_FLOW] = "bad control flow",
+    [ERB_ERROR_RECURSION] = "recursive call",
+    [ERB_ERROR_STACK] = "stack too deep",
+    [ERB_ERROR_IMPORT] = "missing native module",
+    [ERB_ERROR_INPUT] = "bad input",
+    [ERB_ERROR_DEBUG] = "debug table does not match",
+    [ERB_ERROR_ASSETS] = "asset pack failed to load",
+    [ERB_ERROR_SLOT] = "couldn't write the package slot",
+    [ERB_ERROR_BUDGET] = "instruction budget exceeded",
+    [ERB_ERROR_UPDATE_LOOP] = "update loop",
+    [ERB_ERROR_QUEUE_FULL] = "event queue full",
+    [ERB_ERROR_LIST_INDEX] = "list read past its end",
+    [ERB_ERROR_TRAP] = "app stopped",
+    [ERB_ERROR_NATIVE] = "native module failed",
+    [ERB_ERROR_STALE_NODE] = "stale node handle",
+    [ERB_ERROR_OUT_OF_NODES] = "out of nodes",
+};
+
 const char* erb_status_name(ErbStatus status)
 {
-    static const char* const reasons[ERB_STATUS_COUNT_] = {
-        [ERB_OK] = "ok",
-        [ERB_ERROR_NO_PACKAGE] = "no package installed",
-        [ERB_ERROR_CORRUPT] = "not a package, or corrupt",
-        [ERB_ERROR_NOT_FLOW_B] = "not a Flow B package",
-        [ERB_ERROR_NEWER_FORMAT] = "built for a newer runtime",
-        [ERB_ERROR_ENGINE_ABI] = "built for another engine ABI",
-        [ERB_ERROR_NO_PANEL] = "no layout for this screen",
-        [ERB_ERROR_TOO_BIG] = "needs more than the firmware reserves",
-        [ERB_ERROR_TABLE] = "malformed table",
-        [ERB_ERROR_STRING] = "malformed string",
-        [ERB_ERROR_ARENA] = "bad arena layout",
-        [ERB_ERROR_STATE] = "bad state layout",
-        [ERB_ERROR_PROP] = "bad prop",
-        [ERB_ERROR_TEMPLATE] = "bad template",
-        [ERB_ERROR_BINDING] = "bad binding",
-        [ERB_ERROR_ANIMATION] = "bad animation",
-        [ERB_ERROR_TAPE] = "bad vector tape",
-        [ERB_ERROR_FUNCTION] = "bad function",
-        [ERB_ERROR_BYTECODE] = "bad bytecode",
-        [ERB_ERROR_CONTROL_FLOW] = "bad control flow",
-        [ERB_ERROR_RECURSION] = "recursive call",
-        [ERB_ERROR_STACK] = "stack too deep",
-        [ERB_ERROR_IMPORT] = "missing native module",
-        [ERB_ERROR_INPUT] = "bad input",
-        [ERB_ERROR_DEBUG] = "debug table does not match",
-        [ERB_ERROR_ASSETS] = "asset pack failed to load",
-        [ERB_ERROR_SLOT] = "couldn't write the package slot",
-        [ERB_ERROR_BUDGET] = "instruction budget exceeded",
-        [ERB_ERROR_UPDATE_LOOP] = "update loop",
-        [ERB_ERROR_QUEUE_FULL] = "event queue full",
-        [ERB_ERROR_LIST_INDEX] = "list read past its end",
-        [ERB_ERROR_TRAP] = "app stopped",
-        [ERB_ERROR_NATIVE] = "native module failed",
-        [ERB_ERROR_STALE_NODE] = "stale node handle",
-        [ERB_ERROR_OUT_OF_NODES] = "out of nodes",
-    };
-    return (unsigned)status < ERB_STATUS_COUNT_ ? reasons[status] : "unknown";
+    return (unsigned)status < ERB_STATUS_COUNT_ ? erb_status_reasons[status] : "unknown";
 }
 
 static const char* resource_name(uint16_t resource)
@@ -1950,6 +1988,8 @@ bool erb_load(const void* package, size_t package_bytes, const ErbConfig* config
 {
     ErbError local;
     ErbError* out = error ? error : &local;
+    /* Keeps the debugger's descriptor in a build that drops data nothing reads. */
+    (void)*(const volatile uint32_t*)&erb_debug.magic;
     /* A size left at 0 comes from the engine's display, turned by its rotation. */
     ErbConfig sized;
     if (config && (config->screen_width == 0 || config->screen_height == 0))
@@ -2012,6 +2052,14 @@ void erb_tick(uint32_t elapsed_ms)
         /* Animation waits first, then timers. */
         tick_anims(elapsed_ms);
         tick_timers(elapsed_ms);
+        if (s_debug_update)
+        {
+            s_debug_update = false;
+            ErbEvent event;
+            memset(&event, 0, sizeof(event));
+            event.kind = ERB_EVENT_UPDATE;
+            dispatch(&event);
+        }
     }
     if (s_fault_pending)
     {

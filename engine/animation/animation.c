@@ -15,11 +15,13 @@
  */
 
 #include "arc_widget.h"
+#include "er_debug.h"
 #include "er_node_internal.h"
 #include "renderer_internal.h"
 #include "spring.h"
 #include "transform.h"
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -215,6 +217,14 @@ typedef struct
 static ERAnimation s_animations[ERUI_MAX_ANIMATIONS];
 static ERAnimationGroup s_groups[ERUI_MAX_ANIMATION_GROUPS];
 static ERAnimationValue s_anim_values[ERUI_MAX_ANIMATION_VALUES];
+
+/** @brief The pools, for er_debug. */
+const ERDebugPool er_debug_animation_pool = {
+    s_animations, ERUI_MAX_ANIMATIONS, sizeof(ERAnimation), offsetof(ERAnimation, active), 0u};
+const ERDebugPool er_debug_group_pool = {
+    s_groups, ERUI_MAX_ANIMATION_GROUPS, sizeof(ERAnimationGroup), offsetof(ERAnimationGroup, active), 0u};
+const ERDebugPool er_debug_value_pool = {
+    s_anim_values, ERUI_MAX_ANIMATION_VALUES, sizeof(ERAnimationValue), offsetof(ERAnimationValue, in_use), 0u};
 static uint16_t s_next_handle = 1; /**< Monotonically increasing handle counter; wraps avoiding 0. */
 
 /*----------------------------------------------------------------------------------------------------------------------

@@ -393,6 +393,19 @@ typedef struct
 
 extern ErbRuntime g_erb;
 
+/** @brief Where the VM is, for faults, reports and a debugger. */
+typedef struct
+{
+    uint16_t function;        /**< The function running. */
+    uint32_t program_counter; /**< Its instruction, as a word offset. */
+    uint32_t frame_base;      /**< Its frame on the register stack, in cells; set on each call and return. */
+} ErbVmPlace;
+
+extern ErbVmPlace g_erb_vm;
+
+/** @brief Each ErbStatus's reason, for erb_status_name() and a debugger. */
+extern const char* const erb_status_reasons[ERB_STATUS_COUNT_];
+
 /**
  * @brief Runs one function to its end.
  *

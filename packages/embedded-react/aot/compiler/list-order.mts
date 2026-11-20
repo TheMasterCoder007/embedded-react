@@ -583,6 +583,7 @@ export function derivedListOf(
     name: steps.at(-1)!.what,
     slotName: `o${count}_${source.name}`,
     setter: undefined,
+    instancePrefix: environment.callbackPrefix,
     struct: ROW_NUMBERS,
     items: [],
     capacity: source.capacity,
