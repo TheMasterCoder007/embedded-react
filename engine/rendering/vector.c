@@ -145,6 +145,7 @@
     0.25f /**< sin² of the sharpest turn (30 deg) taken as a flattened curve's, not a corner.                         \
            */
 #define VEC_DASH_ARC_TERM (1.0f / 24.0f) /**< An arc is longer than its chord by turn² / 24 of it. */
+#define VEC_DASH_CUTS_MAX 4096    /**< Dash ends cut along one subpath; past this the rest of it is left undrawn. */
 #define VEC_DASH_DOT_LENGTH 0.01f /**< The length (px) a dash of none is given, so a square cap has a direction. */
 
 #define VEC_MOVE_OP_SIZE 3
@@ -1857,6 +1858,7 @@ static void dash_subpath(const VecSub* subpath, float period, float stroke_width
     VecDash first = {0, 0};
     bool hold_first = closed && on; /* the path starts inside a dash, which its last one may run into */
     bool cut = false;               /* the pattern changed somewhere along the path */
+    int cuts = 0;
     float unit_x = 1.0f, unit_y = 0.0f;
     if (on)
         dash_point(&dash, points_x[0], points_y[0]);
@@ -1872,7 +1874,7 @@ static void dash_subpath(const VecSub* subpath, float period, float stroke_width
                                    &previous_y,
                                    &other_length);
 
-    for (int segment = 0; segment < segment_count && !s_edge_truncated; segment++)
+    for (int segment = 0; segment < segment_count && !s_edge_truncated && cuts <= VEC_DASH_CUTS_MAX; segment++)
     {
         const int end_index = seg_end_index(segment, vertex_count);
         const float start_x = points_x[segment], start_y = points_y[segment];
@@ -1905,6 +1907,16 @@ static void dash_subpath(const VecSub* subpath, float period, float stroke_width
         float at = 0.0f;
         while (length - at > remaining && !s_edge_truncated)
         {
+            /* A path far longer than its pattern, or one no float can step along, would never finish. */
+            if (++cuts > VEC_DASH_CUTS_MAX)
+            {
+                ERUI_WARN_ONCE("embedded-react vector: more than %d dashes along one path - the rest of it is "
+                               "left undrawn.\n",
+                               VEC_DASH_CUTS_MAX / 2);
+                on = false;
+                dash.count = 0;
+                break;
+            }
             at += remaining;
             const float along = at / stretch;
             const float x = start_x + unit_x * along, y = start_y + unit_y * along;

@@ -542,6 +542,19 @@ static int check_limits(void)
     render();
     if (alpha_at(15, 64) != 255 || alpha_at(25, 64) != 0)
         return fail("an infinite dash offset is not taken as none");
+    /* A path too long for its pattern, and one with no end, are cut short, not walked for ever: each returns. */
+    const float far_ends[] = {1e9f, 1e30f, INFINITY};
+    /* Twice: on screen, where the edges run out first, and below it, where none are kept. */
+    for (size_t far = 0; far < 2 * sizeof(far_ends) / sizeof(far_ends[0]); far++)
+    {
+        const float row = (far % 2 == 0) ? 64.0f : 500.0f;
+        const float line[] = {ER_VECTOR_OP_MOVE, 10.0f, row, ER_VECTOR_OP_LINE, far_ends[far / 2], row};
+        tape_begin(BUTT);
+        tape_dash(10.0f, 10.0f);
+        memcpy(s_tape + s_tape_count, line, sizeof(line));
+        s_tape_count += (int)(sizeof(line) / sizeof(line[0]));
+        render();
+    }
     tape_begin(BUTT);
     tape_dash(10.0f, 10.0f);
     s_tape_count--;
