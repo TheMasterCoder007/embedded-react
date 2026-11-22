@@ -90,6 +90,8 @@ set(ERB_MAX_NATIVE_EVENTS "32" CACHE STRING "Flow B: native events a package sub
 set(ERB_MAX_KEYBOARD_KEYS "128" CACHE STRING "Flow B: keys a package's keyboard layout may have (12 B each with the on-screen keyboard)")
 set(ERB_MAX_TEMPLATE_DEPTH "32" CACHE STRING "Flow B: how deeply a template may nest")
 set(ERB_REPORT_PLACES "32" CACHE STRING "Flow B: places a limit is reported from before repeats stop being filtered")
+option(ERB_DEBUG_HOOK "Flow B: the VM's hook for breakpoints and stepping from GDB (debug builds)" OFF)
+set(ERB_DEBUG_STOPS "16" CACHE STRING "Flow B: breakpoint places the debug hook holds (8 B each)")
 
 # PUBLIC: erb_internal.h sizes structs by these, so every file that includes it must agree.
 target_compile_definitions(erb-runtime PUBLIC
@@ -102,6 +104,8 @@ target_compile_definitions(erb-runtime PUBLIC
         ERB_MAX_KEYBOARD_KEYS=${ERB_MAX_KEYBOARD_KEYS}
         ERB_MAX_TEMPLATE_DEPTH=${ERB_MAX_TEMPLATE_DEPTH}
         ERB_REPORT_PLACES=${ERB_REPORT_PLACES}
+        ERB_DEBUG_HOOK=$<BOOL:${ERB_DEBUG_HOOK}>
+        ERB_DEBUG_STOPS=${ERB_DEBUG_STOPS}
 )
 
 target_link_libraries(erb-runtime

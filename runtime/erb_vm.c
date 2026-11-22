@@ -23,6 +23,7 @@
  * fixed C frame whatever the app does.
  */
 
+#include "erb_debug.h"
 #include "erb_internal.h"
 #include "erb_props.h"
 
@@ -864,6 +865,57 @@ static bool copy_capped(char* destination, uint32_t capacity, const char* text)
 
 ErbVmPlace g_erb_vm;
 
+#if ERB_DEBUG_HOOK
+volatile ErbDebugControl erb_debug_control;
+
+#if defined(__GNUC__)
+__attribute__((noinline, used))
+#endif
+void erb_debug_break(void)
+{
+#if defined(__GNUC__)
+    /* An empty function can still be dropped or merged; this keeps it as a place to stop. */
+    __asm__ volatile("");
+#endif
+}
+
+/** @brief Stops at a place in the table, or where the step ends. */
+static void debug_check(uint32_t program_counter, uint32_t base)
+{
+    volatile ErbDebugControl* control = &erb_debug_control;
+    const uint16_t function = g_erb_vm.function;
+    const bool outside = program_counter < control->step_from || program_counter >= control->step_to;
+    bool stop = false;
+    switch (control->step)
+    {
+        case ERB_DEBUG_STEP_INTO:
+            stop = function != control->step_function || outside;
+            break;
+        case ERB_DEBUG_STEP_OVER:
+            stop = base < control->step_base || (base == control->step_base && outside);
+            break;
+        case ERB_DEBUG_STEP_OUT:
+            stop = base < control->step_base;
+            break;
+        case ERB_DEBUG_STEP_ANY:
+            stop = true;
+            break;
+        default:
+            break;
+    }
+    const uint16_t count = control->stop_count < ERB_DEBUG_STOPS ? control->stop_count : ERB_DEBUG_STOPS;
+    for (uint16_t index = 0; !stop && index < count; index++)
+    {
+        stop = control->stops[index].function == function && control->stops[index].offset == program_counter;
+    }
+    if (stop)
+    {
+        control->event = ERB_DEBUG_AT_STOP;
+        erb_debug_break();
+    }
+}
+#endif
+
 static ErbStatus fault(ErbStatus status, const char* detail, const char* name)
 {
     return erb_rt_fault(status, detail, name, g_erb_vm.function, g_erb_vm.program_counter);
@@ -1113,6 +1165,12 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
         const uint8_t operand_c = ERB_C(word);
         const uint16_t operand_bx = ERB_BX(word);
         g_erb_vm.program_counter = program_counter;
+#if ERB_DEBUG_HOOK
+        if (erb_debug_control.armed)
+        {
+            debug_check(program_counter, base);
+        }
+#endif
         if (counting)
         {
             if (budget_left == 0u)
@@ -1623,6 +1681,14 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 const uint32_t cells = result_type ? erb_type_cells(result_type) : 0u;
                 if (stack[base + FRAME_CALLER] == FRAME_NO_CALLER)
                 {
+#if ERB_DEBUG_HOOK
+                    if (erb_debug_control.armed && erb_debug_control.step != ERB_DEBUG_STEP_NONE)
+                    {
+                        /* A step that runs off the app's code stops before it goes. */
+                        erb_debug_control.event = ERB_DEBUG_AT_RETURN;
+                        erb_debug_break();
+                    }
+#endif
                     if (cells && result)
                     {
                         memcpy(result, &registers[operand_a], cells * sizeof(int32_t));

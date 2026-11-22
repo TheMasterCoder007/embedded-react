@@ -22,6 +22,7 @@
 #ifndef ER_DEBUG_H
 #define ER_DEBUG_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -33,7 +34,7 @@ extern "C"
 #define ER_DEBUG_MAGIC 0x45445245u
 
 /** @brief Raised when a field of ERDebug or ERDebugPool changes. */
-#define ER_DEBUG_VERSION 1u
+#define ER_DEBUG_VERSION 2u
 
     /** @brief The engine's pools, in ERDebug::pools. */
     typedef enum
@@ -82,6 +83,8 @@ extern "C"
         const ERDebugPool* pools[ER_DEBUG_POOL_COUNT_];
         ERDebugNodeFields node;
         const uint16_t* root_tag; /**< The root node's tag. */
+        volatile bool* halted;    /**< Set by a debugger when the board halts: the next embedded_renderer_tick() counts
+                                       no time. */
     } ERDebug;
 
     extern const ERDebug er_debug;

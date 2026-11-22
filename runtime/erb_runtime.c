@@ -100,6 +100,7 @@ static uint16_t s_anim_generation;
 static uint16_t s_tree[ERB_MAX_ANIM_TREE];
 static uint8_t s_tree_parent[ERB_MAX_ANIM_TREE];
 static volatile bool s_debug_update; /**< A debugger wrote state: the next erb_tick() runs the update. */
+static volatile bool s_debug_halted; /**< The board was halted: the next erb_tick() counts no time. */
 
 const ErbDebug erb_debug = {
     .magic = ERB_DEBUG_MAGIC,
@@ -133,6 +134,11 @@ const ErbDebug erb_debug = {
     .program_counter = &g_erb_vm.program_counter,
     .frame_base = &g_erb_vm.frame_base,
     .update = &s_debug_update,
+    .halted = &s_debug_halted,
+#if ERB_DEBUG_HOOK
+    .control = &erb_debug_control,
+    .stop_capacity = ERB_DEBUG_STOPS,
+#endif
 };
 
 typedef struct
@@ -1945,6 +1951,11 @@ static ErbStatus start(const ErbConfig* config)
         }
     }
     g_erb.loaded = true;
+#if ERB_DEBUG_HOOK
+    /* A debugger writes its stops for this package before any of its code runs. */
+    erb_debug_control.event = ERB_DEBUG_AT_LOAD;
+    erb_debug_break();
+#endif
 
     /* Step 8 and 9: the arena, then the boot function, which works out values from the real screen. */
     ErbStatus status = init_slots();
@@ -2047,6 +2058,12 @@ const ErbError* erb_last_error(void)
 
 void erb_tick(uint32_t elapsed_ms)
 {
+    if (s_debug_halted)
+    {
+        /* The time measured across a halt is the debugger's, not the app's. */
+        s_debug_halted = false;
+        elapsed_ms = 0;
+    }
     if (g_erb.loaded && !g_erb.faulted)
     {
         /* Animation waits first, then timers. */
