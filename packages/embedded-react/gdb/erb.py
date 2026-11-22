@@ -365,6 +365,7 @@ def load_debug_file(path):
         )
     debug_file = loaded
     debug_path = path
+    source_lines.clear()
 
 
 def shape_fault(loaded):

@@ -113,6 +113,8 @@ const CHECKS: Check[] = [
   },
   {
     command: 'continue',
+    // The watch and the native call's breakpoint would stop first.
+    run: 'delete\ncontinue',
     expected: new RegExp(`^erb breakpoint 1, ${file}:34  onPress$`, 'm'),
   },
   {command: 'erb step', expected: new RegExp(`^${file}:35  onPress$`, 'm')},
