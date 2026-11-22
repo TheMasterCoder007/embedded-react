@@ -19,6 +19,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   call chain, last error, state, pools and nodes, and stops when a state changes. A backtrace shows the app's
   line in the VM's frame.
 - Flow B: the debug table names handlers as the source writes them (`onPress`, or a callback's own name).
+- Flow B: breakpoints and stepping from GDB (`erb break`, `erb step`, `erb next`, `erb finish`), with firmware
+  built with `ERB_DEBUG_HOOK=1`. The app doesn't count the time a board is halted.
 
 ## [0.25.0] - 2026-11-20
 ### Added

@@ -877,9 +877,37 @@ reads the magic once, so a link that drops unused data keeps them.
   images and font families), each an array of records with an in-use flag at an offset, the offsets of a node's
   fields, and the root's tag.
 
+Each also has a `halted` flag a debugger sets whenever the board halts. The next `erb_tick()` and
+`embedded_renderer_tick()` then count no time, so the app doesn't see the time it was halted as elapsed.
+`gdb/erb.py` sets them on every stop, and on `erb file` when the board is halted, since attaching halts it without
+a stop.
+
 `gdb/erb.py`, in the npm package, reads them with an app's `app.erdbg` to show its source line, state, pools and
 nodes, and refuses a descriptor version or a `build_id` it doesn't match. CI runs it against the Linux host
 (`npm run erb:gdb`).
+
+### The breakpoint hook
+
+Testing the VM's place on every instruction from a debugger takes seconds per handler over a probe, so a firmware
+built with `ERB_DEBUG_HOOK=1` has the VM test it instead. Without the option the VM has no code for it, and
+`erb_debug.control` is NULL.
+
+With it, `erb_debug.control` points at a table the debugger writes while the board is halted: up to
+`ERB_DEBUG_STOPS` places (a function and an instruction, 16 by default), and a step (into, over, or out of a frame,
+or to the next instruction the app runs). The VM tests one flag before each instruction; when it is set and the
+instruction is a place in the table or ends the step, the VM calls `erb_debug_break()`, an empty function the
+debugger keeps a breakpoint on. A step that reaches the return to the runtime stops there too, and the runtime also
+calls it after each load, before any of the package's code runs, so the debugger writes its breakpoints for the
+package that loaded.
+
+The debugger works out the places from `app.erdbg`: a breakpoint's line is each place a statement on it starts, and
+a step's range is the statement it is in. A step that returns partway through a statement is run on to the next one
+by the debugger, without stopping.
+
+Code that runs from flash needs a hardware breakpoint on `erb_debug_break()`. GDB uses one where the debug server's
+memory map says flash, so the map has to cover every bank the code is in. On a dual-bank STM32H7, OpenOCD's
+`target/stm32h7x.cfg` declares the second bank only with `-c "set DUAL_BANK 1"` before it. Without it, code in the
+second bank gets software breakpoints, which never fire.
 
 ### Package slots
 

@@ -9,3 +9,7 @@ CONFIG_ESP_TASK_WDT_PANIC=y
 # A hot reload's flash writes stop the panel's interrupts. With this on, the driver never recounts its bounce buffers,
 # so it can stay one out of step and tear until a reset. Off, it recounts each frame and restarts when it falls behind.
 # CONFIG_LCD_RGB_RESTART_IN_VSYNC is not set
+
+# Flow B has no QuickJS to recurse: the thermostat used 5 KB of its main stack. Less than Flow A's 64 KiB leaves room
+# in internal RAM for a build with ERB_DEBUG_HOOK.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=61440

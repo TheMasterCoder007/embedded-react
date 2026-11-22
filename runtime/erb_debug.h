@@ -36,8 +36,66 @@ extern "C"
 /** @brief ErbDebug::magic: "ERBD". */
 #define ERB_DEBUG_MAGIC 0x44425245u
 
-/** @brief Raised when a field of ErbDebug changes. */
-#define ERB_DEBUG_VERSION 1u
+/** @brief Raised when a field of ErbDebug or ErbDebugControl changes. */
+#define ERB_DEBUG_VERSION 2u
+
+/**
+ * @brief Set to 1 to build the VM's breakpoint hook, for breakpoints and stepping from GDB. Off, the VM has no code
+ *        for it. A debug build's option: on, the VM tests one flag on every instruction.
+ */
+#ifndef ERB_DEBUG_HOOK
+#define ERB_DEBUG_HOOK 0
+#endif
+
+/** @brief Places the hook can stop at, for breakpoints: 8 bytes each. */
+#ifndef ERB_DEBUG_STOPS
+#define ERB_DEBUG_STOPS 16u
+#endif
+
+    /** @brief When a step ends, in ErbDebugControl::step. */
+    typedef enum
+    {
+        ERB_DEBUG_STEP_NONE = 0,
+        ERB_DEBUG_STEP_INTO, /**< Outside the range, or in another function. */
+        ERB_DEBUG_STEP_OVER, /**< Outside the range in step_base's frame, or back in its caller. */
+        ERB_DEBUG_STEP_OUT,  /**< Back in the caller of step_base's frame. */
+        ERB_DEBUG_STEP_ANY,  /**< At the next instruction the app runs. */
+    } ErbDebugStep;
+
+    /** @brief Why the runtime called erb_debug_break(), in ErbDebugControl::event. */
+    typedef enum
+    {
+        ERB_DEBUG_AT_STOP = 0, /**< At a stop, or where a step ends. */
+        ERB_DEBUG_AT_RETURN,   /**< A step reached the return to the runtime. */
+        ERB_DEBUG_AT_LOAD,     /**< A package loaded and none of its code has run: a debugger writes its stops. */
+    } ErbDebugEvent;
+
+    /** @brief A place to stop: a function and an instruction in it. */
+    typedef struct
+    {
+        uint16_t function;
+        uint16_t reserved;
+        uint32_t offset; /**< A word offset. */
+    } ErbDebugStop;
+
+    /**
+     * @brief Where the hook stops. A debugger writes it while the board is halted; the VM tests armed before each
+     *        instruction, and calls erb_debug_break() at a stop or at the end of a step. The runtime also calls it
+     *        after each load.
+     */
+    typedef struct
+    {
+        uint8_t armed; /**< Set while there are stops or a step. */
+        uint8_t step;  /**< An ErbDebugStep. */
+        uint8_t event; /**< An ErbDebugEvent, set by the runtime before it calls erb_debug_break(). */
+        uint8_t reserved;
+        uint16_t step_function;
+        uint16_t stop_count;
+        uint32_t step_from; /**< The step's instructions in step_function: [from, to). */
+        uint32_t step_to;
+        uint32_t step_base; /**< The frame the step started in, in cells. */
+        ErbDebugStop stops[ERB_DEBUG_STOPS];
+    } ErbDebugControl;
 
     /** @brief Offsets in ErbError. */
     typedef struct
@@ -77,9 +135,19 @@ extern "C"
         const uint32_t* program_counter; /**< Its instruction, as a word offset. */
         const uint32_t* frame_base;      /**< Its frame on the register stack, in cells. */
         volatile bool* update;           /**< Set by a debugger after it writes state: erb_tick() runs the update. */
+        volatile bool* halted; /**< Set by a debugger when the board halts: the next erb_tick() counts no time. */
+        volatile ErbDebugControl* control; /**< The hook's, or NULL when the firmware is built without it. */
+        uint16_t stop_capacity;            /**< ERB_DEBUG_STOPS, or 0 without the hook. */
     } ErbDebug;
 
     extern const ErbDebug erb_debug;
+
+#if ERB_DEBUG_HOOK
+    extern volatile ErbDebugControl erb_debug_control;
+
+    /** @brief Does nothing: a debugger's breakpoint on it is where the hook stops the app. */
+    void erb_debug_break(void);
+#endif
 
 #ifdef __cplusplus
 }

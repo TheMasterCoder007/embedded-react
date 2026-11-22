@@ -777,8 +777,16 @@ void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
     er_force_full_repaint(); /* fresh framebuffer: first commit must fully repaint, not damage-clip */
 }
 
+/** @brief Set by a debugger when the board halts (er_debug.halted): the time measured across it isn't the app's. */
+volatile bool er_debug_halted;
+
 void embedded_renderer_tick(uint32_t delta_ms)
 {
+    if (er_debug_halted)
+    {
+        er_debug_halted = false;
+        delta_ms = 0;
+    }
     er_animation_tick(delta_ms);
     er_layout_animation_tick(delta_ms);
     er_input_tick(delta_ms);

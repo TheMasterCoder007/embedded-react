@@ -86,6 +86,8 @@ extern const ERDebugPool er_debug_group_pool;
 extern const ERDebugPool er_debug_value_pool;
 extern const ERDebugPool er_debug_image_pool;
 extern const ERDebugPool er_debug_font_pool;
+/* Beside embedded_renderer_tick(), which reads it. */
+extern volatile bool er_debug_halted;
 
 static const ERDebugPool s_debug_node_pool = {s_nodes, ERUI_MAX_NODES, sizeof(ERNode), offsetof(ERNode, in_use), 0u};
 
@@ -117,6 +119,7 @@ const ERDebug er_debug = {
             .scroll_y_at = offsetof(ERNode, scroll_offset_y),
         },
     .root_tag = &s_root_tag,
+    .halted = &er_debug_halted,
 };
 static int16_t s_bounds_width = 0; /**< er_set_screen_bounds(): the largest the root may be; 0 = no limit. */
 static int16_t s_bounds_height = 0;

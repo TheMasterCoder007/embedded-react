@@ -21,6 +21,7 @@
 
 #include "er_error_screen.h"
 #include "er_node_internal.h"
+#include "erb_debug.h"
 #include "erb_internal.h"
 #include "erb_package.h"
 #include "native_renderer.h"
@@ -1819,6 +1820,11 @@ static void test_timers_and_effects(void)
     erb_tick(50);
     erb_tick(100);
     CHECK(slot_int(SLOT_COUNT) == 8, "a repeating timer fires every interval");
+    *erb_debug.halted = true;
+    erb_tick(1000);
+    CHECK(slot_int(SLOT_COUNT) == 8, "the tick after a debugger's halt counts no time");
+    erb_tick(100);
+    CHECK(slot_int(SLOT_COUNT) > 8, "the tick after that counts its time");
 
     /* A mount effect: queued by the boot function, run after the first update. */
     base();

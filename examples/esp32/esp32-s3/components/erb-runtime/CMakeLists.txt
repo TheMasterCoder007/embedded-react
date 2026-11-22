@@ -29,4 +29,8 @@ idf_component_register(
 
 if(CONFIG_ER_FLOW_B)
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error)
+    # `idf.py -D ERB_DEBUG_HOOK=1 build` adds the VM's hook for breakpoints and stepping from GDB.
+    if(ERB_DEBUG_HOOK)
+        target_compile_definitions(${COMPONENT_LIB} PUBLIC ERB_DEBUG_HOOK=1)
+    endif()
 endif()
