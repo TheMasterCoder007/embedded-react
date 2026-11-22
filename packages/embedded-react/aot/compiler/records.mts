@@ -711,6 +711,18 @@ export interface ObjectDeclaration {
 const identifier = (name: string): t.Identifier =>
   ({type: 'Identifier', name}) as t.Identifier;
 
+/** The names this file declares that the app didn't write: a temporary object, and its fields. */
+const madeNames = new WeakSet<t.Identifier>();
+
+/**
+ * Whether a declarator's name is one this file made, rather than one the app wrote.
+ *
+ * @param id  The declarator's name.
+ *
+ * @returns Whether it is made.
+ */
+export const isMadeName = (id: t.Identifier): boolean => madeNames.has(id);
+
 const memberOf = (object: t.Expression, key: string): t.MemberExpression =>
   ({
     type: 'MemberExpression',
@@ -813,6 +825,7 @@ export function expandObjectDeclarator(
       };
     }
     const temporary = identifier(`object$${syntheticCount++}`);
+    madeNames.add(temporary);
     return {
       entries: [
         declaratorOf(temporary, init),
@@ -829,6 +842,9 @@ export function expandObjectDeclarator(
   const locals = new Map<string, Local>();
   for (const [key, value] of flattenTree(tree)) {
     const fieldName = identifier(`${id.name}.${key}`);
+    if (madeNames.has(id)) {
+      madeNames.add(fieldName);
+    }
     if (value instanceof AstLeaf) {
       for (const [name, local] of value.locals) locals.set(name, local);
       entries.push(declaratorOf(fieldName, value.node as t.Expression));

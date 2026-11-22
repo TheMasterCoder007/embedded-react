@@ -173,7 +173,7 @@ describe('for…of', () => {
           "const parts = label.split(','); for (const part of parts) setLabel(part);",
         ),
       ),
-    ).toEqual(['splitItems', {loop: ['set label']}]);
+    ).toEqual(['splitItems', 'debugName', {loop: ['set label']}]);
   });
 
   it('declares its item with const or let, and refuses var', () => {

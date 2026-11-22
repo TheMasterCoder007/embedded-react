@@ -32,7 +32,7 @@ import {
   TemplateKind,
   ValueType,
 } from './format.mts';
-import type {Program} from './writer.mts';
+import type {Program, ProgramLocal} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -47,9 +47,35 @@ export interface DebugLine {
   column: number;
 }
 
+/**
+ * A name the app gives a value in a function: a parameter, or a local. Where it is, a register, a place in the arena,
+ * or a list's row, is only good in the words from `from` up to `to`; one with none of those the compiler folded away.
+ */
+export interface DebugLocal {
+  name: string;
+  /** A value type, `row` for a list's row, or `list`; none for a name the compiler folded away. */
+  type?: string;
+  /** What the function is entered with. */
+  parameter?: boolean;
+  /** Its register in the function's frame: for a row, the row's number. */
+  register?: number;
+  /** Its byte offset in the arena, for one kept in a slot. */
+  offset?: number;
+  /** A string's most bytes, without its NUL. */
+  cap?: number;
+  /** A row's or a list's list, by its slot in the states. */
+  list?: number;
+  /** For a row of a filtered or sorted list: that list, by its slot, which holds the row of `list`. */
+  through?: number;
+  from: number;
+  to: number;
+}
+
 export interface DebugFunction {
   name: string;
   lines: DebugLine[];
+  /** In the order the code names them. */
+  locals: DebugLocal[];
 }
 
 /** A list's row field. */
@@ -160,7 +186,7 @@ export interface DebugPlace {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** The debug file's version, raised when a field changes its meaning. */
-export const DEBUG_FILE_FORMAT = 1;
+export const DEBUG_FILE_FORMAT = 2;
 
 const TYPE_NAMES = new Map<number, string>(
   Object.entries(ValueType).map(([name, type]) => [type, name]),
@@ -186,6 +212,42 @@ const TEMPLATE_KINDS = new Map<number, DebugTemplate['kind']>(
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * A local as the debug file names it: a slot's place in the arena, and a list by its slot.
+ *
+ * @param program  The panel's program.
+ * @param local  The local.
+ *
+ * @returns The local.
+ */
+function debugLocal(program: Program, local: ProgramLocal): DebugLocal {
+  const {name, type, register, parameter, from, to} = local;
+  const described: DebugLocal = {
+    name,
+    ...(type !== undefined && {type}),
+    ...(parameter && {parameter}),
+    ...(register !== undefined && {register}),
+    from,
+    to,
+  };
+  if (type === 'list') {
+    described.list = local.slot;
+  } else if (local.slot !== undefined) {
+    const slot = program.slots[local.slot];
+    described.offset = slot.offset;
+    if (type === 'string') {
+      described.cap = slot.cap;
+    }
+  }
+  if (type === 'row') {
+    described.list = local.list;
+    if (local.through !== undefined) {
+      described.through = local.through;
+    }
+  }
+  return described;
+}
 
 /**
  * One panel's part of the debug file.
@@ -247,6 +309,9 @@ function debugPanel(program: Program): DebugPanel {
         line: line.line,
         column: line.column + 1,
       })),
+      locals: (programFunction.debug?.locals ?? []).map(local =>
+        debugLocal(program, local),
+      ),
     })),
     states,
     templates: program.templates.map(template => ({
@@ -336,6 +401,14 @@ function shapeFault(debugFile: DebugFile): string | null {
             isNumber(line.offset) &&
             isNumber(line.line) &&
             isNumber(line.column),
+        ) ||
+        !isList(programFunction.locals) ||
+        !programFunction.locals.every(
+          local =>
+            isRecord(local) &&
+            isString(local.name) &&
+            isNumber(local.from) &&
+            isNumber(local.to),
         )
       ) {
         return `${where}, function ${functionIndex}`;

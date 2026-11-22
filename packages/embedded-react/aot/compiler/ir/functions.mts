@@ -96,6 +96,8 @@ export interface IrNativeEventHandler {
   event: NativeEvent;
   /** The locals the handler reads its values through, in order. */
   values: string[];
+  /** The names the app gives its values, for the debug file: a record's field as `name.field`, or null for none. */
+  valueNames: (string | null)[];
   /** Whether its component is mounted, or null when it always is. */
   mounted: IrExpr | null;
   callback: IrCallback;

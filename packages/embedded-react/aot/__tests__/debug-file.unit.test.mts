@@ -14,10 +14,23 @@
  * limitations under the License.
  */
 
+import {readFileSync} from 'node:fs';
+import {dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {describe, expect, it} from 'vitest';
-import {compilePackage, placeOf, readDebugFile} from '../compile.mts';
+import {
+  compilePackage,
+  placeOf,
+  readDebugFile,
+  readNativeFiles,
+} from '../compile.mts';
 import {DEBUG_FILE_FORMAT} from '../compiler/package/debug-file.mts';
-import type {DebugFile} from '../compiler/package/debug-file.mts';
+import type {
+  DebugFile,
+  DebugFunction,
+  DebugLocal,
+  DebugPanel,
+} from '../compiler/package/debug-file.mts';
 
 const APP = `import {useState} from 'react';
 import {View, Text, Pressable} from 'embedded-react';
@@ -257,6 +270,9 @@ export function App() {
     expect(() =>
       readDebugFile(broken(file => (file.panels[0].templates[0].nodes = [1]))),
     ).toThrow(/panel 0, template 0/);
+    expect(() =>
+      readDebugFile(broken(file => delete file.panels[0].functions[0].locals)),
+    ).toThrow(/panel 0, function 0/);
     expect(() => readDebugFile(broken(file => delete file.nodeTypes))).toThrow(
       /no nodeTypes/,
     );
@@ -265,6 +281,224 @@ export function App() {
         broken(file => delete file.panels[0].templates[0].nodes[0].children),
       ),
     ).toThrow(/panel 0, template 0/);
+  });
+});
+
+describe('locals', () => {
+  const LOCALS_APP = `import {useState} from 'react';
+import {View, Text, Pressable, Animated, useAnimatedValue} from 'embedded-react';
+function bump(amount) {
+  setCount(count + amount);
+}
+export function App() {
+  const [count, setCount] = useState(0);
+  const [label, setLabel] = useState('none');
+  const [items, setItems] = useState([{id: 1, done: false}, {id: 2, done: true}]);
+  const fade = useAnimatedValue(0);
+  return (
+    <View>
+      <Pressable
+        onPress={() => {
+          const step = 2;
+          let total = count + step;
+          if (total > 10) {
+            const over = total - 10;
+            total = over;
+          }
+          for (let index = 0; index < 3; index++) {
+            total += index;
+          }
+          for (const [position, item] of items.entries()) {
+            total += position + item.id;
+          }
+          const text = \`n\${total}\`;
+          const parts = text.split('1');
+          const anim = Animated.timing(fade, {toValue: 1, duration: 100});
+          anim.start(({finished}) => setLabel(finished ? 'done' : 'cut'));
+          bump(parts.length);
+          setLabel(text);
+        }}>
+        <Text>{count}{label}</Text>
+      </Pressable>
+      {items.filter(item => !item.done).map(item => (
+        <Pressable key={item.id} onPress={() => setCount(count + item.id)}>
+          <Text>{item.id}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}`;
+
+  /** A panel's function that has code on a line. */
+  const functionAt = (panel: DebugPanel, line: number): DebugFunction =>
+    panel.functions.find(programFunction =>
+      programFunction.lines.some(entry => entry.line === line),
+    )!;
+
+  /** Where a line's code starts in a function. */
+  const offsetOf = (programFunction: DebugFunction, line: number): number =>
+    programFunction.lines.find(entry => entry.line === line)!.offset;
+
+  /** A function's locals, by name. */
+  const localsOf = (programFunction: DebugFunction): Map<string, DebugLocal> =>
+    new Map(programFunction.locals.map(local => [local.name, local]));
+
+  const [panel] = debugFileOf(LOCALS_APP).panels;
+  const handler = functionAt(panel, 15);
+  const locals = localsOf(handler);
+  const slotOf = (name: string): number =>
+    panel.states.find(state => state.name === name)!.slot;
+
+  it("names a handler's locals, each with its register and the words it holds its value in", () => {
+    expect(handler.locals.map(local => local.name)).toEqual([
+      'step',
+      'total',
+      'over',
+      'index',
+      'item',
+      'position',
+      'text',
+      'parts',
+      'anim',
+      'amount',
+    ]);
+    expect(locals.get('step')).toMatchObject({type: 'int', register: 0});
+    expect(locals.get('total')).toMatchObject({type: 'int'});
+    // Each holds its value from the end of its declaration.
+    expect(locals.get('step')!.from).toBe(offsetOf(handler, 16));
+    expect(locals.get('total')!.from).toBe(offsetOf(handler, 17));
+    // A string is kept in a buffer of its own.
+    expect(locals.get('text')).toMatchObject({
+      type: 'string',
+      offset: expect.any(Number),
+      cap: expect.any(Number),
+    });
+    expect(locals.get('text')!.register).toBeUndefined();
+    for (const local of handler.locals) {
+      expect(local.parameter).toBeUndefined();
+      expect(local.to).toBeGreaterThanOrEqual(local.from);
+    }
+  });
+
+  it("ends a block's locals with it, and a loop's counter and item with the loop", () => {
+    const after = (line: number): number => offsetOf(handler, line);
+    // `over` is the if's; `index` is the for loop's, which ends before the for…of starts.
+    expect(locals.get('over')!.to).toBeLessThanOrEqual(after(21));
+    expect(locals.get('index')!.to).toBeLessThanOrEqual(after(24));
+    expect(locals.get('item')!.to).toBeLessThanOrEqual(after(27));
+    // Those that aren't in a block last to the end of the handler.
+    expect(locals.get('step')!.to).toBe(locals.get('total')!.to);
+    expect(locals.get('step')!.to).toBeGreaterThan(after(32));
+  });
+
+  it("names a for…of's item as a row of its list, and its index as the visit's number", () => {
+    expect(locals.get('item')).toMatchObject({
+      type: 'row',
+      list: slotOf('items'),
+    });
+    expect(locals.get('item')!.through).toBeUndefined();
+    expect(locals.get('position')).toMatchObject({
+      type: 'int',
+      register: locals.get('item')!.register,
+    });
+  });
+
+  it('names a split as its list, and gives no place to a name the compiler folded away', () => {
+    expect(locals.get('parts')).toMatchObject({type: 'list'});
+    expect(
+      panel.states.find(state => state.slot === locals.get('parts')!.list)!
+        .hidden,
+    ).toBe(true);
+    // An animation, and an inlined helper's parameter, which stands for the value it is called with.
+    for (const name of ['anim', 'amount']) {
+      const local = locals.get(name)!;
+      expect(local.type).toBeUndefined();
+      expect(local.register).toBeUndefined();
+      expect(local.offset).toBeUndefined();
+    }
+  });
+
+  it("names what a function is entered with: a row, and a completion's finished", () => {
+    const row = functionAt(panel, 37);
+    expect(row.locals).toEqual([
+      expect.objectContaining({
+        name: 'item',
+        type: 'row',
+        parameter: true,
+        register: 0,
+        list: slotOf('items'),
+        through: slotOf('items.filter'),
+        from: 0,
+      }),
+    ]);
+    const finished = panel.functions
+      .filter(programFunction => programFunction.name.startsWith('completion'))
+      .flatMap(programFunction => programFunction.locals);
+    expect(finished).toEqual([
+      expect.objectContaining({
+        name: 'finished',
+        type: 'bool',
+        parameter: true,
+        register: 0,
+        from: 0,
+      }),
+    ]);
+  });
+
+  it('names what the app declares, even a name like one the compiler makes, and leaves out what the compiler makes', () => {
+    const source = `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <Pressable
+      onPress={() => {
+        const object$3 = count + 1;
+        const {low, high} = {low: count, high: object$3};
+        setCount(low + high);
+      }}>
+      <Text>{count}</Text>
+    </Pressable>
+  );
+}`;
+    const [panel] = debugFileOf(source).panels;
+    expect(functionAt(panel, 8).locals.map(local => local.name)).toEqual([
+      'object$3',
+      'low',
+      'high',
+    ]);
+  });
+
+  it("names a native event's values, a record's fields by their path", () => {
+    const fixtures = `${dirname(fileURLToPath(import.meta.url))}/../../test/erb-frames/fixtures`;
+    const debugFileOfFixture = (name: string): DebugFile => {
+      const filename = `${fixtures}/${name}.tsx`;
+      const source = readFileSync(filename, 'utf8');
+      return readDebugFile(
+        compilePackage(source, 'app', {
+          ...OPTIONS,
+          filename,
+          nativeFiles: readNativeFiles(source, fixtures),
+        }).debugFile,
+      );
+    };
+    const parameters = (debugFile: DebugFile, name: string): string[] =>
+      debugFile.panels[0].functions
+        .find(programFunction => programFunction.name === name)!
+        .locals.filter(local => local.parameter)
+        .map(local => `${local.name} ${local.type}`);
+    expect(
+      parameters(
+        debugFileOfFixture('native-events'),
+        'native event probe.done',
+      ),
+    ).toEqual(['value int', 'halfValue float', 'isEven bool']);
+    expect(
+      parameters(
+        debugFileOfFixture('native-records'),
+        'native event probe.located',
+      ),
+    ).toEqual(['point.x int', 'point.y int']);
   });
 });
 
@@ -285,6 +519,7 @@ describe('placeOf', () => {
       functions: functions.map(({name, lines}) => ({
         name,
         lines: lines.map(([offset, line]) => ({offset, line, column: 3})),
+        locals: [],
       })),
       states: [],
       templates: [],

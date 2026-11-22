@@ -47,6 +47,16 @@ export interface IrDeclareLocal {
   isHoisted: boolean;
   /** A whole-number `let` widened to hold what it is later set to. */
   widenedTo?: 'float' | 'int64';
+  /** The name the app gives it, for the debug file; none for a local the compiler made. */
+  sourceName?: string;
+}
+
+/** A name the app declares that holds no value of its own, for the debug file: it lowers to no code. */
+export interface IrDebugName {
+  kind: 'debugName';
+  name: string;
+  /** The storage name of the list a split fills, which the name reads; none for a name the compiler folded away. */
+  listName?: string;
 }
 
 /** `setInterval` / `setTimeout`: a timer whose callback is a function of its own. */
@@ -62,7 +72,7 @@ export interface IrTimer {
 export interface IrStartTimer {
   kind: 'startTimer';
   timer: IrTimer;
-  idLocal: {name: string; isHoisted: boolean} | null;
+  idLocal: {name: string; isHoisted: boolean; sourceName?: string} | null;
 }
 
 /** `clearInterval` / `clearTimeout`. */
@@ -268,6 +278,11 @@ export interface IrLoop {
   body: IrStmt[];
   /** Runs after the body and on `continue`: a `for` loop's `i++`. */
   step: IrStmt[];
+  /**
+   * Names for the debug file: a `for…of`'s item, which reads the visit's row, and its index; a `for` loop's counter,
+   * which ends with the loop.
+   */
+  names?: {item?: string; index?: string; row?: Local; counter?: string};
 }
 
 /** `break` out of the innermost loop. */
@@ -365,6 +380,7 @@ export type IrStmt = {
   readsLatest?: ReadonlySet<ScalarState>;
 } & (
   | IrDeclareLocal
+  | IrDebugName
   | IrStartTimer
   | IrClearTimer
   | IrSetState
