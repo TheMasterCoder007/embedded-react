@@ -445,6 +445,30 @@ export function App() {
     ]);
   });
 
+  it('names what the app declares, even a name like one the compiler makes, and leaves out what the compiler makes', () => {
+    const source = `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+export function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <Pressable
+      onPress={() => {
+        const object$3 = count + 1;
+        const {low, high} = {low: count, high: object$3};
+        setCount(low + high);
+      }}>
+      <Text>{count}</Text>
+    </Pressable>
+  );
+}`;
+    const [panel] = debugFileOf(source).panels;
+    expect(functionAt(panel, 8).locals.map(local => local.name)).toEqual([
+      'object$3',
+      'low',
+      'high',
+    ]);
+  });
+
   it("names a native event's values, a record's fields by their path", () => {
     const fixtures = `${dirname(fileURLToPath(import.meta.url))}/../../test/erb-frames/fixtures`;
     const debugFileOfFixture = (name: string): DebugFile => {

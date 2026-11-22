@@ -2963,7 +2963,7 @@ export function lowerStmts(
           initializer: initialExpression,
           ...(text ? {text} : {}),
           isHoisted,
-          ...(!isMadeName(localId) && {sourceName: localId}),
+          ...(!isMadeName(declarator.id) && {sourceName: localId}),
         };
         if (isLet && shape === 'number') {
           setLater(declare, ['widenedTo'], () => {
