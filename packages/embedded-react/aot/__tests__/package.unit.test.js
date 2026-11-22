@@ -3254,7 +3254,8 @@ export function App() {
     expect(table.panel).toBe(NONE);
     expect(table.file).toBe('App.jsx');
     expect(table.names.length).toBe(functionsOf(result.program).length);
-    const handler = table.names.findIndex(name => name.startsWith('handler'));
+    // An arrow is named by the event prop it is written in.
+    const handler = table.names.indexOf('onPress');
     expect(handler).toBeGreaterThanOrEqual(0);
     const at = functionIndex =>
       table.entries

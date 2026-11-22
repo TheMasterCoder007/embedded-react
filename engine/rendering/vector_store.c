@@ -26,9 +26,11 @@
  * With the pool in PSRAM, ERUI_MAX_VECTOR_NODES can be raised well past the internal-RAM-bound default.
  */
 
+#include "er_debug.h"
 #include "vector.h" /* er_vector_store/... decls, ERVectorPaint, and the ERUI_VECTOR_WARN_ONCE diagnostics macro */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -58,6 +60,9 @@ typedef struct
 } VecSlot;
 
 static VecSlot s_slots[ERUI_MAX_VECTOR_NODES];
+
+/** @brief The pool, for er_debug. */
+const ERDebugPool er_debug_vector_pool = {s_slots, ERUI_MAX_VECTOR_NODES, sizeof(VecSlot), offsetof(VecSlot, used), 0u};
 
 /* Sticky: set the first time a node is denied a slot, cleared only by er_vector_reset(). @see
  * er_vector_slots_overflowed. */

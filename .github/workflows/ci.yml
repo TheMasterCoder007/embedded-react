@@ -229,6 +229,24 @@ jobs:
           path: tools/erb-frames/build/out/*.png
           if-no-files-found: ignore
 
+  erb-gdb:
+    name: Flow B debugger script
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/embedded-react
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/embedded-react/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y gdb
+      - run: npm ci
+      # Runs gdb/erb.py against the headless Flow B host, stopped in a native call inside a handler.
+      - run: npm run erb:gdb
+
   erb-fuzz:
     name: Fuzz the package loader and VM
     # Pinned, as the apt package names carry the clang version. See tools/erb-fuzz/README.md.

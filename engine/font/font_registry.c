@@ -15,8 +15,10 @@
  */
 
 #include "font_registry.h"
+#include "er_debug.h"
 #include "er_scene.h"
 #include "font_blob.h"
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,6 +45,11 @@ typedef struct
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static RegistryEntry s_entries[FONT_REGISTRY_MAX];
+
+/** @brief The pool, for er_debug: one record per family. */
+const ERDebugPool er_debug_font_pool = {
+    s_entries, FONT_REGISTRY_MAX, sizeof(RegistryEntry), offsetof(RegistryEntry, in_use), 0u};
+
 static bool s_initialised = false;
 
 /*----------------------------------------------------------------------------------------------------------------------

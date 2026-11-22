@@ -139,6 +139,37 @@ describe('debug file', () => {
     expect(hidden[0].name).toBe('items.filter');
   });
 
+  it('names the component of the lists the compiler made in an inlined instance', () => {
+    const source = `import {useState} from 'react';
+import {View, Text, Pressable} from 'embedded-react';
+function Todo() {
+  const [items, setItems] = useState([{name: 'a', done: false}]);
+  const [csv, setCsv] = useState('a,b');
+  return (
+    <Pressable onPress={() => setCsv(csv + ',c')}>
+      {items.filter(item => !item.done).map(item => <Text key={item.name}>{item.name}</Text>)}
+      {csv.split(',').map(part => <Text key={part}>{part}</Text>)}
+    </Pressable>
+  );
+}
+export function App() {
+  return (
+    <View>
+      <Todo />
+    </View>
+  );
+}`;
+    const [panel] = debugFileOf(source).panels;
+    const hidden = panel.states.filter(state => state.hidden);
+    expect(hidden.map(state => state.name).sort()).toEqual([
+      'items.filter',
+      'split',
+    ]);
+    for (const state of hidden) {
+      expect(state.component).toEqual({name: 'Todo', line: 16});
+    }
+  });
+
   it("gives each node its element's line, and its handle slot when code reaches it", () => {
     const [panel] = debugFileOf(APP).panels;
     const [root, row] = panel.templates;
@@ -154,7 +185,12 @@ describe('debug file', () => {
       ['ER_NODE_PRESSABLE', 18, 7],
       ['ER_NODE_TEXT', 23, 9],
     ]);
-    expect(root.nodes[3].handle).toEqual(expect.any(Number));
+    expect(root.nodes[3].handle).toEqual({
+      slot: expect.any(Number),
+      offset: expect.any(Number),
+      count: 1,
+    });
+    expect(row.nodes[0].handle!.count).toBe(16);
     expect(root.nodes[0].handle).toBeUndefined();
     expect(row.kind).toBe('row');
     expect(row.nodes.map(({line}) => line)).toEqual([26]);
@@ -221,6 +257,14 @@ describe('debug file', () => {
     expect(() =>
       readDebugFile(broken(file => (file.panels[0].templates[0].nodes = [1]))),
     ).toThrow(/panel 0, template 0/);
+    expect(() => readDebugFile(broken(file => delete file.nodeTypes))).toThrow(
+      /no nodeTypes/,
+    );
+    expect(() =>
+      readDebugFile(
+        broken(file => delete file.panels[0].templates[0].nodes[0].children),
+      ),
+    ).toThrow(/panel 0, template 0/);
   });
 });
 
@@ -232,9 +276,12 @@ describe('placeOf', () => {
     format: DEBUG_FILE_FORMAT,
     buildId: 1,
     file: 'App.jsx',
+    nodeTypes: [],
     panels: panels.map((functions, index) => ({
       width: 240 + index,
       height: 320,
+      arenaBytes: 0,
+      regions: {},
       functions: functions.map(({name, lines}) => ({
         name,
         lines: lines.map(([offset, line]) => ({offset, line, column: 3})),

@@ -17,8 +17,10 @@
 /* Registration failures are silent falses to the caller (er_image_load is void), and both failure modes —
  * registry full, misaligned RGB565 pixels — present identically as "the image just isn't there". */
 #include "image_registry.h"
+#include "er_debug.h"
 #include "er_diagnostics.h"
 #include "renderer_internal.h"
+#include <stddef.h>
 #include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -33,6 +35,10 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static ImageEntry s_entries[ERUI_IMAGE_REGISTRY_MAX];
+
+/** @brief The pool, for er_debug. */
+const ERDebugPool er_debug_image_pool = {
+    s_entries, ERUI_IMAGE_REGISTRY_MAX, sizeof(ImageEntry), offsetof(ImageEntry, in_use), 0u};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public

@@ -27,6 +27,7 @@
     "aot/**/*.mjs",
     "test/erb-frames/*.mts",
     "test/erb-frames/*.d.ts",
+    "test/erb-gdb/*.mts",
     "test/runtime/*.mts",
     "test/erb-fuzz/*.mts",
     "assets/**/*.mts",
