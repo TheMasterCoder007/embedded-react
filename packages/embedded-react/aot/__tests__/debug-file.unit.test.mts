@@ -257,6 +257,14 @@ export function App() {
     expect(() =>
       readDebugFile(broken(file => (file.panels[0].templates[0].nodes = [1]))),
     ).toThrow(/panel 0, template 0/);
+    expect(() => readDebugFile(broken(file => delete file.nodeTypes))).toThrow(
+      /no nodeTypes/,
+    );
+    expect(() =>
+      readDebugFile(
+        broken(file => delete file.panels[0].templates[0].nodes[0].children),
+      ),
+    ).toThrow(/panel 0, template 0/);
   });
 });
 

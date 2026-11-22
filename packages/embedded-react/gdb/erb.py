@@ -26,6 +26,7 @@ beyond the ELF's symbols. GDB must be built with Python 3.8 or later.
 
 import json
 import os
+import re
 import struct
 
 import gdb
@@ -343,8 +344,45 @@ def load_debug_file(path):
             "%s is a debug file of format %s, but this script reads format %d: build the app with the embedded-react "
             "this script came from" % (path, loaded.get("format") if isinstance(loaded, dict) else "unknown", DEBUG_FILE_FORMAT)
         )
+    missing = shape_fault(loaded)
+    if missing:
+        raise ErbError(
+            "%s has no %s: it was written by another embedded-react, so build the app again with the one this script "
+            "came from" % (path, missing)
+        )
     debug_file = loaded
     debug_path = path
+
+
+def shape_fault(loaded):
+    """The first field a debug file lacks that the commands read, or None."""
+    is_number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool)
+    for key, check in (("buildId", is_number), ("file", lambda value: isinstance(value, str)), ("nodeTypes", lambda value: isinstance(value, list)), ("panels", lambda value: isinstance(value, list))):
+        if not check(loaded.get(key)):
+            return key
+    for index, panel in enumerate(loaded["panels"]):
+        where = "panel %d's " % index
+        if not isinstance(panel, dict):
+            return where + "fields"
+        for key in ("width", "height", "arenaBytes"):
+            if not is_number(panel.get(key)):
+                return where + key
+        if not isinstance(panel.get("regions"), dict):
+            return where + "regions"
+        for key in ("functions", "states", "templates"):
+            if not isinstance(panel.get(key), list):
+                return where + key
+        for function in panel["functions"]:
+            if not isinstance(function, dict) or not isinstance(function.get("name"), str) or not isinstance(function.get("lines"), list):
+                return where + "function names and lines"
+        for state in panel["states"]:
+            if not isinstance(state, dict) or not all(key in state for key in ("name", "storage", "type", "slot", "offset", "hidden")):
+                return where + "state fields"
+        for template in panel["templates"]:
+            nodes = template.get("nodes") if isinstance(template, dict) else None
+            if not isinstance(nodes, list) or not all(isinstance(node, dict) and "type" in node and "children" in node and "line" in node for node in nodes):
+                return where + "template nodes"
+    return None
 
 
 def build_hex(build_id):
@@ -405,11 +443,21 @@ class App:
             base = unpack("I", cells, 8)
         return frames
 
+    def label(self, state):
+        return state_labels(self.panel)[state["storage"]]
+
     def state(self, name):
-        for state in self.panel["states"]:
-            if state["name"] == name or state["storage"] == name:
-                return state
-        names = ", ".join(state["name"] for state in self.panel["states"] if not state["hidden"])
+        """A state by the label the commands show, its storage name, or its own name when only one has it."""
+        states = self.panel["states"]
+        labels = state_labels(self.panel)
+        found = [state for state in states if labels[state["storage"]] == name or state["storage"] == name]
+        if not found:
+            found = [state for state in states if state["name"] == name]
+        if len(found) == 1:
+            return found[0]
+        if found:
+            raise ErbError("%s names %d states: %s" % (name, len(found), ", ".join(labels[state["storage"]] for state in found)))
+        names = ", ".join(labels[state["storage"]] for state in states if not state["hidden"])
         raise ErbError("no state named %s; the app's state: %s" % (name, names or "none"))
 
 
@@ -460,10 +508,45 @@ def state_value(app, state):
     return format_value(kind, read(address, VALUE_BYTES.get(kind, 4)), 0, values=state.get("values"))
 
 
-def state_label(state):
-    if state.get("component"):
-        return "%s.%s" % (state["component"]["name"], state["name"])
-    return state["name"]
+def state_labels(panel):
+    """Each state's label, by storage name: its name, or `Component.name` for an inlined component's. When one component
+    is inlined more than once, the label adds the instance's line (`Counter:16.taps`), and a number when instances share
+    a line (`Counter:16[2].taps`). A label that is still shared falls back to the storage name."""
+    labels = panel.get("_labels")
+    if labels is not None:
+        return labels
+
+    def instance(state):
+        match = re.match(r"c(\d+)_", state["storage"])
+        return int(match.group(1)) if match else None
+
+    states = panel["states"]
+    # Each component's instances, and each line's, in source order.
+    by_component = {}
+    by_line = {}
+    for state in states:
+        component = state.get("component")
+        if component and instance(state) is not None:
+            by_component.setdefault(component["name"], set()).add(instance(state))
+            by_line.setdefault((component["name"], component["line"]), set()).add(instance(state))
+
+    def label(state):
+        component = state.get("component")
+        if not component:
+            return state["name"]
+        if len(by_component.get(component["name"], ())) <= 1:
+            return "%s.%s" % (component["name"], state["name"])
+        on_line = sorted(by_line.get((component["name"], component["line"]), ()))
+        number = "[%d]" % (on_line.index(instance(state)) + 1) if len(on_line) > 1 and instance(state) in on_line else ""
+        return "%s:%d%s.%s" % (component["name"], component["line"], number, state["name"])
+
+    labels = {state["storage"]: label(state) for state in states}
+    shared = {}
+    for value in labels.values():
+        shared[value] = shared.get(value, 0) + 1
+    labels = {key: key if shared[value] > 1 else value for key, value in labels.items()}
+    panel["_labels"] = labels
+    return labels
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -582,13 +665,13 @@ class ErbState(gdb.Command):
         words = argument.split()
         if words and words[0] != "all":
             state = app.state(words[0])
-            print("%s = %s" % (state_label(state), state_value(app, state)))
+            print("%s = %s" % (app.label(state), state_value(app, state)))
             return
         shown = [state for state in app.panel["states"] if "all" in words or not state["hidden"]]
         if not shown:
             print("The app has no state.")
         for state in shown:
-            print("%s = %s" % (state_label(state), state_value(app, state)))
+            print("%s = %s" % (app.label(state), state_value(app, state)))
 
 
 def encode_value(state, text):
@@ -640,39 +723,77 @@ class ErbSet(gdb.Command):
             word = app.arena + app.panel["regions"]["dirty"]["offset"] + 4 * (bit // 32)
             write(word, struct.pack(endian() + "I", read_value("I", word) | (1 << (bit % 32))))
             app.runtime.request_update()
-        print("%s = %s" % (state_label(state), state_value(app, state)))
+        value = state_value(app, state)
+        for watchpoint in watchpoints:
+            if watchpoint.is_valid() and watchpoint.state["storage"] == state["storage"]:
+                watchpoint.previous = value
+                watchpoint.copying = None
+        print("%s = %s" % (app.label(state), value))
+
+
+# The states being watched, so a value the debugger writes isn't taken for one the app wrote.
+watchpoints = []
 
 
 class StateWatchpoint(gdb.Breakpoint):
-    """A hardware watchpoint on a state, which says what changed and where."""
+    """A hardware watchpoint on a state's first word, which says what changed and where.
+
+    A word is what every probe can watch at a 4-byte boundary (a 64-bit slot is only 4-aligned in the arena), and
+    every write to a state writes it: a string is copied in whole from its start. GDB stops a write watchpoint only
+    when the watched word changes, though, and a string can change past its first 4 bytes, so a string is watched
+    for any access and the whole value compared here. Its first change traps partway through the copy, so the
+    watchpoint stops at the first access after the copy (a read, which leaves it as it is) and names the line that
+    wrote it. A list's first word is its row count: its rows are more than a probe can watch, so a change to a
+    row's field doesn't stop."""
 
     def __init__(self, app, state):
         self.state = state
-        self.label = state_label(state)
-        # Every write to a state writes its first word, and a word is what every probe can watch at a 4-byte
-        # boundary: a 64-bit slot is only 4-aligned in the arena, a string's buffer is longer, and a list's first
-        # word is its row count.
+        self.label = app.label(state)
+        self.whole = state["type"] == "string"
         address = app.arena + state["offset"]
-        super().__init__("*(unsigned int *) 0x%x" % address, gdb.BP_WATCHPOINT, gdb.WP_WRITE, internal=False)
+        kind = gdb.WP_ACCESS if self.whole else gdb.WP_WRITE
+        super().__init__("*(unsigned int *) 0x%x" % address, gdb.BP_WATCHPOINT, kind, internal=False)
         self.previous = state_value(app, state)
+        watchpoints.append(self)
+        # A string's copy under way: the instruction writing it, what it holds so far, and the line that wrote it.
+        self.copying = None
 
     def stop(self):
         try:
             app = App()
             value = state_value(app, self.state)
-            if app.runtime.flag("in_vm"):
-                where = app.place(*app.frames()[0])
+            if self.whole:
+                pc = gdb.selected_frame().pc()
+                if self.copying:
+                    # The copy goes on while the same instruction writes it, or while it changes.
+                    if pc == self.copying["pc"] or value != self.copying["value"]:
+                        self.copying.update(pc=pc, value=value)
+                        return False
+                    where = self.copying["where"]
+                    self.copying = None
+                elif value == self.previous:
+                    return False
+                else:
+                    self.copying = {"pc": pc, "value": value, "where": self.writer(app)}
+                    return False
             else:
-                where = "the runtime (a host input, a load, or a reset)"
+                where = self.writer(app)
             print("%s: %s → %s, written at %s" % (self.label, self.previous, value, where))
             self.previous = value
         except gdb.GdbError as error:
             print("erb watch: %s" % error)
         return True
 
+    @staticmethod
+    def writer(app):
+        if app.runtime.flag("in_vm"):
+            return app.place(*app.frames()[0])
+        return "the runtime (a host input, a load, or a reset)"
+
 
 class ErbWatch(gdb.Command):
-    """Stop when a state changes, on the line that wrote it: erb watch NAME. Uses a hardware watchpoint."""
+    """Stop when a state changes, on the line that wrote it: erb watch NAME. Uses a hardware watchpoint.
+A list stops when its rows are added or removed, not when a row's field changes."""
 
     def __init__(self):
         super().__init__("erb watch", gdb.COMMAND_BREAKPOINTS)
@@ -684,6 +805,8 @@ class ErbWatch(gdb.Command):
         state = app.state(argument.strip())
         watchpoint = StateWatchpoint(app, state)
         print("Watching %s (watchpoint %d); it is %s" % (watchpoint.label, watchpoint.number, watchpoint.previous))
+        if state["type"] == "list":
+            print("A list stops when rows are added or removed; a change to a row's field doesn't stop.")
 
 
 class ErbPools(gdb.Command):
@@ -710,7 +833,7 @@ class ErbPools(gdb.Command):
         for state in app.panel["states"]:
             if state["type"] == "list":
                 rows = read_value("I", app.arena + state["offset"])
-                print("  %-17s %5d of %d rows" % (state_label(state), rows, state["cap"]))
+                print("  %-17s %5d of %d rows" % (app.label(state), rows, state["cap"]))
 
 
 class ErCommand(gdb.Command):

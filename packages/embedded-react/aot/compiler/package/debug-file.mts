@@ -312,6 +312,7 @@ function shapeFault(debugFile: DebugFile): string | null {
 
   if (!isNumber(debugFile.buildId)) return 'no buildId';
   if (!isString(debugFile.file)) return 'no file';
+  if (!isList(debugFile.nodeTypes)) return 'no nodeTypes';
   for (const [panelIndex, panel] of debugFile.panels.entries()) {
     const where = `panel ${panelIndex}`;
     if (!isRecord(panel) || !isNumber(panel.width) || !isNumber(panel.height)) {
@@ -361,6 +362,7 @@ function shapeFault(debugFile: DebugFile): string | null {
           node =>
             isRecord(node) &&
             isString(node.type) &&
+            isNumber(node.children) &&
             (node.line === null || isNumber(node.line)),
         )
       ) {
