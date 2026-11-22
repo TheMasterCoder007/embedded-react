@@ -302,7 +302,7 @@ bool er_fault_show_recorded(ERFaultRecord* record, int screen_width, int screen_
     }
     char detail[FAULT_DETAIL_BYTES] = "";
     used = 0u;
-    if (record->address)
+    if (er_fault_has_address(record))
     {
         used = fault_append(detail, sizeof(detail), used, "address 0x%08lx", (unsigned long)record->address);
     }

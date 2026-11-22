@@ -340,7 +340,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Changed
 
 - **Breaking:** abbreviated public names are spelled out. In C that covers functions, struct fields, constants, and
-  `ERUI_*` build flags: `ERRect::w` is now `width`, `er_anim_*` is `er_animation_*`, `ERB_ERR_*` is ,`ERB_ERROR_*`
+  `ERUI_*` build flags: `ERRect::w` is now `width`, `er_anim_*` is `er_animation_*`, `ERB_ERR_*` is `ERB_ERROR_*`
   and `ERUI_SCRATCH_W` is `ERUI_SCRATCH_WIDTH`, for example. In JS, the keyboard's `gridCols` is now `gridColumns`,
   and the SVG `fillGrad` and `strokeGrad` props are `fillGradient` and `strokeGradient`.
 - **Breaking:** the npm packages need Node 22.18 or later. Node 18 and 20 are past their end of life.

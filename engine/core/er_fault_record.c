@@ -35,6 +35,10 @@
 #define FAULT_HASH_SEED 2166136261u
 #define FAULT_HASH_PRIME 16777619u
 
+/* The Cortex-M CFSR bits that say MMFAR or BFAR holds the address. */
+#define CFSR_MMARVALID 0x00000080u
+#define CFSR_BFARVALID 0x00008000u
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -177,6 +181,19 @@ size_t er_fault_text(const ERFaultRecord* record, char* buffer, size_t capacity)
 bool er_fault_recorded(const ERFaultRecord* record)
 {
     return record->magic == FAULT_MAGIC && record->version == ER_FAULT_VERSION && record->check == fault_check(record);
+}
+
+bool er_fault_has_address(const ERFaultRecord* record)
+{
+    switch (record->core)
+    {
+        case ER_FAULT_CORE_CORTEX_M:
+            return (record->status[0] & (CFSR_MMARVALID | CFSR_BFARVALID)) != 0u;
+        case ER_FAULT_CORE_XTENSA:
+            return true;
+        default:
+            return record->address != 0u;
+    }
 }
 
 void er_fault_clear(ERFaultRecord* record)

@@ -237,6 +237,13 @@ extern "C"
     /** @brief True when @p record holds a fault recorded before the last reset. */
     bool er_fault_recorded(const ERFaultRecord* record);
 
+    /**
+     * @brief True when a record's address is one the fault touched. Zero is an address too, as a null pointer's
+     *        is, so this goes by what the core reported: the address-valid bits on a Cortex-M, always on an
+     *        Xtensa, and otherwise any address but zero.
+     */
+    bool er_fault_has_address(const ERFaultRecord* record);
+
     /** @brief Clears a record, so it no longer holds a fault. */
     void er_fault_clear(ERFaultRecord* record);
 

@@ -369,6 +369,19 @@ static void test_fault_record(void)
               && strcmp(record.app_file + ER_FAULT_FILE_BYTES - 1u - strlen("App.tsx"), "App.tsx") == 0,
           "and the end of a long file name");
 
+    /* A null address counts when the core says it is one. */
+    ERFaultRecord null_access;
+    er_fault_record(&null_access, "hard fault", 0x10001234u, 0u);
+    CHECK(!er_fault_has_address(&null_access), "a record with no core has no address at zero");
+    const uint32_t bus_fault[] = {0x00008200u, 0u, 0u, 0u};
+    er_fault_record_registers(&null_access, ER_FAULT_CORE_CORTEX_M, 0u, 0u, bus_fault, 4u);
+    CHECK(er_fault_has_address(&null_access), "a Cortex-M's address-valid bit makes zero an address");
+    const uint32_t usage_fault[] = {0x00010000u, 0u, 0u, 0u};
+    er_fault_record_registers(&null_access, ER_FAULT_CORE_CORTEX_M, 0u, 0u, usage_fault, 4u);
+    CHECK(!er_fault_has_address(&null_access), "without it there is none");
+    er_fault_record_registers(&null_access, ER_FAULT_CORE_XTENSA, 0u, 0u, NULL, 0u);
+    CHECK(er_fault_has_address(&null_access), "an Xtensa always reports one");
+
     char small[ER_FAULT_TEXT_BYTES - 1u];
     CHECK(er_fault_text(&record, small, sizeof(small)) == 0u, "text needs room for the whole record");
     CHECK(er_fault_text(&record, text, sizeof(text)) == 2u * sizeof(record), "the text is the record in hex");
