@@ -62,6 +62,7 @@ import type {
   IrScrollTo,
   IrSetRow,
   IrSortItems,
+  IrStartTimer,
   IrStmt,
   IrTimer,
   IrUpdateItems,
@@ -142,7 +143,7 @@ export interface InputText {
 }
 
 /** A local's value: a register, or, for a string, its buffer. */
-type LocalBinding = {register: Register} | {slot: Slot};
+export type LocalBinding = {register: Register} | {slot: Slot};
 
 /** A state-driven prop value worked out, and the conversion applied to it on its way into the field. */
 interface PropResult {
@@ -1503,6 +1504,52 @@ export class Codegen {
     this.keptStates.clear();
   }
 
+  /**
+   * Lowers a block's statements: the names it declares end with it.
+   *
+   * @param statements  The block's statements.
+   */
+  private inBlock(statements: IrStmt[]): void {
+    const mark = this.builder.namedMark;
+    this.statements(statements);
+    this.builder.endNamed(mark);
+  }
+
+  /**
+   * Binds a local that the statements after it read, and names it for the debug file when the app wrote it.
+   *
+   * @param name  The name reads use.
+   * @param binding  Where its value is.
+   * @param sourceName  The name the app gives it, if it did.
+   */
+  private bindLocal(
+    name: string,
+    binding: LocalBinding,
+    sourceName: string | undefined,
+  ): void {
+    this.locals.set(name, binding);
+    if (sourceName !== undefined) {
+      this.nameValue(sourceName, binding);
+    }
+  }
+
+  /**
+   * Names a value for the debug file, from here on.
+   *
+   * @param name  The name the app gives it.
+   * @param binding  Where it is.
+   * @param parameter  Whether the function is entered with it.
+   */
+  nameValue(name: string, binding: LocalBinding, parameter = false): void {
+    this.builder.name({
+      name,
+      ...('register' in binding
+        ? {type: binding.register.type, register: binding.register.index}
+        : {type: slotType(binding.slot), slot: binding.slot.index}),
+      ...(parameter && {parameter}),
+    });
+  }
+
   private statement(statement: IrStmt): void {
     const outer = this.readsLatest;
     this.readsLatest = statement.readsLatest ?? outer;
@@ -1515,6 +1562,7 @@ export class Codegen {
 
   /** Whether a statement lowers to code: all but a field kept as it is, which the body didn't set before. */
   private doesSomething(statement: IrStmt): boolean {
+    if (statement.kind === 'debugName') return false;
     if (statement.kind !== 'keepField') return true;
     const latest = statement.readsLatest ?? this.readsLatest;
     return (
@@ -1524,7 +1572,10 @@ export class Codegen {
 
   private lowerStatement(statement: IrStmt): void {
     const {builder} = this;
-    builder.at(statement.location);
+    // A name with no code marks no line in the debug table.
+    if (statement.kind !== 'debugName') {
+      builder.at(statement.location);
+    }
     switch (statement.kind) {
       case 'keepStates':
         for (const state of statement.states) {
@@ -1547,7 +1598,7 @@ export class Codegen {
           this.scoped(() =>
             this.set(hoisted, this.value(statement.initializer)),
           );
-          this.locals.set(statement.name, {slot: hoisted});
+          this.bindLocal(statement.name, {slot: hoisted}, statement.sourceName);
           return;
         }
         if (this.typeOf(statement.initializer) === 'string') {
@@ -1562,7 +1613,7 @@ export class Codegen {
           );
           builder.abx('FMTSET', 0, slot.index);
           builder.release(checkpoint);
-          this.locals.set(statement.name, {slot});
+          this.bindLocal(statement.name, {slot}, statement.sourceName);
           return;
         }
         const type = statement.widenedTo ?? declaredType(statement.initializer);
@@ -1574,9 +1625,18 @@ export class Codegen {
           this.valueAs(statement.initializer, type).index,
         );
         builder.release(checkpoint);
-        this.locals.set(statement.name, {register});
+        this.bindLocal(statement.name, {register}, statement.sourceName);
         return;
       }
+      case 'debugName':
+        builder.name({
+          name: statement.name,
+          ...(statement.listName !== undefined && {
+            type: 'list',
+            slot: this.listNamed(statement.listName).slot.index,
+          }),
+        });
+        return;
       case 'setState':
         this.scoped(() =>
           this.set(
@@ -1634,13 +1694,13 @@ export class Codegen {
         const checkpoint = builder.checkpoint();
         builder.branch('JF', otherwise, this.condition(statement.test));
         builder.release(checkpoint);
-        this.statements(statement.consequent);
+        this.inBlock(statement.consequent);
         // An else of fields kept as they are does nothing.
         if (statement.alternate?.some(inner => this.doesSomething(inner))) {
           const end = builder.label();
           builder.branch('JMP', end);
           builder.place(otherwise);
-          this.statements(statement.alternate);
+          this.inBlock(statement.alternate);
           builder.place(end);
         } else {
           builder.place(otherwise);
@@ -1648,7 +1708,7 @@ export class Codegen {
         return;
       }
       case 'startTimer':
-        this.startTimer(statement.timer, statement.idLocal?.name ?? null);
+        this.startTimer(statement.timer, statement.idLocal);
         return;
       case 'clearTimer':
         this.scoped(() =>
@@ -1751,7 +1811,7 @@ export class Codegen {
       case 'block': {
         const end = builder.label();
         this.blockEnds.push(end);
-        this.statements(statement.body);
+        this.inBlock(statement.body);
         this.blockEnds.pop();
         builder.place(end);
         return;
@@ -1880,6 +1940,7 @@ export class Codegen {
     this.loopLabels.push({done, next});
     this.counted(statement.bound, counter =>
       this.scoped(() => {
+        const mark = builder.namedMark;
         // The counter runs from the bound down to 1, so bound - counter is the visit's number from 0.
         if (statement.visit) {
           const visit = builder.register('int');
@@ -1892,6 +1953,7 @@ export class Codegen {
           this.locals.set(required(statement.visit.name, 'the visit'), {
             register: visit,
           });
+          this.nameVisit(statement, visit);
         }
         if (statement.test) {
           const checkpoint = builder.checkpoint();
@@ -1899,6 +1961,7 @@ export class Codegen {
           builder.release(checkpoint);
         }
         this.statements(statement.body);
+        builder.endNamed(mark);
         builder.place(next);
         this.statements(statement.step);
       }),
@@ -1907,6 +1970,36 @@ export class Codegen {
     this.locals.clear();
     outer.forEach((binding, name) => this.locals.set(name, binding));
     builder.place(done);
+    // A `for` loop's counter is its own.
+    const counter = statement.names?.counter;
+    const binding =
+      counter === undefined ? undefined : this.locals.get(counter);
+    if (binding && 'register' in binding) {
+      builder.endRegister(binding.register.index);
+    }
+  }
+
+  /**
+   * Names what a `for…of` reads through its visit's number: the item, a row of the list, and the index.
+   *
+   * @param statement  The loop.
+   * @param visit  The visit's number.
+   */
+  private nameVisit(statement: IrLoop, visit: Register): void {
+    const {names} = statement;
+    if (names?.item !== undefined && names.row?.list) {
+      const {row} = names;
+      this.builder.name({
+        name: names.item,
+        type: 'row',
+        register: visit.index,
+        list: this.listPool(row.list!).slot.index,
+        ...(row.through && {through: this.listPool(row.through).slot.index}),
+      });
+    }
+    if (names?.index !== undefined) {
+      this.nameValue(names.index, {register: visit});
+    }
   }
 
   /**
@@ -2437,10 +2530,11 @@ export class Codegen {
    * Starts a timer, keeping its id in a local when the app names it.
    *
    * @param timer  The timer.
-   * @param idLocal  The local's name, or null.
+   * @param idTarget  The local the id is kept in, or null.
    */
-  private startTimer(timer: IrTimer, idLocal: string | null): void {
+  private startTimer(timer: IrTimer, idTarget: IrStartTimer['idLocal']): void {
     const {builder} = this;
+    const idLocal = idTarget?.name ?? null;
     const hoisted =
       idLocal === null ? undefined : this.program.hoisted.get(idLocal);
     const start = (id: Register): void =>
@@ -2462,14 +2556,14 @@ export class Codegen {
     if (idLocal === null || hoisted) {
       this.scoped(() => start(builder.register('int')));
       if (hoisted) {
-        this.locals.set(idLocal!, {slot: hoisted});
+        this.bindLocal(idLocal!, {slot: hoisted}, idTarget?.sourceName);
       }
       return;
     }
     // The id outlives this statement, so its register is taken outside the scope.
     const id = builder.register('int');
     start(id);
-    this.locals.set(idLocal, {register: id});
+    this.bindLocal(idLocal, {register: id}, idTarget?.sourceName);
   }
 
   /**
@@ -2791,6 +2885,22 @@ export class Codegen {
       !this.readsLatest?.has(state)
       ? this.program.kept.get(state)!
       : this.stateSlot(state);
+  }
+
+  /**
+   * A list's pool, by its storage name.
+   *
+   * @param name  The name.
+   *
+   * @returns The pool.
+   */
+  private listNamed(name: string): ListPool {
+    for (const [list, pool] of this.program.lists) {
+      if (list.slotName === name) {
+        return pool;
+      }
+    }
+    throw new Error(`AOT internal: no list "${name}"`);
   }
 
   listPool(list: ListState): ListPool {

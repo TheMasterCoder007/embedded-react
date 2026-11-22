@@ -244,7 +244,8 @@ jobs:
           cache-dependency-path: packages/embedded-react/package-lock.json
       - run: sudo apt-get update && sudo apt-get install -y gdb
       - run: npm ci
-      # Runs gdb/erb.py against the headless Flow B host, stopped in a native call inside a handler.
+      # Runs gdb/erb.py against the headless Flow B host, stopped in a handler, a list row's handler and an
+      # animation's completion.
       - run: npm run erb:gdb
 
   erb-fuzz:

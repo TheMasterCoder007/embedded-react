@@ -331,10 +331,10 @@ section: a package is checked whole.
 
 Every `build --aot` and `dev --aot` writes `app.erdbg` beside the package (`dev --aot` in `dist/`), release or
 not. It is for host tools, not the board: the package doesn't change, and nothing on the board reads it. It
-holds what the debug section holds, and what the package leaves out: each state's name and each node's source
-line.
+holds what the debug section holds, and what the package leaves out: each state's name, each node's source
+line, and each function's parameters and locals.
 
-It is JSON. The top level has `format` (1), `buildId`, the program's `build_id`, so a tool can refuse a file
+It is JSON. The top level has `format` (2), `buildId`, the program's `build_id`, so a tool can refuse a file
 from another build, `file`, the source file, `nodeTypes`, the engine's node types by number, and `panels`, one
 per layout in the package's order. Each panel has:
 
@@ -343,7 +343,16 @@ per layout in the package's order. Each panel has:
   `animations`, `stack`, `tape`, `events`), each with its `offset`, `bytes` and `count`.
 - `functions`, in the `functions` table's order: each one's `name`, and `lines`, its debug entries as
   `offset` (in words), `line` and `column` (1-based). A handler is named as the source writes it: a callback's
-  own name, or the event prop an arrow is written in (`onPress`).
+  own name, or the event prop an arrow is written in (`onPress`). `locals` names the values the app names in it,
+  in the order the code names them. Each has its `name` (`point.x` for a field of an object the compiler took
+  apart), `from` and `to`, the words it holds its value in (from `from` up to `to`), and `parameter` for one the
+  function is entered with: a list row's item, a native event's values, an animation completion's `finished`.
+  Its `type` is a value type, `row` for a list's row, or `list` for a split. A value is in a `register` of the
+  function's frame, or at an `offset` in the arena (a string's buffer, with its `cap`, or an effect's local its
+  cleanup reads). A row's `register` holds its row number in `list` (a state's `slot`), or for a row of a filtered
+  or sorted list, in `through`, whose rows hold the row of `list`. A name with no `type` holds no value of its own:
+  an animation, or an inlined helper's parameter, which stands for the value the helper is called with. The
+  package doesn't change: the compiler only notes where each value is as it assigns registers.
 - `states`, in the app's order. Each has its `name`, its `storage` name (the name, prefixed for an inlined
   component's instance), and for an instance's state, `component`: the component's `name` and the `line` of
   the instance's element. `hidden` marks state the compiler made: a filtered or sorted list, a split, a
@@ -882,8 +891,9 @@ Each also has a `halted` flag a debugger sets whenever the board halts. The next
 `gdb/erb.py` sets them on every stop, and on `erb file` when the board is halted, since attaching halts it without
 a stop.
 
-`gdb/erb.py`, in the npm package, reads them with an app's `app.erdbg` to show its source line, state, pools and
-nodes, and refuses a descriptor version or a `build_id` it doesn't match. CI runs it against the Linux host
+`gdb/erb.py`, in the npm package, reads them with an app's `app.erdbg` to show its source line, state, locals, pools
+and nodes, and refuses a descriptor version or a `build_id` it doesn't match. A local is read from its frame on the
+register stack: `erb where` walks the frames, and each frame's base gives its registers. CI runs it against the Linux host
 (`npm run erb:gdb`).
 
 ### The breakpoint hook

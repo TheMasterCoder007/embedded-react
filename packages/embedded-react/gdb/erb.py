@@ -32,7 +32,7 @@ import struct
 
 import gdb
 
-DEBUG_FILE_FORMAT = 1
+DEBUG_FILE_FORMAT = 2
 ERB_DEBUG_MAGIC = 0x44425245
 ERB_DEBUG_VERSION = 2
 ER_DEBUG_MAGIC = 0x45445245
@@ -389,6 +389,9 @@ def shape_fault(loaded):
         for function in panel["functions"]:
             if not isinstance(function, dict) or not isinstance(function.get("name"), str) or not isinstance(function.get("lines"), list):
                 return where + "function names and lines"
+            locals_ = function.get("locals")
+            if not isinstance(locals_, list) or not all(isinstance(local, dict) and all(key in local for key in ("name", "from", "to")) for local in locals_):
+                return where + "function locals"
         for state in panel["states"]:
             if not isinstance(state, dict) or not all(key in state for key in ("name", "storage", "type", "slot", "offset", "hidden")):
                 return where + "state fields"
@@ -443,19 +446,40 @@ class App:
 
     def frames(self):
         """The app's call chain, innermost first: each function and the offset it is at."""
+        return [(function, offset) for function, offset, _ in self.frame_chain()]
+
+    def frame_chain(self):
+        """The app's call chain, innermost first: each function, the offset it is at, and its frame's base in cells."""
         runtime = self.runtime
-        frames = [(runtime.u16("function"), runtime.u32("program_counter"))]
-        stack = self.arena + runtime.u32("stack_offset")
         base = runtime.u32("frame_base")
+        frames = [(runtime.u16("function"), runtime.u32("program_counter"), base)]
+        stack = self.stack
         for _ in range(MOST_FRAMES):
             cells = read(stack + 4 * base, 12)
             caller = unpack("i", cells, 0)
             if caller < 0:
                 break
-            # The caller resumes after its CALL, which is one word.
-            frames.append((caller, unpack("I", cells, 4) - 1))
             base = unpack("I", cells, 8)
+            # The caller resumes after its CALL, which is one word.
+            frames.append((caller, unpack("I", cells, 4) - 1, base))
         return frames
+
+    @property
+    def stack(self):
+        return self.arena + self.runtime.u32("stack_offset")
+
+    def locals_at(self, function, offset):
+        """The parameters and locals that hold a value at an offset in a function, in the order the code names them."""
+        functions = self.panel["functions"]
+        if function >= len(functions):
+            return []
+        return [local for local in functions[function]["locals"] if local["from"] <= offset < local["to"]]
+
+    def state_at(self, slot):
+        for state in self.panel["states"]:
+            if state["slot"] == slot:
+                return state
+        return None
 
     def label(self, state):
         return state_labels(self.panel)[state["storage"]]
@@ -506,20 +530,81 @@ def state_value(app, state):
         return format_value(kind, read(address, state["cap"] + 1), 0, state["cap"])
     if kind == "list":
         count = read_value("I", address)
-        rows = []
         shown = min(count, MOST_ROWS_SHOWN)
         data = read(address + LIST_HEADER_BYTES, shown * state["rowBytes"]) if shown else b""
-        for row in range(shown):
-            fields = []
-            for field in state["fields"]:
-                if field["name"].endswith("?"):
-                    continue
-                value = format_value(field["type"], data, row * state["rowBytes"] + field["offset"], field.get("cap"))
-                fields.append(("%s: %s" % (field["name"], value)) if field["name"] else value)
-            rows.append("{" + ", ".join(fields) + "}" if len(state["fields"]) > 1 or state["fields"][0]["name"] else fields[0])
+        rows = [row_text(state, data, row * state["rowBytes"]) for row in range(shown)]
         more = ", …" if count > shown else ""
         return "[%s%s]  (%d of %d rows)" % (", ".join(rows), more, count, state["cap"])
     return format_value(kind, read(address, VALUE_BYTES.get(kind, 4)), 0, values=state.get("values"))
+
+
+def row_text(state, data, at):
+    """A list's row, from its bytes at an offset."""
+    fields = []
+    for field in state["fields"]:
+        if field["name"].endswith("?"):
+            continue
+        value = format_value(field["type"], data, at + field["offset"], field.get("cap"))
+        fields.append(("%s: %s" % (field["name"], value)) if field["name"] else value)
+    return "{" + ", ".join(fields) + "}" if len(state["fields"]) > 1 or state["fields"][0]["name"] else fields[0]
+
+
+STRING_ARENA = 0x80000000
+STRING_NATIVE = 0x40000000
+
+
+def register_string(app, ref):
+    """A string register's text: empty, in the arena, a native event's, or a package constant."""
+    if ref == 0:
+        return '""'
+    if ref & STRING_ARENA:
+        return json.dumps(read_string(app.arena + (ref & ~STRING_ARENA)) or "")
+    if ref & STRING_NATIVE:
+        try:
+            texts = gdb.parse_and_eval("'erb_native.c'::s_texts")
+            return json.dumps(read_string(int(texts[(ref & ~STRING_NATIVE) - 1])) or "")
+        except (gdb.error, gdb.MemoryError):
+            return "<a native event's string>"
+    return "<string constant %d>" % (ref - 1)
+
+
+def list_row(app, local, row):
+    """A row local's value: its list's row, through a filtered or sorted list when it counts in one."""
+    counted = app.state_at(local.get("through", local["list"]))
+    state = app.state_at(local["list"])
+    if counted is None or state is None:
+        return "<row %d>" % row
+    address = app.arena + counted["offset"]
+    count = read_value("I", address)
+    if not 0 <= row < count:
+        return "<no row %d: %s has %d>" % (row, app.label(counted), count)
+    if "through" in local:
+        first = counted["fields"][0]
+        row = read_value("i", address + LIST_HEADER_BYTES + row * counted["rowBytes"] + first["offset"])
+        address = app.arena + state["offset"]
+    data = read(address + LIST_HEADER_BYTES + row * state["rowBytes"], state["rowBytes"])
+    return row_text(state, data, 0)
+
+
+def local_value(app, local, base):
+    """A parameter's or a local's value, in the frame at a base."""
+    kind = local.get("type")
+    if kind is None:
+        return "<optimised out>"
+    if kind == "list":
+        state = app.state_at(local["list"])
+        return state_value(app, state) if state else "<list>"
+    if "register" in local:
+        address = app.stack + 4 * (base + app.runtime.frame_cells + local["register"])
+        if kind == "row":
+            return list_row(app, local, read_value("i", address))
+        if kind == "string":
+            return register_string(app, read_value("I", address))
+        return format_value(kind, read(address, VALUE_BYTES.get(kind, 4)), 0)
+    address = app.arena + local["offset"]
+    if kind == "string":
+        return format_value(kind, read(address, local["cap"] + 1), 0, local["cap"])
+    return format_value(kind, read(address, VALUE_BYTES.get(kind, 4)), 0)
 
 
 def state_labels(panel):
@@ -572,7 +657,8 @@ class ErbCommand(gdb.Command):
     """Commands for a Flow B app on a halted board.
 
 erb file PATH        Load the app's debug file (dist/app.erdbg).
-erb where            The app's source line and call chain.
+erb where            The app's source line and call chain, with each function's parameters.
+erb locals [N]       The current function's parameters and locals, or the Nth caller's.
 erb error            The last fault or refused load.
 erb state [NAME]     Every state, or one.
 erb set NAME VALUE   Set a state; the app runs its update at its next tick.
@@ -628,9 +714,48 @@ class ErbWhere(gdb.Command):
             last = app.place(function, offset) if function != NO_FUNCTION else "nothing yet"
             print("The app isn't running its code. Last ran: %s" % last)
             return
-        print(app.place(*frames[0]))
-        for function, offset in frames[1:]:
-            print("  called from %s" % app.place(function, offset))
+        chain = app.frame_chain()
+        print(app.place(*frames[0]) + arguments_text(app, *chain[0]))
+        for function, offset, base in chain[1:]:
+            print("  called from %s%s" % (app.place(function, offset), arguments_text(app, function, offset, base)))
+
+
+def arguments_text(app, function, offset, base):
+    """A frame's parameters, as `  (name=value, …)`, or nothing for a function entered with none."""
+    parameters = [local for local in app.locals_at(function, offset) if local.get("parameter")]
+    if not parameters:
+        return ""
+    return "  (%s)" % ", ".join("%s=%s" % (local["name"], local_value(app, local, base)) for local in parameters)
+
+
+class ErbLocals(gdb.Command):
+    """The current function's parameters and locals: erb locals [N] for the Nth caller in `erb where`."""
+
+    def __init__(self):
+        super().__init__("erb locals", gdb.COMMAND_STACK)
+
+    def invoke(self, argument, from_tty):
+        app = App()
+        if not app.runtime.flag("in_vm"):
+            raise ErbError("the app isn't running its code, so it has no locals")
+        chain = app.frame_chain()
+        try:
+            number = int(argument.strip() or "0")
+        except ValueError:
+            raise ErbError("name a frame by its number: erb locals 1 for the function that called this one")
+        if not 0 <= number < len(chain):
+            raise ErbError("the app's call chain has %d frame%s" % (len(chain), "" if len(chain) == 1 else "s"))
+        function, offset, base = chain[number]
+        named = app.locals_at(function, offset)
+        if not named:
+            print("No locals.")
+            return
+        # A name declared again in an inner block hides the outer one.
+        shown = {}
+        for local in named:
+            shown[local["name"]] = local
+        for local in sorted(shown.values(), key=lambda local: not local.get("parameter")):
+            print("%s = %s" % (local["name"], local_value(app, local, base)))
 
 
 class ErbErrorCommand(gdb.Command):
@@ -1486,6 +1611,7 @@ except ImportError:
 ErbCommand()
 ErbFile()
 ErbWhere()
+ErbLocals()
 ErbErrorCommand()
 ErbState()
 ErbSet()

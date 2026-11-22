@@ -21,6 +21,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: the debug table names handlers as the source writes them (`onPress`, or a callback's own name).
 - Flow B: breakpoints and stepping from GDB (`erb break`, `erb step`, `erb next`, `erb finish`), with firmware
   built with `ERB_DEBUG_HOOK=1`. The app doesn't count the time a board is halted.
+- Flow B: `erb locals` shows a function's parameters and locals by name, and `erb where` each function's
+  parameters. `app.erdbg` is format 2.
 
 ## [0.25.0] - 2026-11-20
 ### Added

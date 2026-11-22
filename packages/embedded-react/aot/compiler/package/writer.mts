@@ -243,6 +243,24 @@ export interface ProgramLine {
   column: number;
 }
 
+/** A name the app gives a value in a function, for the debug file only. */
+export interface ProgramLocal {
+  name: string;
+  /** Its type: a register's or a slot's, `row` for a list's row, or none for a name the compiler folded away. */
+  type?: string;
+  register?: number;
+  /** The slot it is kept in: a string's buffer, an effect's local its cleanup reads, or a split's list. */
+  slot?: number;
+  /** A row's list, and for a row of a filtered or sorted list, the list it counts in, by slot. */
+  list?: number;
+  through?: number;
+  /** What the function is entered with. */
+  parameter?: boolean;
+  /** The words it holds its value in: from `from` up to `to`. */
+  from: number;
+  to: number;
+}
+
 export interface ProgramFunction {
   kind: number;
   parameters: number;
@@ -251,8 +269,8 @@ export interface ProgramFunction {
   types: number[];
   /** The instruction words. */
   code: number[];
-  /** What the debug table says of it. */
-  debug?: {name: string; lines: ProgramLine[]};
+  /** What the debug table says of it, and the locals only the debug file holds. */
+  debug?: {name: string; lines: ProgramLine[]; locals?: ProgramLocal[]};
 }
 
 /** Everything a program section holds, before it is laid out. */

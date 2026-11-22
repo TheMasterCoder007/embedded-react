@@ -353,7 +353,9 @@ describe('animation IR: stopping a wait', () => {
     const {statements, context} = lowerBody(
       'const pulse = Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(300)]); pulse.stop(); pulse.start(() => setN(1));',
     );
-    const [stop, start] = statements;
+    // The animation's name holds no value: the debug file names it, folded away.
+    const [name, stop, start] = statements;
+    expect(name).toMatchObject({kind: 'debugName', name: 'pulse'});
     expect(stop.waitOwner).toBe(0);
     expect(start.completionWait.owner).toBe(0);
     expect([...context.output.animationWaits.values()]).toEqual([

@@ -139,7 +139,7 @@ import type {IrStateDrivenVector} from '../ir/vectors.mts';
 import type {StateReads} from '../ir/reads.mts';
 import type {ResolvedOptions} from '../options.mts';
 import type {TextSpan} from '../style-text.mts';
-import type {ListState, ScalarState, StateRecord} from '../types.mts';
+import type {ListState, Local, ScalarState, StateRecord} from '../types.mts';
 import type {
   Program,
   ProgramBinding,
@@ -2225,6 +2225,53 @@ function handlerName(handler: HandlerFunction): string {
 }
 
 /**
+ * Names the item a list row's handler reads, as the row it is entered with.
+ *
+ * @param codegen  The handler's codegen.
+ * @param callback  The handler's callback.
+ * @param row  The row's register.
+ */
+function nameRowItem(
+  codegen: Codegen,
+  callback: IrCallback,
+  row: Register,
+): void {
+  const items = new Map<string, Local>();
+  const seen = new Set<object>();
+  const visit = (value: unknown): void => {
+    if (typeof value !== 'object' || value === null || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    const node = value as {kind?: string; item?: Local};
+    if (
+      (node.kind === 'itemField' || node.kind === 'itemPresent') &&
+      node.item?.name &&
+      node.item.list &&
+      !node.item.index
+    ) {
+      items.set(node.item.name, node.item);
+    }
+    for (const child of Object.values(value)) {
+      visit(child);
+    }
+  };
+  visit(callback.body);
+  for (const [name, item] of items) {
+    codegen.builder.name({
+      name,
+      type: 'row',
+      register: row.index,
+      list: codegen.listPool(item.list!).slot.index,
+      ...(item.through && {
+        through: codegen.listPool(item.through).slot.index,
+      }),
+      parameter: true,
+    });
+  }
+}
+
+/**
  * A handler's function.
  *
  * @param handler  The handler.
@@ -2243,6 +2290,9 @@ function handlerBody(
     input: handler.input,
     row,
   });
+  if (row) {
+    nameRowItem(codegen, handler.callback, row);
+  }
   if (handler.test) {
     return builder.finish(0, codegen.condition(handler.test));
   }
@@ -2400,7 +2450,16 @@ function nativeEventBody(
     if (mounted[index]) {
       builder.branch('JF', skip, mounted[index]);
     }
-    codegenOf(handler).statements(handler.callback.body);
+    // Each subscriber names the values its own way.
+    const codegen = codegenOf(handler);
+    const mark = builder.namedMark;
+    handler.valueNames.forEach((name, position) => {
+      if (name !== null) {
+        codegen.nameValue(name, {register: values[position]}, true);
+      }
+    });
+    codegen.statements(handler.callback.body);
+    builder.endNamed(mark);
     builder.place(skip);
   });
   if (handlers.some(handler => handler.callback.updatesState)) {
@@ -2427,6 +2486,7 @@ function completionBody(
   );
   const finished = builder.reserved('bool');
   const codegen = new Codegen(builder, lowering.slots, {finished});
+  codegen.nameValue('finished', {register: finished}, true);
   codegen.statements(completion.body);
   if (completion.updatesState) {
     requestUpdate(codegen, lowering);

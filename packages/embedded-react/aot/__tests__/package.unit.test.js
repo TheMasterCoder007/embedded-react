@@ -3368,6 +3368,31 @@ export function App() {
         {offset: 0, line: 4, column: 2},
         {offset: 2, line: 5, column: 2},
       ],
+      locals: [],
     });
+  });
+
+  it('names a local until its register is released, its block ends, or the function does', () => {
+    const builder = new FunctionBuilder(FunctionKind.timer, 'timer tick');
+    const kept = builder.register('int');
+    builder.abx('LOADI', kept.index, 1);
+    builder.name({name: 'kept', type: 'int', register: kept.index});
+    const block = builder.namedMark;
+    const checkpoint = builder.checkpoint();
+    const inner = builder.register('int');
+    builder.abx('LOADI', inner.index, 2);
+    builder.name({name: 'inner', type: 'int', register: inner.index});
+    builder.name({name: 'folded'});
+    builder.abx('LOADI', inner.index, 3);
+    builder.release(checkpoint);
+    builder.abx('LOADI', kept.index, 4);
+    builder.endNamed(block);
+    builder.abx('LOADI', kept.index, 5);
+    expect(builder.finish().debug.locals).toEqual([
+      // To the end of the function, its RET included.
+      {name: 'kept', type: 'int', register: 0, from: 1, to: 6},
+      {name: 'inner', type: 'int', register: 1, from: 2, to: 3},
+      {name: 'folded', from: 2, to: 4},
+    ]);
   });
 });

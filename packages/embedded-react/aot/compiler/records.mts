@@ -711,6 +711,16 @@ export interface ObjectDeclaration {
 const identifier = (name: string): t.Identifier =>
   ({type: 'Identifier', name}) as t.Identifier;
 
+/**
+ * Whether a declared name is one this file made, an object's or a field's, rather than one the app wrote.
+ *
+ * @param name  The name, or a field of it: `object$3.x`.
+ *
+ * @returns Whether it is made.
+ */
+export const isMadeName = (name: string): boolean =>
+  /^(?:object|field)\$\d+(?:\.|$)/.test(name);
+
 const memberOf = (object: t.Expression, key: string): t.MemberExpression =>
   ({
     type: 'MemberExpression',

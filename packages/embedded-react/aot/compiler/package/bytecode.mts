@@ -26,7 +26,7 @@
 import {aotError} from '../diagnostics.mts';
 import {OPCODES, ValueType} from './format.mts';
 import type {SourcePosition} from '../diagnostics.mts';
-import type {ProgramFunction, ProgramLine} from './writer.mts';
+import type {ProgramFunction, ProgramLine, ProgramLocal} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -104,6 +104,10 @@ export class FunctionBuilder {
   private readonly taken: Register[] = [];
   /** Where each run of the code starts in the source, for the debug table. */
   private readonly lines: ProgramLine[] = [];
+  /** The app's names for values, for the debug file, in the order they were named. */
+  private readonly locals: ProgramLocal[] = [];
+  /** The named locals not yet ended. */
+  private readonly named: ProgramLocal[] = [];
   /** How many loops the function has so far. */
   private loops = 0;
 
@@ -219,6 +223,49 @@ export class FunctionBuilder {
     return index;
   }
 
+  /**
+   * Names a value from here on, for the debug file. It holds it until its register is released, or until the code
+   * that ends its block.
+   *
+   * @param local  The name and where the value is.
+   */
+  name(local: Omit<ProgramLocal, 'from' | 'to'>): void {
+    const named = {...local, from: this.position, to: -1};
+    this.locals.push(named);
+    this.named.push(named);
+  }
+
+  /** How many named locals are open, for a block to end the ones it names. */
+  get namedMark(): number {
+    return this.named.length;
+  }
+
+  /**
+   * Ends the locals named since a mark, here.
+   *
+   * @param mark  The mark.
+   */
+  endNamed(mark: number): void {
+    for (const local of this.named.splice(mark)) {
+      if (local.to < 0) {
+        local.to = this.position;
+      }
+    }
+  }
+
+  /**
+   * Ends the named locals a register holds, here.
+   *
+   * @param index  The register.
+   */
+  endRegister(index: number): void {
+    for (const local of this.named) {
+      if (local.register === index && local.to < 0) {
+        local.to = this.position;
+      }
+    }
+  }
+
   /** Where the registers taken so far end, for release. */
   checkpoint(): number {
     return this.taken.length;
@@ -235,6 +282,7 @@ export class FunctionBuilder {
       if (keep.includes(register)) {
         return true;
       }
+      this.endRegister(register.index);
       const run = this.runTypes.get(register.index);
       if (run !== undefined) {
         this.runs.set(run, [...(this.runs.get(run) ?? []), register.index]);
@@ -382,13 +430,18 @@ export class FunctionBuilder {
    */
   finish(parameters = 0, result?: Register): ProgramFunction {
     this.abc('RET', result?.index ?? 0);
+    this.endNamed(0);
     return {
       kind: this.kind,
       parameters,
       result: result ? ValueType[result.type] : 0,
       types: [...this.cellTypes],
       code: [...this.code],
-      debug: {name: this.what, lines: [...this.lines]},
+      debug: {
+        name: this.what,
+        lines: [...this.lines],
+        locals: this.locals.map(local => ({...local})),
+      },
     };
   }
 }

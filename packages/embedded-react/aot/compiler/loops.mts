@@ -566,6 +566,7 @@ export function lowerFor(
       name: counter.name!,
       initializer: startValue,
       isHoisted: false,
+      sourceName: name,
     },
     {
       kind: 'loop',
@@ -582,6 +583,7 @@ export function lowerFor(
           }
         : null,
       body,
+      names: {counter: counter.name!},
       step: [
         {
           kind: 'assignLocal',
@@ -805,6 +807,11 @@ export function lowerForOf(
           },
       body,
       step: [],
+      names: {
+        ...(pattern.type === 'Identifier' && {item: pattern.name}),
+        ...(indexName && {index: indexName}),
+        row: item,
+      },
     },
   ];
 }

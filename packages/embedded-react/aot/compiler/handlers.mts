@@ -45,6 +45,7 @@ import {handlerSplitList, lowerSplitInto} from './list-split.mts';
 import {
   boundObjectOf,
   expandObjectDeclarator,
+  isMadeName,
   lowerRecordSet,
   objectTreeOf,
 } from './records.mts';
@@ -2192,7 +2193,15 @@ function inlineHelperCall(
       state,
       context,
     );
-    return context.usedReturn ? [{kind: 'block', body: lowered}] : lowered;
+    // Its parameters stand for the values it is called with, so they hold none of their own.
+    const parameters: IrStmt[] = helper.params.flatMap(parameter =>
+      parameter.type === 'Identifier'
+        ? [{kind: 'debugName', name: parameter.name}]
+        : [],
+    );
+    return context.usedReturn || parameters.length
+      ? [{kind: 'block', body: [...parameters, ...lowered]}]
+      : lowered;
   } finally {
     context.helperList = helperList;
     context.usedReturn = usedReturn;
@@ -2767,6 +2776,7 @@ export function lowerStmts(
 
         // `const anim = Animated.…` holds no value; `anim.start()`/`anim.stop()` compile the animation it names.
         if (isAnimatedCall(declarator.init)) {
+          lowered.push({kind: 'debugName', name: declarator.id.name});
           const locals = new Map(environment.locals);
           locals.delete(declarator.id.name);
           environment = {
@@ -2788,7 +2798,11 @@ export function lowerStmts(
           environment,
         );
         if (split) {
-          lowered.push(...split.statements);
+          lowered.push(...split.statements, {
+            kind: 'debugName',
+            name: declarator.id.name,
+            listName: split.list.slotName,
+          });
           const locals = new Map(environment.locals);
           locals.delete(declarator.id.name);
           environment = {
@@ -2832,7 +2846,11 @@ export function lowerStmts(
           lowered.push({
             kind: 'startTimer',
             timer: lowerTimer(declarator.init, environment, state, context),
-            idLocal: {name: localName, isHoisted},
+            idLocal: {
+              name: localName,
+              isHoisted,
+              sourceName: declarator.id.name,
+            },
           });
           environment = {
             ...environment,
@@ -2945,6 +2963,7 @@ export function lowerStmts(
           initializer: initialExpression,
           ...(text ? {text} : {}),
           isHoisted,
+          ...(!isMadeName(localId) && {sourceName: localId}),
         };
         if (isLet && shape === 'number') {
           setLater(declare, ['widenedTo'], () => {
@@ -3593,17 +3612,35 @@ export function lowerNativeEvent(
   const locals = new Map<string, Local>(environment.locals);
   const constants = {...environment.constants};
   const destructured: t.Statement[] = [];
+  const valueNames: (string | null)[] = values.map(() => null);
   let first = 0;
   handler.params.forEach((parameter, position) => {
     const type = declared[position];
     const from = first;
     first += valueCount(type);
     if (typeof type === 'string') {
+      valueNames[from] = (parameter as t.Identifier).name;
       locals.set((parameter as t.Identifier).name, {
         name: values[from],
         ...VALUE_SLOTS[type],
       });
       return;
+    }
+    // A destructured record's fields are locals the body declares.
+    if (parameter.type === 'Identifier') {
+      const nameLeaves = (tree: Record<string, unknown>, path: string) => {
+        for (const [key, leaf] of Object.entries(tree)) {
+          if (typeof leaf === 'number') {
+            valueNames[leaf] = `${path}.${key}`;
+          } else {
+            nameLeaves(leaf as Record<string, unknown>, `${path}.${key}`);
+          }
+        }
+      };
+      nameLeaves(
+        recordTreeOf(type, leaf => leaf, from),
+        parameter.name,
+      );
     }
     const name =
       parameter.type === 'Identifier'
@@ -3649,6 +3686,7 @@ export function lowerNativeEvent(
     name: `native_event_${index}`,
     event,
     values,
+    valueNames,
     mounted: environment.mounted ?? null,
     callback: {body: lowered, updatesState: context.stateChanged},
   });
