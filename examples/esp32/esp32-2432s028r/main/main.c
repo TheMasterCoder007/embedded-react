@@ -32,6 +32,7 @@
 #include "erb_package_slots_esp32.h"
 #include "erb_runtime.h"
 #include "esp32_spi_lcd_backend.h"
+#include "fault_record.h"
 #include "native_modules.h"
 #include "native_renderer.h"
 
@@ -71,7 +72,7 @@ static BitmapFont s_fonts[ERB_FONT_COUNT];
 static ErAssetsStorage s_font_storage = {.fonts = s_fonts, .font_count = ERB_FONT_COUNT};
 #endif
 
-/** @brief Longest a rejected package's reason stays on screen before the last good one runs; a tap ends it sooner. */
+/** @brief Longest a rejected package's reason or a fault stays on screen at boot; a tap ends it sooner. */
 #define REJECTED_HOLD_MS 10000U
 
 /** @brief Room for one line of erb_error_message(). */
@@ -82,6 +83,21 @@ static ErAssetsStorage s_font_storage = {.fonts = s_fonts, .font_count = ERB_FON
 #define ER_TARGET_FRAME_MS 16U
 
 #define US_PER_MS 1000
+
+/* A forced failure, to check the error screen on hardware: `idf.py -DER_BOARD_CRASH_TEST=1` panics 5 s after boot.
+ * The error screen shows after the reset, naming it, then the app comes back and it happens again. */
+#ifdef ER_BOARD_CRASH_TEST
+#define CRASH_TEST_AFTER_MS 5000U
+
+/** @brief Panics once the time has come. */
+static void crash_test(uint32_t since_boot_ms)
+{
+    if (since_boot_ms >= CRASH_TEST_AFTER_MS)
+    {
+        *(volatile uint32_t*)0u = 0u;
+    }
+}
+#endif
 
 /** @brief Prints one line to the host: reload progress, runtime reports and the app's console.*. */
 static void host_log(const char* line, void* context)
@@ -148,6 +164,28 @@ static void hold_error_screen(bool touch)
 }
 
 /**
+ * @brief Shows the fault the last reset came from, if there was one, for as long as hold_error_screen() does, and
+ *        logs its record for `embedded-react decode-fault`.
+ *
+ * @param[in] touch  Whether touch came up, so a tap can end it.
+ */
+static void show_reset_fault(bool touch)
+{
+    static ERFaultRecord record;
+    if (!fault_record_take(&record))
+    {
+        return;
+    }
+    /* The record as text first: showing it clears it. */
+    static char text[ER_FAULT_TEXT_BYTES];
+    er_fault_text(&record, text, sizeof(text));
+    ESP_LOGE(TAG, "restarted after a fault: %s", record.reason);
+    ESP_LOGE(TAG, "fault record: %s", text);
+    er_fault_show_recorded(&record, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    hold_error_screen(touch);
+}
+
+/**
  * @brief Loads the active package at the panel's size. With none that loads, the error screen stays up and the
  *        frame loop keeps running under it.
  *
@@ -208,6 +246,7 @@ static void load_package(bool touch)
 /** @brief Boots the panel + engine, loads the package, then drives the frame loop. */
 static void run_app(void)
 {
+    fault_record_install(erb_fault_record_app);
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_panel_io_handle_t io = NULL;
     if (!board_display_init(&panel, &io))
@@ -226,6 +265,7 @@ static void run_app(void)
         ESP_LOGW(TAG, "touch init failed — UI renders but input is disabled");
     }
 
+    show_reset_fault(touch);
     load_package(touch);
 
     /* The software keyboard is compiled in via ERUI_ONSCREEN_KEYBOARD=1 (components/engine/CMakeLists.txt)
@@ -235,6 +275,9 @@ static void run_app(void)
 
     /* Frame loop. The press state machine turns XPT2046 polls into down/move/up for the engine. */
     uint32_t previous_ms = now_ms();
+#ifdef ER_BOARD_CRASH_TEST
+    const uint32_t boot_ms = previous_ms;
+#endif
     bool touch_down = false;
     int last_touch_x = 0, last_touch_y = 0;
     while (true)
@@ -274,6 +317,10 @@ static void run_app(void)
         erb_tick(delta_ms); /* advance the app's timers (setInterval/setTimeout); no-op if the app has none */
         previous_ms = now;
         native_modules_frame(now);
+
+#ifdef ER_BOARD_CRASH_TEST
+        crash_test(now - boot_ms);
+#endif
 
 #if ER_HOTRELOAD
         reload_poll();

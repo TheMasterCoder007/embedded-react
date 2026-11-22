@@ -57,6 +57,43 @@ Three things to get right:
 [Hosts with external RAM](../../api/native-ui-bridge.md#hosts-with-external-ram) has the full
 discussion, including why the runtime deliberately has no size-tiered allocator.
 
+## Hard faults
+
+`er_fault_cortex_m.h` is a fault handler that records a hard fault for the next boot: the program counter, the
+link register, the fault status registers, words of the stack and, in a Flow B firmware, where the app was.
+
+```c
+static ERFaultRecord s_fault __attribute__((section(".noinit")));
+
+ER_CORTEX_M_FAULT_VECTOR(HardFault_Handler)
+
+void fault_handler_init(void)
+{
+    /* The RAM the stacks are in: one entry for each region that holds one. */
+    static const ERCortexMFaultStack stacks[] = {{(uintptr_t)&_sdata, (uintptr_t)&_estack}};
+    const ERCortexMFaultConfig config = {
+        .record = &s_fault,
+        .stacks = stacks,
+        .stack_count = 1,
+        .recorded = erb_fault_record_app, /* Flow B */
+    };
+    er_cortex_m_fault_install(&config);
+}
+```
+
+Keep the record in a section the startup code neither zeroes nor copies, and take a CubeMX-generated
+`HardFault_Handler` out of `stm32h7xx_it.c`. Two things on this family:
+
+- `HAL_MPU_Enable()` turns on the memory fault, which then has a vector of its own. Add
+  `ER_CORTEX_M_FAULT_VECTOR(MemManage_Handler)`, and the same for `BusFault_Handler` and `UsageFault_Handler` if
+  the firmware enables them, or a bad pointer never reaches the handler.
+- With the data cache on, pass a `recorded` function that calls `erb_fault_record_app()` and then cleans the
+  record's cache lines (`SCB_CleanDCache_by_Addr()`), or a reset can lose what was written last.
+  At boot, send `er_fault_text()`'s line to your log before
+  `er_fault_show_recorded()` puts the fault on the error screen. `npx embedded-react decode-fault` then traces it
+  from the firmware's ELF:
+  [A hard fault with no probe attached](../../internals/flow-b-packages.md#a-hard-fault-with-no-probe-attached).
+
 ## The Chrom-ART backend
 
 `backends/dma2d` wraps the DMA2D accelerator behind the engine's callbacks. It works on any STM32

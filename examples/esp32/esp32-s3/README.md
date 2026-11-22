@@ -69,5 +69,6 @@ npx embedded-react flash --board esp32-s3 --port PORT
 
 Add `-DER_HOTRELOAD=1` to the build to send a package over the native USB port on every save, with
 `npx embedded-react dev --device --aot`. `-DER_BOARD_CRASH_TEST=1` forces a panic 5 s after boot and `=2` a hang, to
-check the error screen after the reset.
+check the error screen after the reset. After a panic the log has a `fault record:` line, which
+`npx embedded-react decode-fault` traces with the firmware's ELF.
 `-DERB_DEBUG_HOOK=1` adds the hook for breakpoints and stepping from GDB (`erb break`, `erb step`).

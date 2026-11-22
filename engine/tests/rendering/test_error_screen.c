@@ -21,6 +21,7 @@
  */
 
 #include "er_error_screen.h"
+#include "er_fault_cortex_m.h"
 #include "er_scene.h"
 #include "native_renderer.h"
 
@@ -316,14 +317,62 @@ static void test_fault_record(void)
     memset(&record, 0xA5, sizeof(record));
     CHECK(!er_fault_recorded(&record), "power-on garbage isn't a fault");
     CHECK(!er_fault_show_recorded(&record, SCREEN_WIDTH, SCREEN_HEIGHT), "and shows nothing");
+    char text[ER_FAULT_TEXT_BYTES];
+    CHECK(er_fault_text(&record, text, sizeof(text)) == 0u && text[0] == '\0', "and has no text");
 
     er_fault_record(&record, "hard fault in a very long reason that is cut to the record's size", 0x10001234u, 0u);
     CHECK(er_fault_recorded(&record), "a recorded fault is kept");
     CHECK(strlen(record.reason) == ER_FAULT_REASON_BYTES - 1u, "its reason is cut to fit");
+    CHECK(record.stack_count == 0u && record.flags == 0u && record.link_register == 0u, "with nothing else set");
 
     record.program_counter ^= 1u;
     CHECK(!er_fault_recorded(&record), "a changed record fails its check");
     record.program_counter ^= 1u;
+    record.stack[ER_FAULT_STACK_WORDS - 1] ^= 1u;
+    CHECK(!er_fault_recorded(&record), "in any field");
+    record.stack[ER_FAULT_STACK_WORDS - 1] ^= 1u;
+
+    const uint32_t status[] = {0x00008200u, 0x40000000u, 0u, 0x20u, 0xDEADu};
+    er_fault_record_registers(&record, ER_FAULT_CORE_CORTEX_M, 0x10000235u, 0x20001000u, status, 5u);
+    CHECK(er_fault_recorded(&record), "registers leave the record whole");
+    CHECK(record.core == ER_FAULT_CORE_CORTEX_M && record.link_register == 0x10000235u
+              && record.stack_pointer == 0x20001000u,
+          "and are kept");
+    CHECK(record.status[0] == 0x00008200u && record.status[3] == 0x20u, "with the status words that fit");
+
+    uint32_t words[ER_FAULT_STACK_WORDS + 4];
+    for (unsigned index = 0u; index < ER_FAULT_STACK_WORDS + 4u; index++)
+    {
+        words[index] = 0x1000u + index;
+    }
+    er_fault_record_stack(&record, words, ER_FAULT_STACK_WORDS + 4u, false);
+    CHECK(er_fault_recorded(&record) && record.stack_count == ER_FAULT_STACK_WORDS, "stack words are cut to fit");
+    CHECK(record.stack[0] == 0x1000u && record.stack[ER_FAULT_STACK_WORDS - 1] == 0x1000u + ER_FAULT_STACK_WORDS - 1u,
+          "and kept in order");
+    er_fault_record_stack(&record, words, 3u, true);
+    CHECK(record.stack_count == 3u && (record.flags & ER_FAULT_FLAG_CALLERS), "callers are flagged");
+
+    const ERFaultApp app = {
+        .function = 7u,
+        .panel = 1u,
+        .offset = 42u,
+        .build_id = 0x1A2B3C4Du,
+        .file = "a/long/path/that/does/not/fit/in/the/record/App.tsx",
+        .line = 41u,
+    };
+    er_fault_record_app(&record, &app);
+    CHECK(er_fault_recorded(&record) && (record.flags & ER_FAULT_FLAG_APP), "the app's place is kept");
+    CHECK(record.app_function == 7u && record.app_panel == 1u && record.app_offset == 42u
+              && record.app_build_id == 0x1A2B3C4Du && record.app_line == 41u,
+          "with its numbers");
+    CHECK(strlen(record.app_file) == ER_FAULT_FILE_BYTES - 1u
+              && strcmp(record.app_file + ER_FAULT_FILE_BYTES - 1u - strlen("App.tsx"), "App.tsx") == 0,
+          "and the end of a long file name");
+
+    char small[ER_FAULT_TEXT_BYTES - 1u];
+    CHECK(er_fault_text(&record, small, sizeof(small)) == 0u, "text needs room for the whole record");
+    CHECK(er_fault_text(&record, text, sizeof(text)) == 2u * sizeof(record), "the text is the record in hex");
+    CHECK(strncmp(text, "5446524501", 10) == 0, "from its magic and version");
 
     CHECK(er_fault_show_recorded(&record, SCREEN_WIDTH, SCREEN_HEIGHT), "a recorded fault shows");
     CHECK(er_error_screen_active(), "on the error screen");
@@ -332,6 +381,77 @@ static void test_fault_record(void)
     CHECK(!er_fault_recorded(&record), "and the record is cleared");
     CHECK(!er_fault_show_recorded(&record, SCREEN_WIDTH, SCREEN_HEIGHT), "so it shows once");
     er_error_screen_hide();
+}
+
+/* A stack as a fault leaves it: the stacked registers, then the words the handler records. */
+#define FAULT_STACK_WORDS 64u
+
+static void test_cortex_m_fault(void)
+{
+    uint32_t stack[FAULT_STACK_WORDS];
+    for (unsigned index = 0u; index < FAULT_STACK_WORDS; index++)
+    {
+        stack[index] = 0xC0DE0000u + index;
+    }
+    ERFaultRecord record;
+    uint32_t other_stack[16] = {0};
+    const ERCortexMFaultStack stacks[] = {
+        {(uintptr_t)other_stack, (uintptr_t)(other_stack + 16)},
+        {(uintptr_t)stack, (uintptr_t)(stack + FAULT_STACK_WORDS)},
+    };
+    const ERCortexMFaultConfig config = {
+        .record = &record,
+        .stacks = stacks,
+        .stack_count = 2u,
+    };
+
+    /* A basic frame 12 words below the top: lr, pc and xpsr in its words 5 to 7. */
+    uint32_t* frame = stack + FAULT_STACK_WORDS - 20u;
+    frame[5] = 0x08001235u;
+    frame[6] = 0x08004320u;
+    frame[7] = 0x01000000u;
+    const uint32_t status[] = {0x00008200u, 0x40000000u, 0x11u, 0x24u};
+    er_cortex_m_fault_fill(&config, frame, 0xFFFFFFF9u, status);
+    CHECK(er_fault_recorded(&record), "a fault is recorded");
+    CHECK(record.program_counter == 0x08004320u && record.link_register == 0x08001235u, "with its pc and lr");
+    CHECK(record.address == 0x24u && strcmp(record.reason, "hard fault: bus error") == 0,
+          "a bus fault's address and reason");
+    CHECK(record.status[0] == status[0] && record.status[1] == status[1], "and the status registers");
+    CHECK(record.stack_pointer == (uint32_t)(uintptr_t)(frame + 8), "the stack pointer is past the frame");
+    CHECK(record.stack_count == 12u && record.stack[0] == frame[8] && record.stack[11] == stack[FAULT_STACK_WORDS - 1u],
+          "the stack words stop at the end of the stack");
+
+    /* An aligned frame with float registers: 18 more words, and one of padding. */
+    frame = stack + 4u;
+    frame[6] = 0x08004320u;
+    frame[7] = 0x01000200u;
+    er_cortex_m_fault_fill(&config, frame, 0xFFFFFFE9u, NULL);
+    CHECK(record.stack_pointer == (uint32_t)(uintptr_t)(frame + 27), "float registers and padding are stepped over");
+    CHECK(record.stack_count == ER_FAULT_STACK_WORDS && record.stack[0] == frame[27], "a deep stack fills the record");
+    CHECK(strcmp(record.reason, "hard fault") == 0 && record.status[0] == 0u, "a core without status has none");
+
+    /* A stack pointer outside the stack is never read. */
+    er_cortex_m_fault_fill(&config, stack + FAULT_STACK_WORDS - 4u, 0xFFFFFFF9u, NULL);
+    CHECK(er_fault_recorded(&record) && record.program_counter == 0u && record.stack_count == 0u,
+          "a frame that runs off the stack is not read");
+    CHECK(strcmp(record.reason, "hard fault: bad stack pointer") == 0, "and says why");
+    er_cortex_m_fault_fill(&config, (const uint32_t*)((uintptr_t)stack + 2u), 0xFFFFFFF9u, NULL);
+    CHECK(record.program_counter == 0u, "nor is a misaligned one");
+
+    /* A frame on another stack is read to that stack's end. */
+    other_stack[6] = 0x08005550u;
+    other_stack[7] = 0x01000000u;
+    other_stack[8] = 0xAAAA0001u;
+    er_cortex_m_fault_fill(&config, other_stack, 0xFFFFFFF9u, NULL);
+    CHECK(record.program_counter == 0x08005550u && record.stack_count == 8u && record.stack[0] == 0xAAAA0001u,
+          "each stack is read to its own end");
+
+    /* A frame at the very top leaves no words to record. */
+    frame = stack + FAULT_STACK_WORDS - 8u;
+    frame[7] = 0x01000000u;
+    er_cortex_m_fault_fill(&config, frame, 0xFFFFFFF9u, NULL);
+    CHECK(er_fault_recorded(&record) && record.program_counter == frame[6] && record.stack_count == 0u,
+          "a frame at the top of the stack has no words after it");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -347,6 +467,7 @@ int main(void)
     test_paints_each_display_buffer();
     test_paints_in_bands();
     test_fault_record();
+    test_cortex_m_fault();
     if (s_failures)
     {
         fprintf(stderr, "%d check(s) failed\n", s_failures);

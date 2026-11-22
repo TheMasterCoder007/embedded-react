@@ -773,7 +773,7 @@ one of three ways: the error screen, a reported skip that the app runs on past, 
 | A node the engine can't give (a branch or row being built)                     | Run      | Error screen. The load-time node check makes this a firmware bug, not an app one                    |
 | An image name that isn't registered                                            | Run      | The image doesn't draw, and it is reported once                                                     |
 | Arithmetic of any kind                                                         | Never    | Always has a defined answer                                                                         |
-| A fault in native code: an engine or firmware bug, a watchdog reset            | Hardware | Recorded in no-init RAM, shown on the error screen after the reset                                  |
+| A fault in native code: an engine or firmware bug, a watchdog reset            | Hardware | Recorded in no-init RAM, shown on the error screen after the reset, traced with `decode-fault`      |
 
 "Reported" means one line through the runtime's log hook, once for each place in the app that can hit
 it, naming the limit to raise.
@@ -918,6 +918,88 @@ Code that runs from flash needs a hardware breakpoint on `erb_debug_break()`. GD
 memory map says flash, so the map has to cover every bank the code is in. On a dual-bank STM32H7, OpenOCD's
 `target/stm32h7x.cfg` declares the second bank only with `-c "set DUAL_BANK 1"` before it. Without it, code in the
 second bank gets software breakpoints, which never fire.
+
+### A hard fault with no probe attached
+
+An app can't cause a hard fault, but firmware, a driver or a native module can. The firmware keeps an
+`ERFaultRecord` (`er_error_screen.h`) in RAM the boot leaves alone, and its fault handler fills it:
+
+- the program counter, the link register, the stack pointer and the address the fault touched,
+- the core's fault status registers (CFSR, HFSR, MMFAR and BFAR on a Cortex-M3 or later),
+- `ER_FAULT_STACK_WORDS` words of the stack (32 by default),
+- and, when the fault came while the app's code ran, its function, offset, layout and `build_id`, with its
+  source line when the package has a debug table. `erb_fault_record_app()` adds these.
+
+The record is a fixed 268 bytes with the default stack words, and nothing in the handler allocates.
+
+On a Cortex-M board, `er_fault_cortex_m.h` is the handler. `ER_CORTEX_M_FAULT_VECTOR(HardFault_Handler)` defines
+the vector, and `er_cortex_m_fault_install()` takes the record, each region of RAM that holds a stack and a function to call
+once the record is filled, which is `erb_fault_record_app` as it stands. The handler runs on a stack of its own,
+reads stack words only inside the RAM it was given, and resets the core. The RP2040 example uses it. The ESP32
+examples fill the record from ESP-IDF's panic handler, with the callers its unwinder finds in place of raw stack
+words.
+
+At the next boot the firmware logs the record as one line of hex (`er_fault_text()`), or sends it wherever it
+reports faults, and `er_fault_show_recorded()` puts it on the error screen: the reason, the app's source line
+beside the fault address, the address it touched and the link register.
+
+`embedded-react decode-fault` traces it on the host, from the record, the firmware's ELF and the app's debug file:
+
+```text
+$ npx embedded-react decode-fault "fault record: 544652450101..." --elf build/firmware.elf
+hard fault: bus error
+  pc      0x0801a3c4
+  address 0x00000024
+  lr      0x0801a3b9
+  sp      0x2001ff58
+  CFSR 0x00008200
+    PRECISERR: bus error at the faulting instruction
+    BFARVALID: BFAR holds the address
+  HFSR 0x40000000
+    FORCED: another fault, raised to a hard fault
+
+C call chain, rebuilt from 32 saved stack words:
+  #0  0x0801a3c4  sensor_read+0x18          Src/sensor.c:88            [the faulting instruction]
+  #1  0x0801a51e  thermometer_measure+0xa   Src/native_modules.c:41    [sure: calls sensor_read]
+  #2  0x08032a10  erb_vm_run+0x8f4          runtime/erb_vm.c:1702      [likely: a call through a pointer]
+  #3  0x0802f1c6  run_function+0x52         runtime/erb_runtime.c:759  [sure: calls erb_vm_run]
+  The chain stops 128 bytes up the stack: callers past that aren't in the record.
+
+App: App.tsx:41:7  onPress  (build 1a2b3c4d)
+```
+
+The record can be the hex alone, a line of the log, or a file that holds either. A firmware built as several
+images, such as a bootloader and an application or a base firmware and a module it loads, takes `--elf` once for
+each: a frame is then named whichever image it is in, and the chain is followed from one into the other. File and line come from the
+toolchain's `addr2line`, found on `PATH` or named with `--addr2line`; without one the chain has function names
+only. The app's line comes from `dist/app.erdbg`, or the file `--debug` names, when its `build_id` is the record's,
+and otherwise from the line the board's own debug table gave.
+
+#### How sure the call chain is
+
+The board has no unwinder in its fault handler, so on a Cortex-M core the chain is rebuilt on the host from the
+saved stack words. A word is taken as a frame only when it is a return address: it points into a function, with
+the Thumb bit set, just past a call instruction. Each frame then says how well it fits the one below it:
+
+| Frame    | What it means                                                                                                                                                                         |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sure`   | The call before the return address calls the function in the frame below                                                                                                              |
+| `likely` | The call goes through a pointer, so it can't be checked against the frame below. A native module's function and a backend's callback are reached this way                             |
+| `unsure` | The call is to some other function. Either the function it called jumped to the frame below (a tail call), or the word was left on the stack by an earlier call and never overwritten |
+
+The first frame is the program counter itself and is exact, except after an imprecise bus error, where the
+status line says the fault came some instructions earlier. The link register is used as the first caller only when
+the call before it leads to the faulting function. A program counter outside the firmware's code means a call
+through a bad pointer, and the chain starts from the callers.
+
+What the chain can miss: a function that was inlined has no frame of its own, though `addr2line` names the inlined
+line; callers further up than the saved words are not in the record; and a frame that keeps no return address on
+the stack leaves no word to find. Read `sure` frames as fact, `likely` ones as very probably right, and an `unsure`
+one as a hint to check against the source.
+
+A stack overflow that faults while the core stacks its registers locks the core up before the handler runs, and
+leaves no record. A watchdog resets the board, and the firmware reports a watchdog reset, as the RP2040 example
+does.
 
 ### Package slots
 

@@ -63,9 +63,16 @@ static bool s_native_fails;
         }                                                                                                              \
     } while (0)
 
+/** @brief Set for sensors_read to record the app's place, as a fault handler would from inside it. */
+static ERFaultRecord* s_fault_inside;
+
 static bool sensors_read(const int32_t* arguments, int32_t* result, void* context)
 {
     (void)context;
+    if (s_fault_inside)
+    {
+        erb_fault_record_app(s_fault_inside);
+    }
     *result = arguments[0] + 1;
     return !s_native_fails;
 }
@@ -555,6 +562,21 @@ static void test_loops_and_calls(void)
     CHECK(call(once, 0, 0) == 1, "a loop with bound 0 runs its body once");
     CHECK(call(native, 41, 0) == 42, "a native import is called with its arguments");
     CHECK(as_float(call(scale, 5, 0)) == 2.5f, "a native's result goes after its arguments, in its own type");
+
+    /* A native fault's record takes the app's place only while the app's code runs. */
+    ERFaultRecord fault;
+    er_fault_record(&fault, "hard fault", 0x08001234u, 0u);
+    erb_fault_record_app(&fault);
+    CHECK(er_fault_recorded(&fault) && !(fault.flags & ER_FAULT_FLAG_APP),
+          "a fault outside the app's code has no place");
+    s_fault_inside = &fault;
+    call(native, 41, 0);
+    s_fault_inside = NULL;
+    CHECK(er_fault_recorded(&fault) && (fault.flags & ER_FAULT_FLAG_APP), "a fault inside a native call has the app's");
+    CHECK(fault.app_function == native && fault.app_offset == 0u && fault.app_build_id == g_erb.program.build_id
+              && fault.app_panel == g_erb.program.panel,
+          "its function, offset, build and layout");
+
     s_native_fails = true;
     call(native, 41, 0);
     CHECK(s_status == ERB_ERROR_NATIVE && g_erb.error.name && strcmp(g_erb.error.name, "sensors.read") == 0,

@@ -20,7 +20,10 @@ option(ER_HOTRELOAD "Enable on-device hot reload over USB (dev only)" OFF)
 # The receiver source (hotreload_usb.c) compiles ONLY when hot reload is enabled — a default/release
 # firmware carries none of the receiver code. It gates on the normal CMake pass, which sees this option.
 
-set(host_srcs "main.c" "board.c" "host_common.c" "native_modules.c")
+# fault_record.c is shared with the other ESP32 example: it records a panic for the next boot.
+set(fault_srcs "${EMBEDDED_REACT_SRC_DIR}/examples/esp32/common/fault_record.c")
+
+set(host_srcs "main.c" "board.c" "host_common.c" "native_modules.c" ${fault_srcs})
 if(ER_HOTRELOAD)
     list(APPEND host_srcs "hotreload_usb.c")
 endif()
@@ -35,17 +38,21 @@ endif()
 # The Flow B build (sdkconfig.defaults.flow-b): loads a compiled package from a slot, in place of the QuickJS host
 # above. The REQUIRES below can't depend on this, so the QuickJS components compile nothing in that build.
 if(CONFIG_ER_FLOW_B)
-    set(host_srcs "main_flow_b.c" "board.c" "host_common.c" "native_modules.c")
+    set(host_srcs "main_flow_b.c" "board.c" "host_common.c" "native_modules.c" ${fault_srcs})
 endif()
 
 idf_component_register(
     SRCS ${host_srcs}
-    INCLUDE_DIRS "." "${EMBEDDED_REACT_SRC_DIR}/examples/device/include" # the device package's generated headers
+    INCLUDE_DIRS "." "${EMBEDDED_REACT_SRC_DIR}/examples/esp32/common"
+                 "${EMBEDDED_REACT_SRC_DIR}/examples/device/include" # the device package's generated headers
     REQUIRES engine er-bridge-quickjs quickjs erb-runtime esp32-lcd-backend
              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
              esp_partition spi_flash esp_driver_usb_serial_jtag esp_driver_tsens
              esp_wifi esp_netif esp_event nvs_flash
 )
+
+# fault_record.c's panic handler runs ahead of ESP-IDF's, which it then calls.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")
 
 # Enable the on-screen performance overlay (FPS / CPU / free memory). main.c gates its host-side
 # metric gathering on ER_PERF_OVERLAY; the engine component sets the same flag so the renderer draws

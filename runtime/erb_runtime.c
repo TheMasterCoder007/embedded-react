@@ -456,6 +456,27 @@ ErbStatus erb_rt_fault(ErbStatus status, const char* detail, const char* name, u
     return status;
 }
 
+void erb_fault_record_app(ERFaultRecord* record)
+{
+    if (!g_erb.loaded || !g_erb.in_vm)
+    {
+        return;
+    }
+    ERFaultApp app = {
+        .function = g_erb_vm.function,
+        .panel = g_erb.program.panel,
+        .offset = g_erb_vm.program_counter,
+        .build_id = g_erb.program.build_id,
+    };
+    /* The numbers first: the lookup reads the package, which a fault may have come from. */
+    er_fault_record_app(record, &app);
+    erb_debug_lookup(&g_erb.program, app.function, app.offset, &app.file, &app.line);
+    if (app.file)
+    {
+        er_fault_record_app(record, &app);
+    }
+}
+
 void erb_rt_report(const char* what, uint16_t function, uint32_t offset)
 {
     for (uint32_t index = 0; index < s_reported_count; index++)

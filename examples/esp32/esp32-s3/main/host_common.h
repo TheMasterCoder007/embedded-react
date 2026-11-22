@@ -46,8 +46,9 @@ void set_display_rotation(void);
 void hold_error_screen(bool touch);
 
 /**
- * @brief Shows the fault the last reset came from, if there was one, for as long as hold_error_screen() does. The
- *        chip keeps the reset reason itself, so the record needs no no-init RAM here.
+ * @brief Shows the fault the last reset came from, if there was one, for as long as hold_error_screen() does, then
+ *        logs its record for `embedded-react decode-fault`. A panic's record is fault_record.c's; the chip keeps
+ *        the reason for a watchdog reset itself.
  *
  * @param[in] touch  Whether touch came up, so a tap can end it.
  */
