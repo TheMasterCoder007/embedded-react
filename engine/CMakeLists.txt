@@ -7,6 +7,7 @@ set(EMBEDDED_REACT_SOURCES
         core/native_renderer.c
         core/er_parallel.c
         core/er_display.c
+        core/er_fault_record.c
 
         # scene: node pool, tree, render pass, hit-testing, disjoint damage set
         scene/arc_widget.c
@@ -46,6 +47,9 @@ set(EMBEDDED_REACT_SOURCES
         font/font_blob.c
         font/font_data.c
         font/font_registry.c
+
+        # platform: the Cortex-M fault handler, which builds to its portable part elsewhere
+        platform/er_fault_cortex_m.c
 )
 
 # ---------------------------------------------------------------------------

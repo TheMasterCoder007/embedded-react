@@ -183,9 +183,12 @@ size after the display changes.
 Flow A's `er_runtime_show_error()` and Flow B's `erb_show_error()` both use it.
 
 A fault in native code can't draw when it happens. The firmware keeps an `ERFaultRecord` in RAM the
-boot leaves alone, fills it from its fault handler with `er_fault_record()`, and calls
-`er_fault_show_recorded()` at the next boot. The RP2040 example does this for a hard fault and a
-watchdog reset.
+boot leaves alone, fills it from its fault handler with the `er_fault_record` functions, and calls
+`er_fault_show_recorded()` at the next boot. The record holds the program counter, the link register,
+the fault status registers, words of the stack and where a Flow B app was, and `er_fault_text()` writes
+it as a line of hex for `embedded-react decode-fault` to trace on the host. On a Cortex-M board
+`er_fault_cortex_m.h` is the handler that fills it. See
+[A hard fault with no probe attached](../internals/flow-b-packages.md#a-hard-fault-with-no-probe-attached).
 
 ## Building the engine
 

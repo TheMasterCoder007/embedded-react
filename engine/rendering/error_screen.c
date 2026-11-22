@@ -15,14 +15,16 @@
  */
 
 /*
- * The error screen's text, its layout and its drawing, and the no-init fault record. er_commit() calls
- * er_error_screen_draw() while the screen is up.
+ * The error screen's text, its layout and its drawing. er_commit() calls er_error_screen_draw() while the screen
+ * is up. The fault record it shows is filled by er_fault_record.c.
  */
 
 #include "er_error_screen.h"
 #include "renderer_internal.h"
 #include "text_renderer.h"
 
+#include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -43,15 +45,10 @@
 #define ERROR_SCREEN_DEFAULT_TITLE "Error"
 #define ERROR_SCREEN_FONT_BOLD 1u
 
-/* The fault record's check word. */
-#define FAULT_MAGIC 0x45524654u /* "ERFT" */
-#define FAULT_HASH_SEED 2166136261u
-#define FAULT_HASH_PRIME 16777619u
-
 /* What a recorded fault shows. */
 #define FAULT_TITLE "Device restarted"
 #define FAULT_HINT "A firmware or engine fault, not the app's."
-#define FAULT_HEX_BYTES 32u
+#define FAULT_DETAIL_BYTES 48u
 
 /* A UTF-8 continuation byte, which a cut must not land before. */
 #define UTF8_CONTINUATION_MASK 0xC0u
@@ -155,15 +152,26 @@ static int line_height(int line, int width)
     return wrapped_lines * text_height;
 }
 
-/** @brief The check word for a fault record's contents. */
-static uint32_t fault_check(const ERFaultRecord* record)
+/**
+ * @brief Appends formatted text to a line.
+ *
+ * @return The line's new length.
+ */
+static size_t fault_append(char* buffer, size_t capacity, size_t used, const char* format, ...)
 {
-    uint32_t hash = FAULT_HASH_SEED ^ record->magic ^ record->program_counter ^ record->address;
-    for (size_t index = 0u; index < sizeof(record->reason); index++)
+    if (used + 1u >= capacity)
     {
-        hash = (hash ^ (unsigned char)record->reason[index]) * FAULT_HASH_PRIME;
+        return used;
     }
-    return hash;
+    va_list arguments;
+    va_start(arguments, format);
+    const int written = vsnprintf(buffer + used, capacity - used, format, arguments);
+    va_end(arguments);
+    if (written < 0)
+    {
+        return used;
+    }
+    return (size_t)written < capacity - used ? used + (size_t)written : capacity - 1u;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -263,43 +271,45 @@ bool er_error_screen_active(void)
     return s_active;
 }
 
-void er_fault_record(ERFaultRecord* record, const char* reason, uint32_t program_counter, uint32_t address)
-{
-    record->magic = FAULT_MAGIC;
-    record->program_counter = program_counter;
-    record->address = address;
-    size_t index = 0u;
-    for (; reason && reason[index] && index + 1u < sizeof(record->reason); index++)
-    {
-        record->reason[index] = reason[index];
-    }
-    for (; index < sizeof(record->reason); index++)
-    {
-        record->reason[index] = '\0';
-    }
-    record->check = fault_check(record);
-}
-
-bool er_fault_recorded(const ERFaultRecord* record)
-{
-    return record->magic == FAULT_MAGIC && record->check == fault_check(record);
-}
-
 bool er_fault_show_recorded(ERFaultRecord* record, int screen_width, int screen_height)
 {
     if (!er_fault_recorded(record))
     {
         return false;
     }
-    char location[FAULT_HEX_BYTES] = "";
-    char detail[FAULT_HEX_BYTES] = "";
+    /* The app's line beside the fault address, or the numbers `embedded-react where` takes. */
+    char location[ERUI_ERROR_SCREEN_LINE_BYTES] = "";
+    size_t used = 0u;
+    if ((record->flags & ER_FAULT_FLAG_APP) && record->app_file[0])
+    {
+        used =
+            fault_append(location, sizeof(location), used, "%s:%lu", record->app_file, (unsigned long)record->app_line);
+    }
+    else if (record->flags & ER_FAULT_FLAG_APP)
+    {
+        used = fault_append(location,
+                            sizeof(location),
+                            used,
+                            "function %u at %lu (build %08lx)",
+                            (unsigned)record->app_function,
+                            (unsigned long)record->app_offset,
+                            (unsigned long)record->app_build_id);
+    }
     if (record->program_counter)
     {
-        snprintf(location, sizeof(location), "pc 0x%08lx", (unsigned long)record->program_counter);
+        used = fault_append(
+            location, sizeof(location), used, "%spc 0x%08lx", used ? "  " : "", (unsigned long)record->program_counter);
     }
-    if (record->address)
+    char detail[FAULT_DETAIL_BYTES] = "";
+    used = 0u;
+    if (er_fault_has_address(record))
     {
-        snprintf(detail, sizeof(detail), "address 0x%08lx", (unsigned long)record->address);
+        used = fault_append(detail, sizeof(detail), used, "address 0x%08lx", (unsigned long)record->address);
+    }
+    if (record->link_register)
+    {
+        fault_append(
+            detail, sizeof(detail), used, "%slr 0x%08lx", used ? "  " : "", (unsigned long)record->link_register);
     }
     const ERErrorScreen screen = {
         .title = FAULT_TITLE,
@@ -309,6 +319,6 @@ bool er_fault_show_recorded(ERFaultRecord* record, int screen_width, int screen_
         .detail = detail,
     };
     er_error_screen_show(screen_width, screen_height, &screen);
-    record->magic = 0u;
+    er_fault_clear(record);
     return true;
 }

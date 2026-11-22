@@ -31,7 +31,9 @@ npx embedded-react flash --board esp32-2432s028r --port PORT
 
 After editing the JSX, repeat steps 2 and 3, or build the firmware with `idf.py -DER_HOTRELOAD=1` and let
 `npx embedded-react dev --device PORT --aot` send a package on every save. Its console runs at 460800 baud once the
-board is up. An `sdkconfig` from before the package slots keeps the old partition
+board is up. `-DER_BOARD_CRASH_TEST=1` forces a panic 5 s after boot, to check the error screen after the reset;
+the log then has a `fault record:` line, which `npx embedded-react decode-fault` traces with the firmware's ELF.
+An `sdkconfig` from before the package slots keeps the old partition
 table: delete it and run `idf.py fullclean`. `main/board.c` holds the board-specific `#define`s (inversion, BGR,
 mirroring, touch calibration) and `main/board.h` holds `BOARD_ROTATE_90`; the engine's pools are trimmed for the
 board in `components/engine/CMakeLists.txt`, and `ERB_ARENA_BYTES` is in `main/main.c`.

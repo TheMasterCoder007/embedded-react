@@ -29,6 +29,7 @@
 #include "erb_package_slots_esp32.h"
 #include "erb_runtime.h"
 #include "esp32_lcd_backend.h"
+#include "fault_record.h"
 #include "host_common.h"
 #include "native_modules.h"
 #include "native_renderer.h"
@@ -255,6 +256,7 @@ static void load_package(bool touch)
 /** @brief Boots the panel + engine, loads the package, then drives the frame loop. */
 static void run_app(void)
 {
+    fault_record_install(erb_fault_record_app);
     set_display_rotation();
     esp_lcd_panel_handle_t panel = NULL;
     const bool panel_up = board_display_init(&panel);

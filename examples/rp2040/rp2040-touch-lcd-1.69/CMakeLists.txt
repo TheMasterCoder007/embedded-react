@@ -54,6 +54,7 @@ add_library(er_engine STATIC
     "${E}/core/native_renderer.c"
     "${E}/core/er_parallel.c"
     "${E}/core/er_display.c"
+    "${E}/core/er_fault_record.c"
     "${E}/scene/arc_widget.c"
     "${E}/scene/compositor.c"
     "${E}/scene/damage.c"
@@ -81,6 +82,7 @@ add_library(er_engine STATIC
     "${E}/font/font_blob.c"
     "${E}/font/font_data.c"
     "${E}/font/font_registry.c"
+    "${E}/platform/er_fault_cortex_m.c"
 )
 target_include_directories(er_engine PUBLIC "${E}/include")
 target_include_directories(er_engine PRIVATE

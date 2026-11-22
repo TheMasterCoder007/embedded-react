@@ -19,6 +19,7 @@
 #include "er_error_screen.h"
 #include "er_scene.h"
 #include "esp32_lcd_backend.h"
+#include "fault_record.h"
 #include "native_renderer.h"
 
 #include "esp_heap_caps.h"
@@ -42,22 +43,6 @@ void set_display_rotation(void)
     }
 }
 
-/** @brief The fault the last reset came from, or NULL when it wasn't one. */
-static const char* reset_fault_reason(void)
-{
-    switch (esp_reset_reason())
-    {
-        case ESP_RST_PANIC:
-            return "panic: a firmware or engine crash";
-        case ESP_RST_INT_WDT:
-        case ESP_RST_TASK_WDT:
-        case ESP_RST_WDT:
-            return "watchdog reset: a hang";
-        default:
-            return NULL;
-    }
-}
-
 void hold_error_screen(bool touch)
 {
     for (uint32_t waited = 0; waited < ERROR_HOLD_MS; waited += ER_TARGET_FRAME_MS)
@@ -78,19 +63,22 @@ void hold_error_screen(bool touch)
 
 void show_reset_fault(bool touch)
 {
-    const char* reason = reset_fault_reason();
-    if (!reason)
+    static ERFaultRecord record;
+    if (!fault_record_take(&record))
     {
         return;
     }
-    ERFaultRecord record;
-    er_fault_record(&record, reason, 0u, 0u);
+    /* The record as text, for `embedded-react decode-fault`: showing it clears it. */
+    static char text[ER_FAULT_TEXT_BYTES];
+    er_fault_text(&record, text, sizeof(text));
     int width = 0;
     int height = 0;
     er_get_display_size(&width, &height);
     er_fault_show_recorded(&record, width, height);
     hold_error_screen(touch);
-    ESP_LOGE(TAG, "restarted after a fault: %s", reason); /* after the hold: the console is back by now */
+    /* After the hold: the console is back by now. */
+    ESP_LOGE(TAG, "restarted after a fault: %s", record.reason);
+    ESP_LOGE(TAG, "fault record: %s", text);
 }
 
 #if ERUI_RENDER_WORKERS > 1

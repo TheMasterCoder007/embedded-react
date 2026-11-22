@@ -29,6 +29,7 @@
 
 #include "board.h"
 #include "er_error_screen.h"
+#include "er_fault_cortex_m.h"
 #include "er_scene.h"
 #include "erb_package_slots.h"
 #include "erb_runtime.h"
@@ -162,16 +163,8 @@ static void crash_test(uint32_t since_boot_ms)
 /** @brief Longest a fault from before the reset stays on screen at boot; a tap ends it sooner. */
 #define FAULT_HOLD_MS 10000U
 
-/** @brief The stacked exception frame's pc, in words. */
-#define EXCEPTION_FRAME_PC 6
-
 /** @brief A native fault, kept in RAM the boot leaves alone so it survives the reset it causes. */
 static ERFaultRecord __uninitialized_ram(s_fault);
-
-/** @brief The hard fault handler's own stack, so recording a fault never needs the stack that may have overflowed. */
-#define FAULT_STACK_BYTES 256U
-static uint8_t __attribute__((aligned(8))) s_fault_stack[FAULT_STACK_BYTES];
-static uint8_t* const __attribute__((used)) s_fault_stack_top = s_fault_stack + FAULT_STACK_BYTES;
 
 /* Core 0's stack is 8 KB: SCRATCH_Y (PICO_STACK_SIZE, see CMakeLists.txt) plus this lower half in
  * SCRATCH_X. The watch face peaks at ~3.1 KB; the rest is headroom for deeper apps. This
@@ -221,39 +214,49 @@ void* _sbrk(int increment)
 }
 
 /**
- * @brief Records a hard fault with the pc it happened at, then resets through the watchdog.
+ * @brief Adds where the app was to a recorded hard fault, then resets through the watchdog.
  *
- * @param[in] exception_frame  The registers the core stacked on the fault.
+ * @param[in,out] record  The record the fault handler filled.
  */
-void __attribute__((used, noreturn)) hard_fault_record(const uint32_t* exception_frame)
+static void fault_recorded(ERFaultRecord* record)
 {
-    er_fault_record(&s_fault, "hard fault", exception_frame[EXCEPTION_FRAME_PC], 0u);
+    erb_fault_record_app(record);
     watchdog_reboot(0u, 0u, 0u);
     for (;;)
     {
     }
 }
 
-/**
- * @brief The hard fault vector: finds the stacked frame on the stack in use, moves to s_fault_stack, and hands
- *        the frame on. A stack overflow that faults while the core stacks the frame locks up instead; the
- *        watchdog resets it and the boot records that.
- */
-void __attribute__((naked)) isr_hardfault(void)
+/* The hard fault vector. A stack overflow that faults while the core stacks its registers locks up instead; the
+ * watchdog resets it and the boot records that. */
+ER_CORTEX_M_FAULT_VECTOR(isr_hardfault)
+
+/** @brief Points the fault handler at the record and at core 0's stack, the only RAM it reads stack words from. */
+static void fault_handler_install(void)
 {
-    __asm volatile("movs r0, #4\n"
-                   "mov r1, lr\n"
-                   "tst r0, r1\n"
-                   "beq 1f\n"
-                   "mrs r0, psp\n"
-                   "b 2f\n"
-                   "1: mrs r0, msp\n"
-                   "2: ldr r1, =s_fault_stack_top\n"
-                   "ldr r1, [r1]\n"
-                   "msr msp, r1\n"
-                   "ldr r1, =hard_fault_record\n"
-                   "bx r1\n"
-                   ".ltorg\n");
+    static const ERCortexMFaultStack stack = {(uintptr_t)s_stack_low, (uintptr_t)__StackTop};
+    const ERCortexMFaultConfig config = {
+        .record = &s_fault,
+        .stacks = &stack,
+        .stack_count = 1u,
+        .recorded = fault_recorded,
+    };
+    er_cortex_m_fault_install(&config);
+}
+
+/**
+ * @brief Prints a fault for `embedded-react decode-fault`, once.
+ *
+ * @param[in,out] fault  The fault show_recorded_fault() kept, or no fault.
+ */
+static void __attribute__((noinline)) fault_report(ERFaultRecord* fault)
+{
+    char text[ER_FAULT_TEXT_BYTES];
+    if (er_fault_text(fault, text, sizeof(text)) > 0u)
+    {
+        printf("fault record: %s\n", text);
+    }
+    fault->magic = 0u;
 }
 
 /**
@@ -284,10 +287,13 @@ static void hold_error_screen(bool touch)
 /**
  * @brief Shows a fault from before the reset, if there was one, for as long as hold_error_screen() does.
  *
- * @param[in] touch  Whether touch came up, so a tap can end it.
+ * @param[in]  touch  Whether touch came up, so a tap can end it.
+ * @param[out] shown  Receives the fault as it was recorded, to print once a host is listening: showing it clears
+ *                    the record.
  */
-static void show_recorded_fault(bool touch)
+static void show_recorded_fault(bool touch, ERFaultRecord* shown)
 {
+    shown->magic = 0u;
     if (!er_fault_recorded(&s_fault) && watchdog_enable_caused_reboot())
     {
         er_fault_record(&s_fault, "watchdog reset: a hang, or a stack overflow", 0u, 0u);
@@ -297,6 +303,7 @@ static void show_recorded_fault(bool touch)
         return;
     }
     boot_report("restarted after a fault: %s (pc 0x%08lx)\n", s_fault.reason, (unsigned long)s_fault.program_counter);
+    *shown = s_fault;
     er_fault_show_recorded(&s_fault, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
     hold_error_screen(touch);
 }
@@ -485,6 +492,7 @@ int main(void)
     stack_paint();
 #endif
     stack_guard_install();
+    fault_handler_install();
 
     /* Bring the panel up FIRST — board_display_init()'s very first action drives the backlight low, so
      * the panel's random power-on GRAM ("rainbow") is never lit. Doing it before stdio_init_all() makes
@@ -531,7 +539,9 @@ int main(void)
     Pedometer pedometer;
     pedometer_reset(&pedometer);
 
-    show_recorded_fault(touch);
+    /* Lives on this stack for good: static RAM has no room beside the framebuffer. */
+    ERFaultRecord shown_fault;
+    show_recorded_fault(touch, &shown_fault);
 
     /* Arm the watchdog before the app runs: the first full repaint below is where the stack is deepest. */
     watchdog_enable(ER_WATCHDOG_BOOT_MS, true);
@@ -566,6 +576,7 @@ int main(void)
         {
             printf("%s", s_boot_report);
             s_boot_report[0] = '\0';
+            fault_report(&shown_fault);
         }
 
         if (touch)

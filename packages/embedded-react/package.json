@@ -49,6 +49,7 @@
     "build.mts",
     "pack-container.mts",
     "flash.mts",
+    "fault-decode.mts",
     "compile-bin.mts",
     "persist-transform.mts",
     "cli.mts",

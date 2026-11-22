@@ -1,4 +1,5 @@
 # engine/platform
 
-Reserved for engine-side platform-abstraction hooks. Empty today: everything
-platform-specific lives in `backends/`.
+Engine-side code for one processor family. Display code lives in `backends/`.
+
+- `er_fault_cortex_m.c`: the Cortex-M fault handler, which fills an `ERFaultRecord` (`er_fault_cortex_m.h`).

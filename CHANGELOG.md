@@ -23,6 +23,12 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   built with `ERB_DEBUG_HOOK=1`. The app doesn't count the time a board is halted.
 - Flow B: `erb locals` shows a function's parameters and locals by name, and `erb where` each function's
   parameters. `app.erdbg` is format 2.
+- A hard fault's record holds the link register, the fault status registers, words of the stack, and where a
+  Flow B app was. The error screen shows the app's source line beside the fault address.
+- A Cortex-M fault handler that fills the record (`er_fault_cortex_m.h`). The RP2040 example uses it, and the
+  ESP32 examples record a panic.
+- `embedded-react decode-fault` prints a fault record's C call chain and the app's source line, from the
+  firmware's ELF.
 
 ## [0.25.0] - 2026-11-20
 ### Added
@@ -108,7 +114,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [0.23.0] - 2026-11-17
 ### Added
 
-- Engine: `er_set_display_rotation()` runs the app at 90, 180 or 270 degrees to a panel mounted against its
+- Engine: `er_set_display_rotation()` runs the app at 90, 180, or 270 degrees to a panel mounted against its
   scan direction. Touches and dirty rects are in panel coordinates, and `er_rotate_copy()` presents a rect from
   a logical-shape buffer.
 - Simulators and desktop hosts take a display rotation (`ER_ROTATION`, or the web simulator's rotate control and
@@ -192,26 +198,26 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Added
 
 - Flow B: template literals, `String(x)`, `toFixed` and `padStart` wherever a string is built: text, a string state,
-  a list's string field and a handler's `const`.
+  a list's string field, and a handler's `const`.
 - Flow B: `slice`, `toUpperCase` and `includes` on strings. Packages are now format minor 7.
-- Flow B lists: `items[i]` reads, nested, optional and boolean fields, lists of plain values, a list passed to a
+- Flow B lists: `items[i]` reads, nested, optional, and boolean fields, lists of plain values, a list passed to a
   component, and `.map` over an array built in render.
 - Flow B lists: remove an item with `filter((_, i) => i !== n)`, `toSpliced(n, 1)` or a pair of slices, and update
   items with `map` and `with`. A list setter takes the updater form too. Packages are now format minor 8.
 - Flow B lists: `filter` and `sort` (`toSorted`, or `sort` on a copy), in a setter and in render. Strings compare
   with `<`, `>` and `localeCompare`, by UTF-16 code unit. Packages are now format minor 9.
-- Flow B: `split` a string into a list of strings, in a setter, in render and in a handler's `const`. Pieces past
+- Flow B: `split` a string into a list of strings, in a setter, in render, and in a handler's `const`. Pieces past
   the list's cap are dropped and reported. Packages are now format minor 10.
-- Flow B: object state, with nested fields, written with spreads, an updater or a ternary of objects. Objects can be
+- Flow B: object state, with nested fields, written with spreads, an updater, or a ternary of objects. Objects can be
   built and destructured in handlers and in render, and passed to components.
 - Flow B: object state of several shapes, told apart by a tag field like `kind`. A test on the tag narrows which
   fields can be read.
 - Flow B: `switch` and early `return` in handlers, effects and helpers, and helpers that return a value, in handlers
   and in render. A helper that calls itself is still refused.
-- Flow B: `for` and `for…of` loops in handlers, effects and helpers, with `break` and `continue`, over list state,
+- Flow B: `for` and `for…of` loops in handlers, effects, and helpers, with `break` and `continue`, over list state,
   constant arrays and splits, or counted to a constant or a list's length. Handler locals can be `let` and reassigned.
 - Flow B: `useMemo` and state updaters can have a block body. A memo works out its value as a helper does, and an
-  updater can use locals, branches and loops, setting the state at each `return`.
+  updater can use locals, branches, and loops, setting the state at each `return`.
 - Flow B: `useReducer`, inlined at each dispatch. Cases the action's type rules out are dropped, so a reducer can
   throw for an unknown type.
 - Flow B: `createContext`, `<C.Provider>` and `useContext`, resolved at compile time to the nearest provider.
@@ -221,7 +227,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: loops in `useMemo` and in helpers used as values, with `let` locals, `break` and `continue`. In render the
   value is worked out again when what it reads changes. A helper can be passed a list.
 - Flow B: native modules, declared with `nativeModule<Sensors>('sensors', 1)` and a TypeScript interface. Handlers,
-  effects and timers call their methods with `Int`, `number` and `boolean` values, and the firmware registers each
+  effects, and timers call their methods with `Int`, `number` and `boolean` values, and the firmware registers each
   one in C.
 - Flow A: native modules, through the bridge. The firmware gives the same `ErbNative` table to
   `ErRuntimeConfig::natives`, and a missing method stops the app when it loads.
@@ -233,11 +239,11 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   Packages are now format minor 11.
 - Optional native modules: `nativeModule.optional<Wifi>('wifi', 1)` loads on a board without the module, and
   `Wifi.available` says whether it is there. Calling one that isn't stops the app. Packages are now format minor 12.
-- Native modules pass strings and `Int64` values, as arguments, results and event values. Packages are now format
+- Native modules pass strings and `Int64` values, as arguments, results, and event values. Packages are now format
   minor 13.
-- Native modules pass records, objects of those values, as arguments, results and event values. Packages are now
+- Native modules pass records, objects of those values, as arguments, results, and event values. Packages are now
   format minor 14.
-- A guide to writing a native module. The S3, CYD and RP2040 examples and both desktop hosts register the watch face
+- A guide to writing a native module. The S3, CYD, and RP2040 examples and both desktop hosts register the watch face
   demo's modules.
 - An app can import native modules declared in another file or a package: `import {Can} from 'my-device'`. The
   package ships its `.ts` source, with the mocks beside it.
@@ -257,7 +263,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Changed
 
-- The watch face demo is in TypeScript, and its clock, temperature, steps and level come from native modules instead
+- The watch face demo is in TypeScript, and its clock, temperature, steps, and level come from native modules instead
   of `useHostValue`. Its pages are the screen's size, so it runs on any panel.
 - The TypeScript app template declares the timers.
 - The TypeScript app template and the type tests use the ES2023 lib, which the device's QuickJS supports, so
@@ -281,7 +287,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Fixed
 
 - Flow B: a list row's item passed to a component no longer fails to compile.
-- Flow B: a handler, effect or timer that reads a state after setting it reads the value its render had, as in
+- Flow B: a handler, effect, or timer that reads a state after setting it reads the value its render had, as in
   React, instead of the new one. An updater still gets the latest value, and a second object setter given
   `{...user}` puts back the fields the first one changed, and its shape when it has several.
 - Flow B: state a dep-driven effect sets is drawn at once, not at the next event, and a dep-driven effect no longer
@@ -333,7 +339,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Changed
 
-- **Breaking:** abbreviated public names are spelled out. In C that covers functions, struct fields, constants and
+- **Breaking:** abbreviated public names are spelled out. In C that covers functions, struct fields, constants, and
   `ERUI_*` build flags: `ERRect::w` is now `width`, `er_anim_*` is `er_animation_*`, `ERB_ERR_*` is `ERB_ERROR_*`
   and `ERUI_SCRATCH_W` is `ERUI_SCRATCH_WIDTH`, for example. In JS, the keyboard's `gridCols` is now `gridColumns`,
   and the SVG `fillGrad` and `strokeGrad` props are `fillGradient` and `strokeGradient`.

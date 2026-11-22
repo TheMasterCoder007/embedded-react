@@ -29,6 +29,7 @@
  */
 
 #include "er_assets.h"
+#include "er_error_screen.h"
 #include "er_scene.h"
 #include "erb_native.h"
 
@@ -181,8 +182,9 @@ typedef struct
     uint16_t node_count;      /**< Nodes the app may use; 0 means ERUI_MAX_NODES. */
     const ErbNative* natives; /**< Native functions and events packages may use. */
     uint16_t native_count;
-    ErAssetsStorage* fonts; /**< Room for the asset pack's fonts, one per family and size; NULL if packages have none. */
-    uint32_t budget;        /**< Instructions per run; 0 means ERB_EVENT_BUDGET. */
+    ErAssetsStorage*
+        fonts;       /**< Room for the asset pack's fonts, one per family and size; NULL if packages have none. */
+    uint32_t budget; /**< Instructions per run; 0 means ERB_EVENT_BUDGET. */
     void (*log)(const char* line, void* context);           /**< Reports and console.* lines, one each; may be NULL. */
     void (*on_fault)(const ErbError* error, void* context); /**< NULL: erb_show_error(). */
     void* context;                                          /**< Passed to natives, log and on_fault. */
@@ -276,6 +278,17 @@ void erb_show_error(const ErbError* error);
 
 /** @brief erb_show_error(), and what to do about it. @p hint may be NULL. */
 void erb_show_error_hint(const ErbError* error, const char* hint);
+
+/**
+ * @brief Adds where the app was to a native fault's record, when the fault came while the app's code ran: its
+ *        function, offset and build_id, and its source line from a debug package. Else it does nothing.
+ *
+ * Call it from the fault handler, after the record is started: it is ERCortexMFaultConfig::recorded as it stands.
+ * It allocates nothing and only reads.
+ *
+ * @param[in,out] record  The record.
+ */
+void erb_fault_record_app(ERFaultRecord* record);
 
 /** @brief The short reason for a status. */
 const char* erb_status_name(ErbStatus status);

@@ -34,6 +34,7 @@ import {
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {basename, dirname, relative, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
+import {spawnSync} from 'node:child_process';
 import {buildApp, runDevServer} from './sim-server.mts';
 import {
   packVendor,
@@ -43,6 +44,16 @@ import {
 import {runDeviceDevServer} from './hotreload/dev-device.mts';
 import {detectDevicePorts, preferCalloutPath} from './hotreload/uploader.mts';
 import {boardByName, flashSlot, packSlot} from './flash.mts';
+import {
+  ELF_MACHINE_ARM,
+  ELF_MACHINE_RISCV,
+  ELF_MACHINE_XTENSA,
+  callChain,
+  faultReport,
+  mergeElfs,
+  parseFaultRecord,
+  readElf,
+} from './fault-decode.mts';
 import type {AssetsConfig} from './assets/font-config.mts';
 import type {Screen} from './aot/compiler/options.mts';
 
@@ -101,6 +112,16 @@ Usage:
                                                  and offset an error screen or log shows. Reads
                                                  dist/app.erdbg unless --debug names another; --build
                                                  refuses a file from another build.
+  embedded-react decode-fault <record> --elf <firmware.elf> [--elf <more.elf>] [--debug <file>]
+                              [--addr2line <tool>]
+                                               Trace a hard fault from the record the board logs after the
+                                                 reset ("fault record: ..."): the C call chain from the
+                                                 firmware's ELF, and the app's source line. <record> is the
+                                                 hex, or a file that holds it, such as a saved log. Reads
+                                                 dist/app.erdbg when it is there, unless --debug names
+                                                 another. File and line come from the toolchain's addr2line.
+                                                 Give --elf once for each image of a firmware built as
+                                                 several (a bootloader, a module it loads).
   embedded-react native-header <package or file> [--out <dir>]
                                                Write a C header for each native module a device package
                                                  or a .ts file declares: its records, where each argument
@@ -828,6 +849,184 @@ async function where(args: string[]): Promise<void> {
   }
 }
 
+/** addr2line as each toolchain names it, by the ELF's machine, then the host's own. */
+const ADDR2LINE_TOOLS: Record<number, string[]> = {
+  [ELF_MACHINE_ARM]: ['arm-none-eabi-addr2line'],
+  [ELF_MACHINE_XTENSA]: [
+    'xtensa-esp32s3-elf-addr2line',
+    'xtensa-esp32-elf-addr2line',
+    'xtensa-esp-elf-addr2line',
+  ],
+  [ELF_MACHINE_RISCV]: ['riscv32-esp-elf-addr2line'],
+};
+const ADDR2LINE_HOST_TOOLS = ['llvm-addr2line', 'addr2line'];
+
+/**
+ * Asks addr2line for each address's file and line.
+ *
+ * @returns The lines by address, and the tool that gave them; null when no tool ran.
+ */
+function sourceLinesOf(
+  elfPath: string,
+  machine: number,
+  addresses: number[],
+  explicitTool: string | undefined,
+  cwd: string,
+): {lines: Map<number, string>; tool: string | null} {
+  const lines = new Map<number, string>();
+  const tools = explicitTool
+    ? [explicitTool]
+    : [...(ADDR2LINE_TOOLS[machine] ?? []), ...ADDR2LINE_HOST_TOOLS];
+  for (const tool of tools) {
+    const run = spawnSync(
+      tool,
+      ['-e', elfPath, ...addresses.map(address => `0x${address.toString(16)}`)],
+      {encoding: 'utf8'},
+    );
+    if (run.error || run.status !== 0) {
+      continue;
+    }
+    run.stdout
+      .trim()
+      .split('\n')
+      .forEach((line, index) => {
+        const place = /^(.*):(\d+)(?: \(discriminator \d+\))?$/.exec(
+          line.trim(),
+        );
+        if (place && place[1] !== '??' && place[2] !== '0') {
+          const inProject = relative(cwd, place[1]);
+          lines.set(
+            addresses[index],
+            `${inProject.startsWith('..') ? resolve(place[1]) : inProject}:${place[2]}`,
+          );
+        }
+      });
+    return {lines, tool};
+  }
+  return {lines, tool: null};
+}
+
+/** `embedded-react decode-fault <record> --elf <firmware.elf> [--elf more.elf] [--debug file] [--addr2line tool]` */
+async function decodeFault(args: string[]): Promise<void> {
+  const cwd = process.cwd();
+  // --elf may be given once for each image of the firmware.
+  const elfOptions = args.filter(
+    (_, argIndex) => argIndex > 0 && args[argIndex - 1] === '--elf',
+  );
+  const debugOption = optValue(args, '--debug')?.value;
+  const [recordArg] = args.filter(
+    (arg, argIndex) =>
+      !arg.startsWith('--') &&
+      !['--elf', '--debug', '--addr2line'].includes(args[argIndex - 1]),
+  );
+  if (!recordArg || !elfOptions.length) {
+    console.error(
+      'Pass the record the board logged and the firmware it runs: embedded-react decode-fault <record> --elf firmware.elf\n',
+    );
+    usage();
+    process.exit(1);
+  }
+  const elfPaths = elfOptions.map(option => resolve(cwd, option));
+  for (const elfPath of elfPaths) {
+    if (!existsSync(elfPath)) {
+      console.error(`No ELF at ${elfPath}.`);
+      process.exit(1);
+    }
+  }
+  const recordPath = resolve(cwd, recordArg);
+  let record;
+  let elf;
+  try {
+    record = parseFaultRecord(
+      existsSync(recordPath) ? readFileSync(recordPath) : recordArg,
+    );
+    elf = mergeElfs(
+      elfPaths.map(elfPath => {
+        try {
+          return readElf(readFileSync(elfPath));
+        } catch (error: any) {
+          throw new Error(`${relative(cwd, elfPath)}: ${error.message}`);
+        }
+      }),
+    );
+  } catch (error: any) {
+    console.error(error.message);
+    process.exit(1);
+  }
+
+  // The app's line: from the debug file of the same build, else what the board's own debug table gave.
+  let appLine: string | null = null;
+  let debugNote: string | null = null;
+  if (record.app) {
+    const app = record.app;
+    const build = hexBuildId(app.buildId);
+    appLine = app.file
+      ? `${app.file}:${app.line}  (build ${build})`
+      : `function ${app.function} at ${app.offset} (build ${build}): pass --debug with that build's app.erdbg for the line`;
+    const debugPath = resolve(cwd, debugOption ?? 'dist/app.erdbg');
+    if (existsSync(debugPath)) {
+      const {placeOf, readDebugFile} = await import('./aot/compile.mts');
+      try {
+        const debugFile = readDebugFile(readFileSync(debugPath, 'utf8'));
+        if (debugFile.buildId >>> 0 !== app.buildId) {
+          debugNote = `${relative(cwd, debugPath)} is build ${hexBuildId(debugFile.buildId)}, but the board ran build ${build}: it wasn't used.`;
+        } else {
+          const place = placeOf(debugFile, app.function, app.offset).find(
+            candidate => candidate.panels.includes(app.panel),
+          );
+          if (place) {
+            appLine = `${debugFile.file}:${place.line}:${place.column}  ${place.function}  (build ${build})`;
+          }
+        }
+      } catch (error: any) {
+        debugNote = `${relative(cwd, debugPath)}: ${error.message}`;
+      }
+    } else if (debugOption) {
+      debugNote = `No debug file at ${debugPath}.`;
+    }
+  }
+
+  const frames = callChain(record, elf);
+  // Each image's own ELF has the lines for its frames.
+  const source: {lines: Map<number, string>; tool: string | null} = {
+    lines: new Map(),
+    tool: null,
+  };
+  let anyAddress = false;
+  elfPaths.forEach((elfPath, image) => {
+    const addresses = frames
+      .filter(
+        frame =>
+          frame.kind !== 'interrupt' &&
+          frame.function !== null &&
+          frame.image === image,
+      )
+      .map(frame => frame.address);
+    if (!addresses.length) {
+      return;
+    }
+    anyAddress = true;
+    const found = sourceLinesOf(
+      elfPath,
+      elf.machine,
+      addresses,
+      optValue(args, '--addr2line')?.value,
+      cwd,
+    );
+    found.lines.forEach((line, address) => source.lines.set(address, line));
+    source.tool ??= found.tool;
+  });
+  console.log(faultReport(record, frames, source.lines, appLine).join('\n'));
+  if (debugNote) {
+    console.log(debugNote);
+  }
+  if (anyAddress && !source.tool) {
+    console.log(
+      'No addr2line found, so the chain has no files or lines: put the toolchain on PATH, or name its addr2line with --addr2line.',
+    );
+  }
+}
+
 /** `embedded-react native-header <package or file> [--out dir]` */
 async function nativeHeader(args: string[]): Promise<void> {
   const cwd = process.cwd();
@@ -876,6 +1075,8 @@ if (command === 'dev') {
   flash(commandArgs);
 } else if (command === 'where') {
   await where(commandArgs);
+} else if (command === 'decode-fault') {
+  await decodeFault(commandArgs);
 } else if (command === 'native-header') {
   await nativeHeader(commandArgs);
 } else if (
