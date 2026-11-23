@@ -201,8 +201,8 @@ row = 5
 The handler on line 18 read row 5 of a list that has fewer. `erb where`, `erb locals` and `erb state` read the app
 as it was when it faulted. `continue` runs the firmware on to its error screen, and a step has nowhere to go.
 
-A fault the app's code didn't raise, such as state that keeps changing in an effect, stops the same way with its
-reason, but with no line of the app's to show.
+A fault the runtime finds between runs of the app's code stops the same way with its reason. State that keeps
+changing in effects shows the line where the last effect changed it; others have no line of the app's to show.
 
 A refused load stops too, with `Load refused:` and what `erb error` says. `erb faults off` turns both stops off.
 

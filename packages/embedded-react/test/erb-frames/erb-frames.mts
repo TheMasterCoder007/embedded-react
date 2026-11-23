@@ -83,6 +83,8 @@ interface Scenario {
   flowA?: boolean;
   /** Also run the Flow A bundle on its native modules' mocks, as the simulators do. */
   mocks?: boolean;
+  /** The message the app must stop with; its frame is then the error screen. */
+  fault?: string;
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1531,6 +1533,14 @@ const SCENARIOS: Scenario[] = [
     sameAs: 'clock',
     flowA: true,
   },
+  // The tap starts an update that never settles: the error screen names the effect that ran last.
+  {
+    name: 'update-loop',
+    file: fixture('update-loop'),
+    screen: PORTRAIT,
+    taps: '32,20',
+    fault: 'update loop at update-loop.tsx:18',
+  },
 ];
 
 /** Runs a command, throwing with its output when it fails. */
@@ -1731,14 +1741,23 @@ function compareScenario(
 ): string | null {
   const [width, height] = scenario.screen;
   const framePath = join(OUT_DIR, `${outputName}.raw`);
-  run(host(), [
+  const hostArgs = [
     framePath,
     String(width),
     String(height),
     appPath,
     scenario.taps || '',
     String(scenario.settle ?? 500),
-  ]);
+  ];
+  if (scenario.fault === undefined) {
+    run(host(), hostArgs);
+  } else {
+    const stopped = spawnSync(host(), hostArgs, {encoding: 'utf8'});
+    const expected = `the app stopped: ${scenario.fault}\n`;
+    if (stopped.status !== 1 || stopped.stderr !== expected) {
+      return `expected "${expected.trim()}", got exit ${stopped.status}: ${stopped.stderr.trim()}`;
+    }
+  }
 
   const frame = readFrame(framePath);
   const frameSize = scenario.resized ?? scenario.screen;

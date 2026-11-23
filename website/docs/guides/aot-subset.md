@@ -92,7 +92,8 @@ while the code that breaks it is still one line.
   provider adds no node: where one element is wanted, like a component's root, it must wrap one. A value can hold
   callbacks, but not a setter: pass a callback that calls it. `<C.Consumer>` is not supported.
 - An effect runs after the render, as React's does, and what it sets is drawn at once. One that keeps changing what
-  it depends on stops the app after 50 passes, where React reports an update loop.
+  it depends on stops the app after 50 passes, where React reports an update loop. The error names the line where
+  the last effect changed a state; it may not be the only effect in the loop.
 - Host data (a sensor, a clock) reaches the app through a [native module](./native-modules.md), which the
   package lists as imports and events the runtime matches at load. `useHostValue(initial)` is still there for a
   single number: the compiler lists it as a package input, and the host sets it with `erb_input_set_int`.

@@ -571,16 +571,21 @@ int main(int argc, char** argv)
     s_height = height;
     const int status = s_flow_a ? run_flow_a(package, package_bytes, width, height, taps, settle_ms)
                                 : run_flow_b(package, package_bytes, width, height, taps, settle_ms);
-    if (status != 0)
+    if (status == EXIT_HOST_FAILED)
     {
         return status;
     }
-    if (s_resize_refused)
+    if (status == 0 && s_resize_refused)
     {
         fprintf(stderr, "the app didn't take a new size\n");
         return EXIT_APP_FAILED;
     }
 
+    if (status != 0)
+    {
+        /* A stopped app's frame is its error screen. */
+        er_commit();
+    }
     FILE* frame_file = fopen(frame_path, "wb");
     if (!frame_file)
     {
@@ -589,5 +594,5 @@ int main(int argc, char** argv)
     }
     fwrite(er_software_framebuffer(), sizeof(uint32_t), (size_t)s_width * (size_t)s_height, frame_file);
     fclose(frame_file);
-    return 0;
+    return status;
 }

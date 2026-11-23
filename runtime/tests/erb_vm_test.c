@@ -1882,8 +1882,25 @@ static void test_timers_and_effects(void)
         tpkg_set_code(&s_package_spec, FUNCTION_EFFECT, types, 2, effect, 5);
     }
     CHECK(!load() && s_error.status == ERB_ERROR_UPDATE_LOOP, "more than 50 update passes is a fault");
+    CHECK(s_error.function == FUNCTION_EFFECT && s_error.offset == 3u, "at the effect's write to the state");
     CHECK(!erb_running() && er_node_in_use_count() == 0, "and the app is torn down");
     CHECK(er_error_screen_active(), "for the error screen");
+
+    /* An update that keeps setting its own state has no effect to name. */
+    base();
+    {
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
+        const uint32_t update[] = {
+            OP_ABX(GET32, 0, SLOT_COUNT),
+            OP_ABX(LOADI, 1, 1),
+            OP_ABC(ADD, 0, 0, 1),
+            OP_ABX(SET32, 0, SLOT_COUNT),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        tpkg_set_code(&s_package_spec, FUNCTION_UPDATE, types, 2, update, 5);
+    }
+    CHECK(!load() && s_error.status == ERB_ERROR_UPDATE_LOOP, "an update that sets its own state is a fault too");
+    CHECK(s_error.function == ERB_NONE, "with no function");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

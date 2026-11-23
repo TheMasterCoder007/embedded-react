@@ -33,6 +33,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   ESP32 examples record a panic.
 - `embedded-react decode-fault` prints a fault record's C call chain and the app's source line, from the
   firmware's ELF.
+- Flow B: an update loop fault names the line where the last effect changed a state.
 
 ## [0.25.0] - 2026-11-20
 ### Added

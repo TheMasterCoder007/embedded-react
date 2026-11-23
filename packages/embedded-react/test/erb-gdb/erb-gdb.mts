@@ -22,7 +22,8 @@
 // which is stepped through. The lists fixture stops in a row's handler, which is entered with its row, and the
 // animations fixture in a fade's completion, which another function calls. The list-fault fixture's handler reads a
 // row its list doesn't have, which stops the run by itself, and runs through with fault stops off. A package cut
-// short is refused, which stops the run too. Each command's output is checked against what the app must show at that
+// short is refused, which stops the run too. The update-loop fixture's effect keeps setting its own state, which stops
+// with that effect's line. Each command's output is checked against what the app must show at that
 // point.
 //
 // Needs CMake, a C compiler and GDB with Python, so it runs on Linux.
@@ -249,6 +250,22 @@ const REFUSED_CHECKS: Check[] = [
   },
 ];
 
+file = 'update-loop.tsx';
+/** An update loop is found between runs of the app's code, and names where an effect last changed a state. */
+const LOOP_STOP = new RegExp(
+  `^App fault: update loop\\n  check: state keeps changing in effects; this one changed it last\\n  at ${file}:18  effect 1$`,
+  'm',
+);
+const LOOP_CHECKS: Check[] = [
+  {
+    command: 'erb error',
+    expected: new RegExp(
+      `^update loop$[\\s\\S]*^  at ${file}:18  effect 1$[\\s\\S]*^The app stopped\\.$`,
+      'm',
+    ),
+  },
+];
+
 const SESSIONS: Session[] = [
   {
     fixture: 'native-calls',
@@ -304,6 +321,15 @@ const SESSIONS: Session[] = [
     stop: REFUSED_STOP,
     checks: REFUSED_CHECKS,
     keepBytes: 200,
+  },
+  {
+    fixture: 'update-loop',
+    taps: '32,20',
+    settle: 0,
+    before: [],
+    setup: [],
+    stop: LOOP_STOP,
+    checks: LOOP_CHECKS,
   },
 ];
 

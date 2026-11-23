@@ -93,7 +93,9 @@ static uint32_t s_queue_head;
 static uint32_t s_queue_count;
 static uint32_t s_queue_effects; /**< Effects at the front of the queue, run before any other event. */
 static bool s_fault_pending;
-static uint16_t s_screen_width; /**< The panel size from the last erb_load(), for the error screen. */
+static bool s_effect_running;
+static ErbVmPlace s_effect_change; /**< Where the running effect first changed a state; ERB_NONE with none. */
+static uint16_t s_screen_width;    /**< The panel size from the last erb_load(), for the error screen. */
 static uint16_t s_screen_height;
 static ERNode* s_root; /**< The running app's root node. */
 static uint16_t s_anim_generation;
@@ -538,6 +540,10 @@ void erb_rt_log(const char* line)
 void erb_rt_set_dirty(uint16_t bit)
 {
     erb_bit_set(dirty_words(), bit);
+    if (s_effect_running && s_effect_change.function == ERB_NONE)
+    {
+        s_effect_change = g_erb_vm;
+    }
 }
 
 ERNode* erb_rt_node(const int32_t* cells)
@@ -807,13 +813,23 @@ static bool any_dirty(void)
 static ErbStatus settle(void)
 {
     uint32_t passes = 0;
+    ErbVmPlace last_change = {.function = ERB_NONE};
     for (;;)
     {
         while (g_erb.program.dirty_words && any_dirty())
         {
             if (++passes > ERB_MAX_UPDATE_PASSES)
             {
-                return erb_rt_fault(ERB_ERROR_UPDATE_LOOP, "state keeps changing in effects", NULL, ERB_NONE, 0u);
+                if (last_change.function == ERB_NONE)
+                {
+                    return erb_rt_fault(ERB_ERROR_UPDATE_LOOP, "state keeps changing in effects", NULL, ERB_NONE, 0u);
+                }
+                /* Others may be in the loop too. */
+                return erb_rt_fault(ERB_ERROR_UPDATE_LOOP,
+                                    "state keeps changing in effects; this one changed it last",
+                                    NULL,
+                                    last_change.function,
+                                    last_change.program_counter);
             }
             /* The pass reads its own copy, so what it sets lands in the next pass. */
             uint32_t* words = dirty_words();
@@ -834,7 +850,14 @@ static ErbStatus settle(void)
         }
         ErbEvent effect;
         queue_pop(&effect);
+        s_effect_change.function = ERB_NONE;
+        s_effect_running = true;
         const ErbStatus status = run(effect.function, 0, NULL);
+        s_effect_running = false;
+        if (s_effect_change.function != ERB_NONE)
+        {
+            last_change = s_effect_change;
+        }
         if (status != ERB_OK)
         {
             return status;

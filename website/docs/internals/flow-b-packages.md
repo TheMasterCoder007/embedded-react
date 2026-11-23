@@ -594,7 +594,8 @@ event runs like this:
    their dirty sets with `JDIRTY` and re-set only the nodes that read a changed slot, then check effect
    dependencies and run the effects whose dependencies changed.
 3. If the effects set state, the update runs again. More than 50 passes is a fault, the same limit at
-   which React reports an update loop.
+   which React reports an update loop. The fault carries the function and offset where an effect last changed a
+   state, or none when no effect did.
 4. Events that arrived while the VM was running (an animation stopped by the handler finishing at once,
    a layout callback) were queued; each now runs in turn, with its own budget.
 5. Control goes back to the host, which commits the frame as it does now.
