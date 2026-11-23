@@ -26,6 +26,7 @@
 //   - the call stack has the app's frames inside the VM's frame
 //   - an app frame's variables are its locals and the app's state
 //   - hover and Watch evaluate an expression over them, as `erb print` does
+//   - a data breakpoint on a state stops where the app changes it, as `erb watch` does
 //
 // The app's commands only work on a halted board, so one that arrives while it runs halts it and resumes it.
 
@@ -74,6 +75,23 @@ interface Status {
   hit: number[];
   description?: string;
   fault?: Fault | null;
+  watch?: Change | null;
+}
+
+/** A watched state's change the board stopped at. */
+interface Change {
+  /** The data breakpoint's number, or null for one `erb watch` set. */
+  id: number | null;
+  label: string;
+  previous: string;
+  value: string;
+  /** The place that wrote it, as `erb watch` prints it. */
+  where: string;
+  /** The line that wrote it, or null when the runtime did. */
+  line: number | null;
+  name: string | null;
+  /** Whether the app is still on the statement that wrote it. */
+  live: boolean;
 }
 
 /** A fault or a refused load the board stopped at. */
@@ -91,7 +109,10 @@ interface Waiter {
 
 // The adapter's own ids, above any GDB hands out.
 const APP_BREAKPOINT = 0x10000000;
+const STATE_BREAKPOINT = 0x20000000;
 const APP_FRAME = 0x10000000;
+/** The frame that shows the line that wrote a state, once the app has moved on from it. */
+const WRITER_FRAME = APP_FRAME - 1;
 const LOCALS_REFERENCE = 0x20000000;
 const STATE_REFERENCE = 0x30000000;
 const ROWS_REFERENCE = 0x30000001;
@@ -103,6 +124,8 @@ const SERVER_POLL_MS = 200;
 const GDB_EXIT_MS = 1000;
 const ERRORS_KEPT = 2000;
 const ANSWER_MARK = '@erb ';
+/** Starts the data id of a state, before its storage name. */
+const STATE_DATA = 'erb:';
 /** The script's own evaluator, typed in the debug console. */
 const PRINT_COMMAND = /^erb print\s+(.+)$/s;
 
@@ -124,6 +147,7 @@ const CAPABILITIES = {
   supportsLogPoints: true,
   supportsEvaluateForHovers: true,
   supportsSetVariable: true,
+  supportsDataBreakpoints: true,
   supportsSteppingGranularity: true,
   supportsExceptionInfoRequest: true,
   exceptionBreakpointFilters: [FAULT_FILTER],
@@ -295,6 +319,12 @@ export class DebugAdapter {
   private readonly stacks = new Map<number, Record<string, any>[] | null>();
   private readonly rowStates = new Map<number, string>();
   private readonly stateStorage = new Map<string, string>();
+  /** The states that are lists, by the name the Variables pane shows. */
+  private readonly listStates = new Set<string>();
+  /** Whether the firmware has the breakpoint hook. */
+  private hook = false;
+  /** How many data breakpoints the editor last set. */
+  private dataBreakpoints = 0;
 
   /** Requests that must not overlap: the app's breakpoints, and the start of the run. */
   private lane: Promise<void> = Promise.resolve();
@@ -373,6 +403,10 @@ export class DebugAdapter {
         return this.setBreakpoints(request, args);
       case 'setExceptionBreakpoints':
         return this.setExceptionBreakpoints(request, args);
+      case 'dataBreakpointInfo':
+        return this.dataBreakpointInfo(request, args);
+      case 'setDataBreakpoints':
+        return this.setDataBreakpoints(request, args);
       case 'exceptionInfo':
         return this.exceptionInfo(request);
       case 'configurationDone':
@@ -633,6 +667,15 @@ export class DebugAdapter {
       stopped.description = this.fault.refused ? 'Load refused' : 'App fault';
       stopped.text = this.fault.reason;
       delete stopped.hitBreakpointIds;
+    } else if (this.status?.watch) {
+      const change = this.status.watch;
+      stopped.reason = 'data breakpoint';
+      stopped.description = `${change.label}: ${change.previous} → ${change.value}`;
+      stopped.text = `Written at ${change.where}`;
+      delete stopped.hitBreakpointIds;
+      if (change.id !== null) {
+        stopped.hitBreakpointIds = [STATE_BREAKPOINT + change.id];
+      }
     } else if (this.status?.hookStop) {
       const hit = this.status.hit;
       stopped.reason = hit.length && !stepped ? 'breakpoint' : 'step';
@@ -814,6 +857,7 @@ export class DebugAdapter {
       capabilities: {
         ...capabilities,
         supportsExceptionInfoRequest: true,
+        supportsDataBreakpoints: true,
         exceptionBreakpointFilters: [
           FAULT_FILTER,
           ...(capabilities.exceptionBreakpointFilters ?? []),
@@ -833,6 +877,7 @@ export class DebugAdapter {
     const info = await this.erb({do: 'info'});
     this.appFile = info.file;
     this.appSource = config.source ?? (info.source || null);
+    this.hook = Boolean(info.hook);
     if (config.program && !info.hook) {
       this.say(
         'embedded-react: the firmware has no breakpoint hook, so breakpoints and stepping in the app are off. Build it with ERB_DEBUG_HOOK=1.',
@@ -1050,6 +1095,83 @@ export class DebugAdapter {
     });
   }
 
+  /**
+   * Offers a data breakpoint on a state. GDB's adapter has none of its own.
+   *
+   * @param request  The request.
+   * @param args  Its arguments.
+   */
+  private dataBreakpointInfo(
+    request: Message,
+    args: Record<string, any>,
+  ): void {
+    const storage =
+      args.variablesReference === STATE_REFERENCE
+        ? this.stateStorage.get(args.name)
+        : undefined;
+    if (storage === undefined) {
+      return this.respond(request, {
+        dataId: null,
+        description: "Only the app's state can break on a change.",
+      });
+    }
+    this.respond(request, {
+      dataId: STATE_DATA + storage,
+      description: this.listStates.has(args.name)
+        ? `${args.name} (rows added or removed)`
+        : args.name,
+      accessTypes: ['write'],
+      canPersist: false,
+    });
+  }
+
+  /**
+   * Sets the editor's data breakpoints, each on a state, as `erb watch` does.
+   *
+   * @param request  The request.
+   * @param args  Its arguments.
+   */
+  private setDataBreakpoints(
+    request: Message,
+    args: Record<string, any>,
+  ): Promise<void> {
+    const wanted: Record<string, any>[] = args.breakpoints ?? [];
+    return this.inLane(async () => {
+      let set: Record<string, any>[] = [];
+      let refusal: string | undefined;
+      // Nothing to set or to remove leaves a running board alone.
+      if (wanted.length || this.dataBreakpoints) {
+        try {
+          const answer = await this.whileHalted(() =>
+            this.erb({
+              do: 'watch',
+              states: wanted.map(entry => {
+                const dataId = String(entry.dataId);
+                return dataId.startsWith(STATE_DATA)
+                  ? dataId.slice(STATE_DATA.length)
+                  : dataId;
+              }),
+            }),
+          );
+          set = answer.breakpoints;
+        } catch (error: any) {
+          refusal = error.message;
+        }
+      }
+      this.dataBreakpoints = set.filter(made => made.verified).length;
+      this.respond(request, {
+        breakpoints: wanted.map((_entry, index) => {
+          const made = set[index] ?? {verified: false, message: refusal};
+          return {
+            id: made.id === undefined ? undefined : STATE_BREAKPOINT + made.id,
+            verified: made.verified,
+            message: made.message,
+          };
+        }),
+      });
+    });
+  }
+
   private async exceptionInfo(request: Message): Promise<void> {
     if (!this.fault) {
       return this.forward(request);
@@ -1083,12 +1205,10 @@ export class DebugAdapter {
     args: Record<string, any>,
     kind: 'into' | 'over' | 'out',
   ): Promise<void> {
-    // A faulted app has no next statement.
-    if (
-      !this.status?.hookStop ||
-      this.fault ||
-      args.granularity === 'instruction'
-    ) {
+    // A faulted app has no next statement. At a state's change the app steps on when the hook can end the step.
+    const inApp =
+      this.status?.hookStop || (this.status?.watch?.live && this.hook);
+    if (!inApp || this.fault || args.granularity === 'instruction') {
       return this.resume(request, args);
     }
     // The hook ends the step where the app's next statement starts, so the board just runs on.
@@ -1127,7 +1247,21 @@ export class DebugAdapter {
     }
     const status = this.status;
     let merged: Record<string, any>[] | null = null;
-    if (status?.frames.length) {
+    const change = status?.watch;
+    // The app has moved on from the line that wrote the state, so the line gets a frame of its own.
+    const writer =
+      change && !change.live && change.line !== null
+        ? [
+            {
+              id: WRITER_FRAME,
+              name: `${change.name} (wrote ${change.label})`,
+              line: change.line - this.lineShift,
+              column: 0,
+              source: {name: this.appFile, path: this.appSource ?? undefined},
+            },
+          ]
+        : [];
+    if (status && (status.frames.length || writer.length)) {
       const body = await this.gdbRequest('stackTrace', {
         threadId,
         startFrame: 0,
@@ -1153,9 +1287,13 @@ export class DebugAdapter {
                 },
           presentationHint: frame.line === null ? 'subtle' : 'normal',
         }));
-        // What the app called sits above its frames. At a stop of the hook's that is only the hook.
-        const called = status.hookStop ? [] : frames.slice(0, vmFrame);
-        merged = [...called, ...appFrames, ...frames.slice(vmFrame)];
+        // What the app called sits above its frames. At a stop of the hook's that is only the hook, and at a
+        // state's change only what wrote it.
+        const called =
+          status.hookStop || change?.live ? [] : frames.slice(0, vmFrame);
+        merged = [...writer, ...called, ...appFrames, ...frames.slice(vmFrame)];
+      } else if (writer.length) {
+        merged = [...writer, ...frames];
       }
     }
     this.stacks.set(threadId, merged);
@@ -1196,7 +1334,7 @@ export class DebugAdapter {
   }
 
   private withoutAppFrame(args: Record<string, any>): Record<string, any> {
-    if (this.appFrame(args.frameId) < 0) {
+    if (this.appFrame(args.frameId) < 0 && args.frameId !== WRITER_FRAME) {
       return args;
     }
     const {frameId: _appFrame, ...rest} = args;
@@ -1213,6 +1351,10 @@ export class DebugAdapter {
       expensive: false,
     };
     const frame = this.appFrame(args.frameId);
+    if (args.frameId === WRITER_FRAME) {
+      // Its locals are gone with the statement.
+      return this.respond(request, {scopes: [stateScope]});
+    }
     if (frame >= 0) {
       return this.respond(request, {
         scopes: [
@@ -1271,6 +1413,9 @@ export class DebugAdapter {
         if (variable.storage) {
           this.stateStorage.set(variable.name, variable.storage);
         }
+        if (variable.type === 'list') {
+          this.listStates.add(variable.name);
+        }
         return {
           name: variable.name,
           value: variable.value,
@@ -1325,7 +1470,8 @@ export class DebugAdapter {
     const typed = String(args.expression).trim();
     // A command typed in the debug console is GDB's, but `erb print` reads the frame the editor has selected.
     const print = args.context === 'repl' ? PRINT_COMMAND.exec(typed) : null;
-    if (frame >= 0 && (print || args.context !== 'repl')) {
+    const inApp = frame >= 0 || args.frameId === WRITER_FRAME;
+    if (inApp && (print || args.context !== 'repl')) {
       return this.respond(
         request,
         await this.appValue(print ? print[1] : typed, frame),

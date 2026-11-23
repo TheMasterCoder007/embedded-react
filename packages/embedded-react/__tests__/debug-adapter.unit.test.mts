@@ -24,6 +24,8 @@ import {
 } from '../debug-adapter.mts';
 
 const APP_ID = 0x10000000;
+const STATE_ID = 0x20000000;
+const WRITER_FRAME = 0x0fffffff;
 const LOCALS = 0x20000000;
 const STATE = 0x30000000;
 const APP_PATH = '/work/app/App.tsx';
@@ -124,6 +126,18 @@ class FakeGdb {
           : {verified: false, message: 'the firmware has no breakpoint hook'};
       case 'set':
         return {value: `${request.state}=${request.value}`};
+      case 'watch':
+        return {
+          breakpoints: request.states.map((state: string, index: number) =>
+            index < 2
+              ? {id: index + 1, verified: true}
+              : {
+                  verified: false,
+                  message:
+                    'the chip has no hardware watchpoint left: all 2 are in use',
+                },
+          ),
+        };
       case 'evaluate':
         switch (request.expression) {
           case 'step':
@@ -763,6 +777,178 @@ describe('debug adapter', () => {
       context: 'hover',
     });
     expect(hover.success).toBe(false);
+  });
+
+  it("offers a data breakpoint on a state, and on nothing of GDB's", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    await editor.request('variables', {variablesReference: STATE});
+    const state = await editor.request('dataBreakpointInfo', {
+      variablesReference: STATE,
+      name: 'total',
+    });
+    expect(state.body).toEqual({
+      dataId: 'erb:total',
+      description: 'total',
+      accessTypes: ['write'],
+      canPersist: false,
+    });
+    const list = await editor.request('dataBreakpointInfo', {
+      variablesReference: STATE,
+      name: 'rows',
+    });
+    expect(list.body.dataId).toBe('erb:s3');
+    expect(list.body.description).toBe('rows (rows added or removed)');
+    for (const variablesReference of [LOCALS, 7]) {
+      const other = await editor.request('dataBreakpointInfo', {
+        variablesReference,
+        name: 'step',
+      });
+      expect(other.body.dataId).toBeNull();
+    }
+    expect(editor.gdb.asked).not.toContain('dataBreakpointInfo');
+  });
+
+  it('sets data breakpoints as the script watches a state, and says which the chip has no watchpoint for', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    // None to set and none to remove: the board runs on.
+    editor.gdb.asked.length = 0;
+    await editor.request('setDataBreakpoints', {breakpoints: []});
+    expect(editor.gdb.asked).toEqual([]);
+
+    const set = await editor.request('setDataBreakpoints', {
+      breakpoints: [
+        {dataId: 'erb:total'},
+        {dataId: 'erb:s3'},
+        {dataId: 'erb:on'},
+      ],
+    });
+    expect(editor.gdb.asked).toEqual(['pause', 'erb watch', 'continue']);
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'watch',
+      states: ['total', 's3', 'on'],
+    });
+    expect(set.body.breakpoints).toEqual([
+      {id: STATE_ID + 1, verified: true},
+      {id: STATE_ID + 2, verified: true},
+      {
+        verified: false,
+        message: 'the chip has no hardware watchpoint left: all 2 are in use',
+      },
+    ]);
+    expect(editor.events.some(event => event.event === 'stopped')).toBe(false);
+
+    // The last ones are removed by the script too.
+    editor.gdb.asked.length = 0;
+    await editor.request('setDataBreakpoints', {breakpoints: []});
+    expect(editor.gdb.asked).toEqual(['pause', 'erb watch', 'continue']);
+  });
+
+  it("shows a state's change on the line that wrote it, with the old and new value", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    editor.gdb.status = {
+      loaded: true,
+      hookStop: false,
+      frames: [{name: 'onPress', line: 32}],
+      hit: [],
+      watch: {
+        id: 1,
+        label: 'total',
+        previous: '4',
+        value: '5',
+        where: 'App.tsx:32  onPress',
+        line: 32,
+        name: 'onPress',
+        live: true,
+      },
+    };
+    editor.gdb.frames = [
+      {id: 1, name: 'erb_store', line: 5},
+      {id: 2, name: 'erb_vm_run', line: 1200},
+      {id: 3, name: 'main', line: 10},
+    ];
+    const stopped = editor.nextEvent('stopped');
+    editor.gdb.event('stopped', {
+      reason: 'data breakpoint',
+      threadId: 1,
+      hitBreakpointIds: [-3],
+    });
+    expect((await stopped).body).toEqual({
+      reason: 'data breakpoint',
+      description: 'total: 4 → 5',
+      text: 'Written at App.tsx:32  onPress',
+      threadId: 1,
+      hitBreakpointIds: [STATE_ID + 1],
+    });
+    const stack = await editor.request('stackTrace', {threadId: 1});
+    expect(
+      stack.body.stackFrames.map(
+        (frame: Body) => `${frame.name}:${frame.line}`,
+      ),
+    ).toEqual(['onPress:32', 'erb_vm_run:1200', 'main:10']);
+    // The app is still on that statement, so the editor's buttons step it.
+    editor.gdb.asked.length = 0;
+    await editor.request('next', {threadId: 1});
+    expect(editor.gdb.asked).toEqual(['erb step', 'continue']);
+  });
+
+  it('gives the line that wrote a state its own frame once the app has moved on', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    editor.gdb.status = {
+      loaded: true,
+      hookStop: false,
+      frames: [],
+      hit: [],
+      watch: {
+        id: null,
+        label: 'label',
+        previous: '"a"',
+        value: '"b"',
+        where: 'App.tsx:33  onPress',
+        line: 33,
+        name: 'onPress',
+        live: false,
+      },
+    };
+    editor.gdb.frames = [
+      {id: 1, name: 'erb_tick', line: 40},
+      {id: 2, name: 'main', line: 10},
+    ];
+    const stopped = editor.nextEvent('stopped');
+    editor.gdb.event('stopped', {reason: 'data breakpoint', threadId: 1});
+    expect((await stopped).body.description).toBe('label: "a" → "b"');
+    // `erb watch` set this one, so it is none of the editor's breakpoints.
+    expect((await stopped).body.hitBreakpointIds).toBeUndefined();
+    const stack = await editor.request('stackTrace', {threadId: 1});
+    expect(stack.body.stackFrames[0]).toEqual({
+      id: WRITER_FRAME,
+      name: 'onPress (wrote label)',
+      line: 33,
+      column: 0,
+      source: {name: 'App.tsx', path: APP_PATH},
+    });
+    expect(
+      stack.body.stackFrames.slice(1).map((frame: Body) => frame.name),
+    ).toEqual(['erb_tick', 'main']);
+    const scopes = await editor.request('scopes', {frameId: WRITER_FRAME});
+    expect(scopes.body.scopes.map((scope: Body) => scope.name)).toEqual([
+      'App state',
+    ]);
+    const hover = await editor.request('evaluate', {
+      expression: 'total + 1',
+      frameId: WRITER_FRAME,
+      context: 'hover',
+    });
+    expect(hover.body.result).toBe('5');
+    expect(editor.gdb.erbRequests.at(-1)?.frame).toBe(-1);
+    // The buttons step C from here.
+    editor.gdb.asked.length = 0;
+    await editor.request('next', {threadId: 1});
+    expect(editor.gdb.asked).toEqual(['next']);
   });
 
   it('runs the board on after attaching, with its breakpoints written', async () => {
