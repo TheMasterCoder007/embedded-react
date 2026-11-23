@@ -1247,14 +1247,14 @@ class Evaluator:
             return target.row(int(key)) if whole else UNDEFINED
         if isinstance(target, str) and node.kind == "index" and is_number(key):
             # By UTF-16 unit, as `length` counts: half of a pair is a string of its own.
-            units = target.encode("utf-16-le")
+            units = target.encode("utf-16-le", "surrogatepass")
             if not whole or not 0 <= key < len(units) // 2:
                 return UNDEFINED
             return units[2 * int(key) : 2 * int(key) + 2].decode("utf-16-le", "surrogatepass")
         if isinstance(target, Rows) and key == "length":
             return target.count
         if isinstance(target, str) and key == "length":
-            return len(target.encode("utf-16-le")) // 2
+            return len(target.encode("utf-16-le", "surrogatepass")) // 2
         raise ErbError("%s is %s, which has no %s here" % (target_node.text, kind_of(target), to_text(key)))
 
     def unary(self, node):
