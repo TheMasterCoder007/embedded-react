@@ -163,6 +163,11 @@ target_compile_definitions(er_runtime PUBLIC
     ERB_MAX_LOOPS=16
     ERB_REPORT_PLACES=16
 )
+# -DERB_DEBUG_HOOK=1 adds the VM's hook for breakpoints and stepping from GDB. It holds 8 places: the default 16
+# don't fit beside the framebuffer.
+if(ERB_DEBUG_HOOK)
+    target_compile_definitions(er_runtime PUBLIC ERB_DEBUG_HOOK=1 ERB_DEBUG_STOPS=8u)
+endif()
 # The VM's dispatch loop stays in flash: at about 12 KB it doesn't fit in SRAM beside the framebuffer.
 
 # --- firmware --------------------------------------------------------------------------------------

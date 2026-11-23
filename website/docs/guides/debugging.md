@@ -23,10 +23,14 @@ the board, so they work on a board that has stopped answering.
 - **For breakpoints and stepping, firmware built with `ERB_DEBUG_HOOK=1`.** Reading the app needs no option.
 
 `ERB_DEBUG_HOOK` is a CMake option of `runtime/`, off by default. The ESP32-S3 example takes it as
-`idf.py -D ERB_DEBUG_HOOK=1`. A firmware that compiles the runtime's sources itself, as the RP2040 example does,
-adds `ERB_DEBUG_HOOK=1` to their compile definitions. With it the VM tests one flag before each instruction, so
-leave it out of a release build. It holds 16 breakpoints, which `ERB_DEBUG_STOPS` changes, at 8 bytes each. The
-RP2040 example has too little RAM left beside its framebuffer for 16, and links with `ERB_DEBUG_STOPS=8`.
+`idf.py -D ERB_DEBUG_HOOK=1`, and the RP2040 example as `-DERB_DEBUG_HOOK=1` when it is configured. A firmware that
+compiles the runtime's sources itself adds `ERB_DEBUG_HOOK=1` to their compile definitions. With it the VM tests
+one flag before each instruction, so leave it out of a release build.
+
+The hook holds 16 places, which `ERB_DEBUG_STOPS` changes, at 8 bytes each. A place is one spot in the app's code.
+A breakpoint takes one for each statement that starts on its line, so a line can take more than one, and
+`erb break` says when the breakpoints need more places than the hook has. The RP2040 example has too little RAM
+left beside its framebuffer for 16, and holds 8.
 
 ## Connect the probe
 
@@ -338,7 +342,7 @@ An RP2040 with a debug probe:
 }
 ```
 
-The board runs on once attached; `"stopOnAttach": true` leaves it halted.
+Once attached, the board keeps running; `"stopOnAttach": true` leaves it halted.
 [The debug adapter](../internals/flow-b-packages.md#the-debug-adapter) lists every field.
 
 ### At a stop in the app
@@ -366,20 +370,20 @@ A breakpoint in a C file works as in any C debug session, and so does **Pause**.
 
 ## When it doesn't work
 
-| Symptom                                                                         | Cause and fix                                                                                                                                                           |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source` fails with `Error in sourced command file` and `Undefined command: ""` | This GDB has no Python. Use `arm-none-eabi-gdb-py`, a system `gdb` or `gdb-multiarch`, or Espressif's GDB with a `python3` on `PATH` it was built for                   |
-| The editor's session ends as it starts                                          | The GDB is older than 14, or has no Python. `gdb --version`, then the row above                                                                                         |
-| A breakpoint never fires on an ESP32-S3                                         | The chip has had a debug session since its last power-on reset, and the server couldn't read the flash mapping. End the server's arguments with `-c "init; reset halt"` |
-| A breakpoint never fires on a dual-bank STM32H7                                 | The server's memory map leaves out the second bank, so GDB writes a software breakpoint into flash. Add `-c "set DUAL_BANK 1"` before the target file                   |
-| `erb break` says the firmware has no breakpoint hook                            | Build the firmware with `ERB_DEBUG_HOOK=1`                                                                                                                              |
-| `the board runs build …, but dist/app.erdbg is build …`                         | The debug file is from another build. Load the one written with the package on the board, or flash the package you just built                                           |
-| The debug file is another format, or the descriptor another version             | The script, the compiler and the firmware's runtime are from different releases. Use the script from the `embedded-react` the firmware and the app were built with      |
-| `erb_debug doesn't hold the runtime's descriptor`                               | The ELF isn't the one the board runs                                                                                                                                    |
-| The server won't start, or the editor says the port is in use                   | A debug server from an earlier session is still running and holds port 3333. End it                                                                                     |
-| The board resets during a halt                                                  | The watchdog ran on: [While the board is halted](#while-the-board-is-halted)                                                                                            |
-| The board stays frozen after GDB quits                                          | GDB left it halted. `monitor resume` before `disconnect`, or `disconnectCommands` in the editor                                                                         |
-| `continue` says `Could not insert hardware watchpoint`                          | More states are watched than the chip has hardware watchpoints: an ESP32-S3 has two. Delete one                                                                         |
+| Symptom                                                                         | Cause and fix                                                                                                                                                              |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source` fails with `Error in sourced command file` and `Undefined command: ""` | This GDB has no Python. Use `arm-none-eabi-gdb-py`, a system `gdb` or `gdb-multiarch`, or Espressif's GDB with a `python3` on `PATH` it was built for                      |
+| The editor's session ends as it starts                                          | The GDB is older than 14, or has no Python. `gdb --version`, then the row above                                                                                            |
+| A breakpoint never fires on an ESP32-S3                                         | The chip has had a debug session since its last power-on reset, and the server couldn't read the flash mapping. End the server's arguments with `-c "init; reset halt"`    |
+| A breakpoint never fires on a dual-bank STM32H7                                 | The server's memory map leaves out the second bank, so GDB writes a software breakpoint into flash. Add `-c "set DUAL_BANK 1"` before the target file                      |
+| `erb break` says the firmware has no breakpoint hook                            | Build the firmware with `ERB_DEBUG_HOOK=1`                                                                                                                                 |
+| `the board runs build …, but dist/app.erdbg is build …`                         | The debug file is from another build. Load the one written with the package on the board, or flash the package you just built                                              |
+| The debug file is another format, or the descriptor another version             | The script, the compiler and the firmware's runtime are from different releases. Use the script from the `embedded-react` release the firmware and the app were built with |
+| `erb_debug doesn't hold the runtime's descriptor`                               | The ELF isn't the one the board runs                                                                                                                                       |
+| The server won't start, or the editor says the port is in use                   | A debug server from an earlier session is still running and holds port 3333. End it                                                                                        |
+| The board resets during a halt                                                  | The watchdog ran on: [While the board is halted](#while-the-board-is-halted)                                                                                               |
+| The board stays frozen after GDB quits                                          | GDB left it halted. `monitor resume` before `disconnect`, or `disconnectCommands` in the editor                                                                            |
+| `continue` says `Could not insert hardware watchpoint`                          | More states are watched than the chip has hardware watchpoints: an ESP32-S3 has two. Delete one                                                                            |
 
 A board with no probe attached when it faulted has a different tool: the firmware records the fault, and
 `embedded-react decode-fault` traces it on the host.
