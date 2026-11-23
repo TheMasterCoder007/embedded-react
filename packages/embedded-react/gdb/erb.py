@@ -644,7 +644,13 @@ def show(value):
     if isinstance(value, (int, float)):
         return number_text(value)
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        text = json.dumps(value, ensure_ascii=False)
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            # Half of a UTF-16 pair can't be printed: it shows as its escape.
+            text = json.dumps(value)
+        return text
     return value.text() if isinstance(value, (Row, Rows)) else value.text
 
 
@@ -1233,7 +1239,11 @@ class Evaluator:
         if isinstance(target, Rows) and node.kind == "index" and is_number(key):
             return target.row(int(key)) if whole else UNDEFINED
         if isinstance(target, str) and node.kind == "index" and is_number(key):
-            return target[int(key)] if whole and 0 <= key < len(target) else UNDEFINED
+            # By UTF-16 unit, as `length` counts: half of a pair is a string of its own.
+            units = target.encode("utf-16-le")
+            if not whole or not 0 <= key < len(units) // 2:
+                return UNDEFINED
+            return units[2 * int(key) : 2 * int(key) + 2].decode("utf-16-le", "surrogatepass")
         if isinstance(target, Rows) and key == "length":
             return target.count
         if isinstance(target, str) and key == "length":
@@ -1269,7 +1279,9 @@ class Evaluator:
             return equal == (operator[0] == "=")
         left, right = self.plain(left_node, operator), self.plain(right_node, operator)
         if operator == "+" and (isinstance(left, str) or isinstance(right, str)):
-            return to_text(left) + to_text(right)
+            # Two halves of a UTF-16 pair join into its character.
+            joined = to_text(left) + to_text(right)
+            return joined.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "surrogatepass")
         if operator in ("<", "<=", ">", ">="):
             return compare(operator, left, right)
         if operator in ("&", "|", "^", "<<", ">>", ">>>"):
@@ -2071,6 +2083,7 @@ def hit_counts(test, passes):
 
 def log_line(text):
     """Prints a logpoint's message, to the editor in a debug adapter's session, as GDB's own logpoints do."""
+    text = text.encode("utf-8", "replace").decode("utf-8")
     server = sys.modules.get("gdb.dap.server")
     if server is not None and hasattr(server, "send_event"):
         server.send_event("output", {"category": "console", "output": text + "\n"})
