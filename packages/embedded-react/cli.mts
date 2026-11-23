@@ -54,6 +54,7 @@ import {
   parseFaultRecord,
   readElf,
 } from './fault-decode.mts';
+import {DebugAdapter} from './debug-adapter.mts';
 import type {AssetsConfig} from './assets/font-config.mts';
 import type {Screen} from './aot/compiler/options.mts';
 
@@ -122,6 +123,9 @@ Usage:
                                                  another. File and line come from the toolchain's addr2line.
                                                  Give --elf once for each image of a firmware built as
                                                  several (a bootloader, a module it loads).
+  embedded-react debug-adapter                 Debug a Flow B app from an editor: a debug adapter on stdin
+                                                 and stdout, between the editor and GDB. An editor starts
+                                                 it; the VS Code extension does.
   embedded-react native-header <package or file> [--out <dir>]
                                                Write a C header for each native module a device package
                                                  or a .ts file declares: its records, where each argument
@@ -1077,6 +1081,17 @@ if (command === 'dev') {
   await where(commandArgs);
 } else if (command === 'decode-fault') {
   await decodeFault(commandArgs);
+} else if (command === 'debug-adapter') {
+  // The protocol owns stdout from here.
+  const adapter = new DebugAdapter({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  // An editor may end the adapter without a disconnect: GDB and the GDB server end with it.
+  process.on('exit', () => adapter.end(true));
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.on(signal, () => process.exit(0));
+  }
 } else if (command === 'native-header') {
   await nativeHeader(commandArgs);
 } else if (

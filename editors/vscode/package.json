@@ -1,0 +1,295 @@
+{
+  "name": "embedded-react-debug",
+  "displayName": "Embedded React",
+  "description": "Debug an embedded-react app on a board: breakpoints, stepping and state in the app's own source, through a debug probe.",
+  "version": "0.25.0",
+  "publisher": "embedded-react",
+  "license": "Apache-2.0",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheMasterCoder007/embedded-react.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onDebugResolve:embedded-react"
+  ],
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "package": "npm run build && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/vscode": "~1.90.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.5.0"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Embedded React",
+      "properties": {
+        "embedded-react.cli": {
+          "type": "string",
+          "default": "",
+          "description": "The embedded-react CLI to run the debug adapter from. Empty finds the package in the project's node_modules."
+        },
+        "embedded-react.node": {
+          "type": "string",
+          "default": "node",
+          "description": "The Node.js that runs the debug adapter."
+        }
+      }
+    },
+    "breakpoints": [
+      {
+        "language": "javascript"
+      },
+      {
+        "language": "javascriptreact"
+      },
+      {
+        "language": "typescript"
+      },
+      {
+        "language": "typescriptreact"
+      },
+      {
+        "language": "c"
+      },
+      {
+        "language": "cpp"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "embedded-react",
+        "label": "Embedded React",
+        "languages": [
+          "javascriptreact",
+          "typescriptreact",
+          "c",
+          "cpp"
+        ],
+        "configurationAttributes": {
+          "attach": {
+            "required": [
+              "program",
+              "debugFile",
+              "target"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The firmware's ELF, as the board runs it."
+              },
+              "debugFile": {
+                "type": "string",
+                "description": "The app's debug file: the app.erdbg the build writes beside the package.",
+                "default": "${workspaceFolder}/dist/app.erdbg"
+              },
+              "target": {
+                "type": "string",
+                "description": "Where the GDB server listens, as GDB's `target remote` takes it.",
+                "default": "localhost:3333"
+              },
+              "gdb": {
+                "type": "string",
+                "description": "The GDB for the board: version 14 or later, built with Python.",
+                "default": "gdb"
+              },
+              "source": {
+                "type": "string",
+                "description": "The app's source file, when it isn't found beside the debug file."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The folder GDB and the GDB server run in."
+              },
+              "server": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "A GDB server to start with the session and end with it: the program and its arguments."
+              },
+              "serverReady": {
+                "type": "string",
+                "description": "Text the GDB server prints when GDB can connect. Without it, the session waits for the target's port."
+              },
+              "serverTimeout": {
+                "type": "number",
+                "description": "How long to wait for the GDB server, in milliseconds.",
+                "default": 10000
+              },
+              "setupCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "GDB commands to run before the ELF is loaded."
+              },
+              "postAttachCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "GDB commands to run once it is connected to the board."
+              },
+              "disconnectCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "GDB commands to run before the session ends, with the board halted."
+              },
+              "stopOnAttach": {
+                "type": "boolean",
+                "description": "Leave the board halted once attached.",
+                "default": false
+              },
+              "environment": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables for GDB and the GDB server, over the editor's own. A GDB that picks its Python from PATH needs a PATH with one it was built for."
+              }
+            }
+          },
+          "launch": {
+            "required": [
+              "program",
+              "debugFile"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "A Flow B host program to run under GDB."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The program's arguments."
+              },
+              "debugFile": {
+                "type": "string",
+                "description": "The app's debug file: the app.erdbg the build writes beside the package.",
+                "default": "${workspaceFolder}/dist/app.erdbg"
+              },
+              "gdb": {
+                "type": "string",
+                "description": "The GDB to run: version 14 or later, built with Python.",
+                "default": "gdb"
+              },
+              "source": {
+                "type": "string",
+                "description": "The app's source file, when it isn't found beside the debug file."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The folder the program runs in."
+              },
+              "setupCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "GDB commands to run before the program is loaded."
+              },
+              "environment": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables for GDB and the GDB server, over the editor's own. A GDB that picks its Python from PATH needs a PATH with one it was built for."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "embedded-react",
+            "request": "attach",
+            "name": "Debug the app on the board",
+            "program": "${workspaceFolder}/build/firmware.elf",
+            "debugFile": "${workspaceFolder}/dist/app.erdbg",
+            "gdb": "arm-none-eabi-gdb",
+            "server": [
+              "openocd",
+              "-f",
+              "interface/stlink.cfg",
+              "-f",
+              "target/stm32f7x.cfg"
+            ],
+            "serverReady": "Listening on port 3333 for gdb connections",
+            "target": "localhost:3333",
+            "disconnectCommands": [
+              "monitor resume"
+            ]
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Embedded React: board through OpenOCD",
+            "description": "Debug a Flow B app on a board with a probe OpenOCD drives, such as an ST-Link.",
+            "body": {
+              "type": "embedded-react",
+              "request": "attach",
+              "name": "Debug the app on the board",
+              "program": "^\"\\${workspaceFolder}/${1:build/firmware.elf}\"",
+              "debugFile": "^\"\\${workspaceFolder}/dist/app.erdbg\"",
+              "gdb": "${2:arm-none-eabi-gdb}",
+              "server": [
+                "openocd",
+                "-f",
+                "${3:interface/stlink.cfg}",
+                "-f",
+                "${4:target/stm32f7x.cfg}"
+              ],
+              "serverReady": "Listening on port 3333 for gdb connections",
+              "target": "localhost:3333",
+              "disconnectCommands": [
+                "monitor resume"
+              ]
+            }
+          },
+          {
+            "label": "Embedded React: ESP32-S3 built-in JTAG",
+            "description": "Debug a Flow B app on an ESP32-S3 over its USB port.",
+            "body": {
+              "type": "embedded-react",
+              "request": "attach",
+              "name": "Debug the app on the ESP32-S3",
+              "program": "^\"\\${workspaceFolder}/${1:build/firmware.elf}\"",
+              "debugFile": "^\"\\${workspaceFolder}/dist/app.erdbg\"",
+              "gdb": "xtensa-esp32s3-elf-gdb",
+              "server": [
+                "openocd",
+                "-f",
+                "board/esp32s3-builtin.cfg",
+                "-c",
+                "init; reset halt"
+              ],
+              "serverReady": "Listening on port 3333 for gdb connections",
+              "target": "localhost:3333",
+              "disconnectCommands": [
+                "monitor resume"
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -192,7 +192,8 @@ the one that isn't running, and the last good package stays until a new one pass
 
 The layer also makes a hang reset the board (`CONFIG_ESP_TASK_WDT_PANIC`). To check the error screen, add
 `-DER_BOARD_CRASH_TEST=1` to the build for a panic 5 seconds after boot, or `=2` for a hang. Each shows the error
-screen after the reset, naming the fault, then the app comes back and it happens again.
+screen after the reset, naming the fault, then the app comes back and it happens again. `=3` panics when an app
+calls `Chip.freeMemory()`, to check a debugger's stop in a call the app made.
 
 The thermostat demo picks its wide layout at 800×480.
 

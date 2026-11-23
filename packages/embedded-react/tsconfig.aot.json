@@ -28,6 +28,7 @@
     "test/erb-frames/*.mts",
     "test/erb-frames/*.d.ts",
     "test/erb-gdb/*.mts",
+    "test/erb-dap/*.mts",
     "test/runtime/*.mts",
     "test/erb-fuzz/*.mts",
     "assets/**/*.mts",

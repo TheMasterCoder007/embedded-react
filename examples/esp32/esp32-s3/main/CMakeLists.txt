@@ -76,7 +76,8 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_HOTRELOAD=$<BOOL:${ER_HOT
 # the landscape panel; the thermostat demo stacks its layout for the narrower width.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_DISPLAY_ROTATION=0)
 
-# A forced failure, to check the error screen on hardware (see main_flow_b.c): 1 = a panic, 2 = a hang.
+# A forced failure, to check the error screen on hardware (see main_flow_b.c): 1 = a panic, 2 = a hang, and
+# 3 = a panic when an app calls Chip.freeMemory() (see native_modules.c).
 if(DEFINED ER_BOARD_CRASH_TEST)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_BOARD_CRASH_TEST=${ER_BOARD_CRASH_TEST})
 endif()

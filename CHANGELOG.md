@@ -23,6 +23,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   built with `ERB_DEBUG_HOOK=1`. The app doesn't count the time a board is halted.
 - Flow B: `erb locals` shows a function's parameters and locals by name, and `erb where` each function's
   parameters. `app.erdbg` is format 2.
+- Flow B: `embedded-react debug-adapter` debugs an app from an editor through GDB, with a VS Code extension
+  (`editors/vscode`) that registers it.
 - A hard fault's record holds the link register, the fault status registers, words of the stack, and where a
   Flow B app was. The error screen shows the app's source line beside the fault address.
 - A Cortex-M fault handler that fills the record (`er_fault_cortex_m.h`). The RP2040 example uses it, and the

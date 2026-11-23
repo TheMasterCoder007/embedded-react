@@ -41,6 +41,10 @@ enum
     NATIVE_COUNT
 };
 
+/* `idf.py -DER_BOARD_CRASH_TEST=3` panics when an app calls Chip.freeMemory(), to check a debugger's stop in a call
+ * the app made. */
+#define CRASH_TEST_IN_A_CALL 3
+
 static const char* TAG = "native-modules";
 
 static temperature_sensor_handle_t s_thermometer;
@@ -61,6 +65,9 @@ static bool chip_free_memory(const int32_t* arguments, int32_t* result, void* co
 {
     (void)arguments;
     (void)context;
+#if defined(ER_BOARD_CRASH_TEST) && ER_BOARD_CRASH_TEST == CRASH_TEST_IN_A_CALL
+    *(volatile uint32_t*)0u = 0u;
+#endif
     *result = (int32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     return true;
 }
