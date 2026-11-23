@@ -20,10 +20,12 @@
 // GDB's own adapter (`gdb -i dap`, GDB 14 or later with Python) and gdb/erb.py loaded. What is about C passes through
 // as it is. What is about the app is answered from the script's `erb dap` command:
 //
-//   - a breakpoint in the app's source file goes to the VM's hook, as `erb break` does
+//   - a breakpoint in the app's source file goes to the VM's hook, as `erb break` does, with its condition, hit count
+//     and log message
 //   - a stop the hook made shows the app's line, and step in, over and out step the app
 //   - the call stack has the app's frames inside the VM's frame
 //   - an app frame's variables are its locals and the app's state
+//   - hover and Watch evaluate an expression over them, as `erb print` does
 //
 // The app's commands only work on a halted board, so one that arrives while it runs halts it and resumes it.
 
@@ -101,6 +103,8 @@ const SERVER_POLL_MS = 200;
 const GDB_EXIT_MS = 1000;
 const ERRORS_KEPT = 2000;
 const ANSWER_MARK = '@erb ';
+/** The script's own evaluator, typed in the debug console. */
+const PRINT_COMMAND = /^erb print\s+(.+)$/s;
 
 /** The Breakpoints pane's checkbox for the app's faults. */
 const FAULT_FILTER = {
@@ -116,6 +120,8 @@ const CAPABILITIES = {
   supportsConfigurationDoneRequest: true,
   supportsFunctionBreakpoints: true,
   supportsConditionalBreakpoints: true,
+  supportsHitConditionalBreakpoints: true,
+  supportsLogPoints: true,
   supportsEvaluateForHovers: true,
   supportsSetVariable: true,
   supportsSteppingGranularity: true,
@@ -197,19 +203,6 @@ export function writeMessage(output: Writable, message: Message): void {
  */
 function escapeFilename(name: string): string {
   return name.replace(/[ \t\n\r\f\v\\'"]/g, '\\$&');
-}
-
-/**
- * Whether an editor's breakpoint asks for more than a stop on its line.
- *
- * @param breakpoint  The breakpoint, as setBreakpoints gives it.
- *
- * @returns True when it has a condition, a hit count or a log message.
- */
-function isConditional(breakpoint: Record<string, any>): boolean {
-  return Boolean(
-    breakpoint.condition || breakpoint.hitCondition || breakpoint.logMessage,
-  );
 }
 
 /**
@@ -786,7 +779,7 @@ export class DebugAdapter {
       if (this.running) {
         await this.pauseQuietly();
       }
-      await this.erb({do: 'breakpoints', lines: []}).catch(() => {});
+      await this.erb({do: 'breakpoints', breakpoints: []}).catch(() => {});
       for (const command of this.config.disconnectCommands ?? []) {
         await this.console(command);
       }
@@ -988,27 +981,22 @@ export class DebugAdapter {
       this.appSource = path;
       const wanted: Record<string, any>[] =
         args.breakpoints ?? (args.lines ?? []).map((line: number) => ({line}));
-      // The hook stops at a place and tests nothing, so a breakpoint that asks for more is refused, not set bare.
-      const plain = wanted.filter(entry => !isConditional(entry));
+      // The script tests a condition, counts the hits and logs a message at each stop of the hook's.
       const answer = await this.whileHalted(() =>
         this.erb({
           do: 'breakpoints',
-          lines: plain.map(entry => entry.line + this.lineShift),
+          breakpoints: wanted.map(entry => ({
+            line: entry.line + this.lineShift,
+            condition: entry.condition,
+            hitCondition: entry.hitCondition,
+            logMessage: entry.logMessage,
+          })),
         }),
       );
-      const set: Record<string, any>[] = [...answer.breakpoints];
+      const set: Record<string, any>[] = answer.breakpoints;
       this.respond(request, {
-        breakpoints: wanted.map(entry => {
-          if (isConditional(entry)) {
-            return {
-              verified: false,
-              message:
-                "A breakpoint in the app can't have a condition, a hit count or a log message yet.",
-              line: entry.line,
-              source: args.source,
-            };
-          }
-          const made = set.shift() ?? {verified: false};
+        breakpoints: wanted.map((_entry, index) => {
+          const made = set[index] ?? {verified: false};
           return {
             id: made.id === undefined ? undefined : APP_BREAKPOINT + made.id,
             verified: made.verified,
@@ -1279,11 +1267,7 @@ export class DebugAdapter {
     }
     this.respond(request, {
       variables: answer.variables.map((variable: Record<string, any>) => {
-        let rows = 0;
-        if (variable.rows) {
-          rows = ROWS_REFERENCE + this.rowStates.size;
-          this.rowStates.set(rows, variable.storage);
-        }
+        const rows = this.rowsReference(variable);
         if (variable.storage) {
           this.stateStorage.set(variable.name, variable.storage);
         }
@@ -1296,6 +1280,22 @@ export class DebugAdapter {
         };
       }),
     });
+  }
+
+  /**
+   * The reference an editor opens a list's rows with.
+   *
+   * @param variable  A variable or a value, as the script gives it.
+   *
+   * @returns The reference, or 0 for what has no rows.
+   */
+  private rowsReference(variable: Record<string, any>): number {
+    if (!variable.rows) {
+      return 0;
+    }
+    const reference = ROWS_REFERENCE + this.rowStates.size;
+    this.rowStates.set(reference, variable.storage);
+    return reference;
   }
 
   private async setVariable(
@@ -1322,21 +1322,55 @@ export class DebugAdapter {
     args: Record<string, any>,
   ): Promise<void> {
     const frame = this.appFrame(args.frameId);
-    if (frame < 0 || args.context === 'repl') {
-      // A command typed in the debug console is GDB's, whichever frame is selected.
-      await this.forward(request, this.withoutAppFrame(args));
-      return;
+    const typed = String(args.expression).trim();
+    // A command typed in the debug console is GDB's, but `erb print` reads the frame the editor has selected.
+    const print = args.context === 'repl' ? PRINT_COMMAND.exec(typed) : null;
+    if (frame >= 0 && (print || args.context !== 'repl')) {
+      return this.respond(
+        request,
+        await this.appValue(print ? print[1] : typed, frame),
+      );
     }
-    const answer = await this.erb({
-      do: 'evaluate',
-      name: String(args.expression).trim(),
-      frame,
+    const response = await this.gdbCall(
+      request.command,
+      this.withoutAppFrame(args),
+    );
+    if (!response.success && args.context === 'watch' && this.status) {
+      // A watched expression of the app's still reads its state at a stop in C.
+      const value = await this.appValue(typed, -1).catch(() => null);
+      if (value) {
+        return this.respond(request, value);
+      }
+    }
+    this.toClient({
+      type: 'response',
+      request_seq: request.seq,
+      command: request.command,
+      success: response.success,
+      message: response.message,
+      body: response.body,
     });
-    this.respond(request, {
+  }
+
+  /**
+   * Evaluates an expression over an app frame's locals and the app's state.
+   *
+   * @param expression  The expression.
+   * @param frame  The frame's place in the app's call chain, or -1 for the state alone.
+   *
+   * @returns The evaluate response's body.
+   */
+  private async appValue(
+    expression: string,
+    frame: number,
+  ): Promise<Record<string, any>> {
+    const answer = await this.erb({do: 'evaluate', expression, frame});
+    return {
       result: answer.value,
       type: answer.type || undefined,
-      variablesReference: 0,
-    });
+      variablesReference: this.rowsReference(answer),
+      indexedVariables: answer.rows || undefined,
+    };
   }
 }
 

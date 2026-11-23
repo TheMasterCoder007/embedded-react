@@ -245,7 +245,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y gdb
       - run: npm ci
       # Runs gdb/erb.py against the headless Flow B host, stopped in a handler, a list row's handler and an
-      # animation's completion.
+      # animation's completion, with expressions, a condition and a logpoint.
       - run: npm run erb:gdb
       # Plays an editor's session with the debug adapter against the same host.
       - run: npm run erb:dap

@@ -21,12 +21,13 @@ Load the firmware's ELF, then this script, then the app's debug file:
 
 The commands that read run nothing on the board. They find the runtime and the engine through the descriptors the
 firmware exports (erb_debug and er_debug), so they work on any board and need no debug info beyond the ELF's
-symbols. Breakpoints and stepping (erb break, step, next, finish) and the stop at a fault need firmware built with
-ERB_DEBUG_HOOK=1, whose VM stops itself where the debugger asks. GDB must be built with Python 3.8 or later.
+symbols. Breakpoints and stepping (erb break, log, step, next, finish) and the stop at a fault need firmware built
+with ERB_DEBUG_HOOK=1, whose VM stops itself where the debugger asks. GDB must be built with Python 3.8 or later.
 """
 
 import base64
 import json
+import math
 import os
 import re
 import struct
@@ -501,54 +502,179 @@ class App:
         raise ErbError("no state named %s; the app's state: %s" % (name, names or "none"))
 
 
-def format_value(kind, data, at, cap=None, values=None):
+class Undefined:
+    """JavaScript's undefined. None is its null."""
+
+    def __repr__(self):
+        return "undefined"
+
+
+UNDEFINED = Undefined()
+
+
+class Unreadable:
+    """A value the debugger can't read, and what it shows in its place."""
+
+    def __init__(self, text):
+        self.text = text
+
+
+class Row:
+    """A list's row: its bytes, and its number in the list when it was read from one."""
+
+    def __init__(self, state, data, at=0, index=None):
+        self.state = state
+        self.data = data
+        self.at = at
+        self.index = index
+
+    def has(self, field):
+        """Whether the row holds a field: an optional one has a flag beside it."""
+        for flag in self.state["fields"]:
+            if flag["name"] == field["name"] + "?":
+                return bool(read_typed("bool", self.data, self.at + flag["offset"]))
+        return True
+
+    def field(self, name):
+        for field in self.state["fields"]:
+            if field["name"] == name and not name.endswith("?"):
+                if not self.has(field):
+                    return UNDEFINED
+                return read_typed(field["type"], self.data, self.at + field["offset"], field.get("cap"))
+        names = ", ".join(field["name"] for field in self.state["fields"] if not field["name"].endswith("?"))
+        raise ErbError("a row of %s has no %s; it has %s" % (self.state["name"], name, names))
+
+    def text(self):
+        fields = []
+        for field in self.state["fields"]:
+            if field["name"].endswith("?") or not self.has(field):
+                continue
+            value = show(read_typed(field["type"], self.data, self.at + field["offset"], field.get("cap")))
+            fields.append("%s: %s" % (field["name"], value))
+        return "{" + ", ".join(fields) + "}"
+
+
+class Rows:
+    """A list state: its rows are read as they are asked for."""
+
+    def __init__(self, app, state):
+        self.app = app
+        self.state = state
+        self.address = app.arena + state["offset"]
+        self.count = read_value("I", self.address)
+
+    def row(self, index):
+        if not 0 <= index < self.count:
+            return UNDEFINED
+        size = self.state["rowBytes"]
+        return read_row(self.state, read(self.address + LIST_HEADER_BYTES + index * size, size), 0, index)
+
+    def text(self):
+        shown = min(self.count, MOST_ROWS_SHOWN)
+        size = self.state["rowBytes"]
+        data = read(self.address + LIST_HEADER_BYTES, shown * size) if shown else b""
+        rows = [show(read_row(self.state, data, row * size, row)) for row in range(shown)]
+        more = ", …" if self.count > shown else ""
+        return "[%s%s]  (%d of %d rows)" % (", ".join(rows), more, self.count, self.state["cap"])
+
+
+def read_row(state, data, at, index=None):
+    """A list's row from its bytes at an offset. A list of plain values has one unnamed field, which is the row."""
+    fields = state["fields"]
+    if len(fields) == 1 and not fields[0]["name"]:
+        return read_typed(fields[0]["type"], data, at + fields[0]["offset"], fields[0].get("cap"))
+    return Row(state, data, at, index)
+
+
+def read_float(data, at):
+    """A 32-bit float as the shortest number that reads back as it, so 0.1 isn't 0.10000000149."""
+    value = unpack("f", data, at)
+    if value != value or value in (float("inf"), float("-inf")):
+        return value
+    for digits in range(1, 10):
+        short = float("%.*g" % (digits, value))
+        if struct.pack("f", short) == struct.pack("f", value):
+            return short
+    return value
+
+
+def read_typed(kind, data, at, cap=None, values=None):
+    """A value from its bytes, as the expressions hold it."""
     if kind == "int":
-        return str(unpack("i", data, at))
+        return unpack("i", data, at)
     if kind == "bool":
-        return "true" if unpack("i", data, at) else "false"
+        return unpack("i", data, at) != 0
     if kind == "float":
-        return "%g" % unpack("f", data, at)
+        return read_float(data, at)
     if kind == "int64":
-        return str(unpack("q", data, at))
+        return unpack("q", data, at)
     if kind == "double":
-        return "%g" % unpack("d", data, at)
+        return unpack("d", data, at)
     if kind == "enum":
         index = unpack("i", data, at)
-        return json.dumps(values[index]) if values and 0 <= index < len(values) else "<value %d>" % index
+        return values[index] if values and 0 <= index < len(values) else Unreadable("<value %d>" % index)
     if kind == "string":
         text = data[at : at + (cap or 0) + 1]
         end = text.find(b"\0")
-        return json.dumps(text[: end if end >= 0 else len(text)].decode("utf-8", "replace"))
-    return "<%s>" % kind
+        return text[: end if end >= 0 else len(text)].decode("utf-8", "replace")
+    return Unreadable("<%s>" % kind)
+
+
+def number_text(value):
+    """A number as JavaScript prints it."""
+    if isinstance(value, int):
+        return str(value)
+    if value != value:
+        return "NaN"
+    if value in (float("inf"), float("-inf")):
+        return "Infinity" if value > 0 else "-Infinity"
+    if value == int(value) and abs(value) < 1e21:
+        return str(int(value))
+    return repr(value)
+
+
+def show(value):
+    """A value as the commands print it."""
+    if value is None:
+        return "null"
+    if value is UNDEFINED:
+        return "undefined"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return number_text(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    return value.text() if isinstance(value, (Row, Rows)) else value.text
+
+
+def type_name(value):
+    """A value's type, as an editor shows it beside the value."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    return "row" if isinstance(value, Row) else "list" if isinstance(value, Rows) else ""
 
 
 VALUE_BYTES = {"int": 4, "bool": 4, "float": 4, "enum": 4, "int64": 8, "double": 8}
 
 
-def state_value(app, state):
+def state_read(app, state):
+    """A state's value."""
     kind = state["type"]
     address = app.arena + state["offset"]
     if kind == "string":
-        return format_value(kind, read(address, state["cap"] + 1), 0, state["cap"])
+        return read_typed(kind, read(address, state["cap"] + 1), 0, state["cap"])
     if kind == "list":
-        count = read_value("I", address)
-        shown = min(count, MOST_ROWS_SHOWN)
-        data = read(address + LIST_HEADER_BYTES, shown * state["rowBytes"]) if shown else b""
-        rows = [row_text(state, data, row * state["rowBytes"]) for row in range(shown)]
-        more = ", …" if count > shown else ""
-        return "[%s%s]  (%d of %d rows)" % (", ".join(rows), more, count, state["cap"])
-    return format_value(kind, read(address, VALUE_BYTES.get(kind, 4)), 0, values=state.get("values"))
+        return Rows(app, state)
+    return read_typed(kind, read(address, VALUE_BYTES.get(kind, 4)), 0, values=state.get("values"))
 
 
-def row_text(state, data, at):
-    """A list's row, from its bytes at an offset."""
-    fields = []
-    for field in state["fields"]:
-        if field["name"].endswith("?"):
-            continue
-        value = format_value(field["type"], data, at + field["offset"], field.get("cap"))
-        fields.append(("%s: %s" % (field["name"], value)) if field["name"] else value)
-    return "{" + ", ".join(fields) + "}" if len(state["fields"]) > 1 or state["fields"][0]["name"] else fields[0]
+def state_value(app, state):
+    return show(state_read(app, state))
 
 
 STRING_ARENA = 0x80000000
@@ -558,16 +684,16 @@ STRING_NATIVE = 0x40000000
 def register_string(app, ref):
     """A string register's text: empty, in the arena, a native event's, or a package constant."""
     if ref == 0:
-        return '""'
+        return ""
     if ref & STRING_ARENA:
-        return json.dumps(read_string(app.arena + (ref & ~STRING_ARENA)) or "")
+        return read_string(app.arena + (ref & ~STRING_ARENA)) or ""
     if ref & STRING_NATIVE:
         try:
             texts = gdb.parse_and_eval("'erb_native.c'::s_texts")
-            return json.dumps(read_string(int(texts[(ref & ~STRING_NATIVE) - 1])) or "")
+            return read_string(int(texts[(ref & ~STRING_NATIVE) - 1])) or ""
         except (gdb.error, gdb.MemoryError):
-            return "<a native event's string>"
-    return "<string constant %d>" % (ref - 1)
+            return Unreadable("<a native event's string>")
+    return Unreadable("<string constant %d>" % (ref - 1))
 
 
 def list_row(app, local, row):
@@ -575,38 +701,42 @@ def list_row(app, local, row):
     counted = app.state_at(local.get("through", local["list"]))
     state = app.state_at(local["list"])
     if counted is None or state is None:
-        return "<row %d>" % row
+        return Unreadable("<row %d>" % row)
     address = app.arena + counted["offset"]
     count = read_value("I", address)
     if not 0 <= row < count:
-        return "<no row %d: %s has %d>" % (row, app.label(counted), count)
+        return Unreadable("<no row %d: %s has %d>" % (row, app.label(counted), count))
     if "through" in local:
         first = counted["fields"][0]
         row = read_value("i", address + LIST_HEADER_BYTES + row * counted["rowBytes"] + first["offset"])
         address = app.arena + state["offset"]
     data = read(address + LIST_HEADER_BYTES + row * state["rowBytes"], state["rowBytes"])
-    return row_text(state, data, 0)
+    return read_row(state, data, 0, row)
 
 
-def local_value(app, local, base):
+def local_read(app, local, base):
     """A parameter's or a local's value, in the frame at a base."""
     kind = local.get("type")
     if kind is None:
-        return "<optimised out>"
+        return Unreadable("<optimised out>")
     if kind == "list":
         state = app.state_at(local["list"])
-        return state_value(app, state) if state else "<list>"
+        return Rows(app, state) if state else Unreadable("<list>")
     if "register" in local:
         address = app.stack + 4 * (base + app.runtime.frame_cells + local["register"])
         if kind == "row":
             return list_row(app, local, read_value("i", address))
         if kind == "string":
             return register_string(app, read_value("I", address))
-        return format_value(kind, read(address, VALUE_BYTES.get(kind, 4)), 0)
+        return read_typed(kind, read(address, VALUE_BYTES.get(kind, 4)), 0)
     address = app.arena + local["offset"]
     if kind == "string":
-        return format_value(kind, read(address, local["cap"] + 1), 0, local["cap"])
-    return format_value(kind, read(address, VALUE_BYTES.get(kind, 4)), 0)
+        return read_typed(kind, read(address, local["cap"] + 1), 0, local["cap"])
+    return read_typed(kind, read(address, VALUE_BYTES.get(kind, 4)), 0)
+
+
+def local_value(app, local, base):
+    return show(local_read(app, local, base))
 
 
 def state_labels(panel):
@@ -651,6 +781,535 @@ def state_labels(panel):
 
 
 # ----------------------------------------------------------------------------------------------------------------------
+# Expressions
+# ----------------------------------------------------------------------------------------------------------------------
+
+TOKEN = re.compile(
+    r"""\s*(?:
+        (?P<number>0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)
+      | (?P<name>[A-Za-z_$][\w$]*)
+      | (?P<string>"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')
+      | (?P<operator>>>>=|\.\.\.|===|!==|\*\*=|<<=|>>=|>>>|&&=|\|\|=|\?\?=|=>|==|!=|<=|>=|&&|\|\||\?\?|\?\.|\*\*|\+\+|--|<<|>>
+                    |[-+*/%&|^]=|[-+*/%<>=!&|^~?:.,()\[\]{}`])
+    )""",
+    re.VERBOSE,
+)
+
+# Each binary operator's precedence: a higher one binds tighter.
+BINARY = {
+    "??": 1,
+    "||": 2,
+    "&&": 3,
+    "|": 4,
+    "^": 5,
+    "&": 6,
+    "==": 7,
+    "!=": 7,
+    "===": 7,
+    "!==": 7,
+    "<": 8,
+    "<=": 8,
+    ">": 8,
+    ">=": 8,
+    "<<": 9,
+    ">>": 9,
+    ">>>": 9,
+    "+": 10,
+    "-": 10,
+    "*": 11,
+    "/": 11,
+    "%": 11,
+    "**": 12,
+}
+ASSIGNMENTS = {"=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "&&=", "||=", "??=", "++", "--"}
+CONSTANTS = {"true": True, "false": False, "null": None, "undefined": UNDEFINED, "NaN": float("nan"), "Infinity": float("inf")}
+REFUSED_WORDS = {"new", "delete", "void", "await", "yield", "function", "class", "this", "super", "async", "in", "instanceof"}
+ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", "v": "\v", "0": "\0"}
+
+
+class Node:
+    """A part of a parsed expression, with its source text for an error to quote."""
+
+    def __init__(self, kind, text, parts):
+        self.kind = kind
+        self.text = text
+        self.parts = parts
+
+
+class Parser:
+    """Parses the expressions a debugger reads: names, members and indexes, literals and operators. Whatever would
+    run the app's code or change it is refused by name."""
+
+    def __init__(self, source):
+        self.source = source.strip()
+        self.tokens = []
+        self.at = 0
+        self.last_end = 0
+        position = 0
+        while position < len(self.source):
+            match = TOKEN.match(self.source, position)
+            if not match:
+                raise self.broken("`%s` isn't expected there" % self.source[position:].lstrip()[0])
+            kind = match.lastgroup
+            self.tokens.append((kind, match.group(kind), match.start(kind), match.end()))
+            position = match.end()
+        if not self.tokens:
+            raise ErbError("an expression is missing")
+
+    def broken(self, why):
+        return ErbError("`%s` isn't an expression the debugger reads: %s" % (self.source, why))
+
+    def refuse(self, what):
+        return ErbError(
+            "`%s` has %s, which the debugger doesn't evaluate: it reads names, members and indexes, literals and "
+            "operators, and runs nothing on the board" % (self.source, what)
+        )
+
+    def peek(self):
+        if self.at < len(self.tokens):
+            return self.tokens[self.at]
+        return (None, None, len(self.source), len(self.source))
+
+    def take(self):
+        token = self.tokens[self.at]
+        self.at += 1
+        self.last_end = token[3]
+        return token
+
+    def expect(self, text):
+        if self.peek()[1] != text:
+            raise self.unexpected("`%s` is missing" % text)
+        self.take()
+
+    def node(self, kind, start, *parts):
+        return Node(kind, self.source[start : self.last_end], parts)
+
+    def unexpected(self, otherwise=None):
+        """The error for the next token: what it is when the debugger refuses it, else that it doesn't belong."""
+        kind, text, _, _ = self.peek()
+        if text == "(":
+            return self.refuse("a call")
+        if text in ASSIGNMENTS:
+            return self.refuse("an assignment (%s)" % text)
+        if text == "=>":
+            return self.refuse("a function")
+        if text == "`":
+            return self.refuse("a template literal")
+        if text in (",", "..."):
+            return self.refuse("`%s`" % text)
+        if kind == "name" and text in REFUSED_WORDS:
+            return self.refuse("`%s`" % text)
+        if otherwise:
+            return self.broken(otherwise)
+        if kind is None:
+            return self.broken("it ends where a value should be")
+        return self.broken("`%s` isn't expected there" % text)
+
+    def parse(self):
+        tree = self.conditional()
+        if self.at < len(self.tokens):
+            raise self.unexpected()
+        return tree
+
+    def conditional(self):
+        start = self.peek()[2]
+        test = self.binary(1)
+        if self.peek()[1] != "?":
+            return test
+        self.take()
+        then = self.conditional()
+        self.expect(":")
+        return self.node("conditional", start, test, then, self.conditional())
+
+    def binary(self, least):
+        start = self.peek()[2]
+        left = self.unary()
+        while True:
+            kind, text, _, _ = self.peek()
+            level = BINARY.get(text) if kind == "operator" else None
+            if level is None or level < least:
+                return left
+            self.take()
+            # ** groups from the right.
+            right = self.binary(level if text == "**" else level + 1)
+            left = self.node("binary", start, text, left, right)
+
+    def unary(self):
+        kind, text, start, _ = self.peek()
+        if (kind == "operator" and text in ("!", "-", "+", "~")) or (kind == "name" and text == "typeof"):
+            self.take()
+            return self.node("unary", start, text, self.unary())
+        return self.postfix()
+
+    def postfix(self):
+        start = self.peek()[2]
+        node = self.primary()
+        while True:
+            kind, text, _, _ = self.peek()
+            if kind != "operator" or text not in (".", "?.", "["):
+                if text in ("(", "++", "--", "`"):
+                    raise self.unexpected()
+                return node
+            self.take()
+            optional = text == "?."
+            if optional and self.peek()[1] == "[":
+                text = self.take()[1]
+            if text == "[":
+                index = self.conditional()
+                self.expect("]")
+                node = self.node("index", start, node, index, optional)
+                continue
+            kind, name, _, _ = self.peek()
+            if kind != "name":
+                raise self.unexpected("a name should follow `%s`" % text)
+            self.take()
+            node = self.node("member", start, node, name, optional)
+
+    def primary(self):
+        kind, text, start, _ = self.peek()
+        if kind == "number":
+            self.take()
+            try:
+                value = int(text, 0)
+            except ValueError:
+                value = float(text)
+            return self.node("literal", start, value)
+        if kind == "string":
+            self.take()
+            return self.node("literal", start, unquoted(text))
+        if kind == "name" and text in CONSTANTS:
+            self.take()
+            return self.node("literal", start, CONSTANTS[text])
+        if kind == "name" and text not in REFUSED_WORDS:
+            self.take()
+            return self.node("name", start, text)
+        if text == "(":
+            self.take()
+            inner = self.conditional()
+            self.expect(")")
+            return inner
+        if text == "[":
+            raise self.refuse("an array literal")
+        if text == "{":
+            raise self.refuse("an object literal")
+        raise self.unexpected()
+
+
+def unquoted(text):
+    """A string literal's value."""
+
+    def escape(match):
+        body = match.group(1)
+        if body[0] in "ux" and len(body) > 1:
+            return chr(int(body.strip("ux{}"), 16))
+        return ESCAPES.get(body, body)
+
+    return re.sub(r"\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)", escape, text[1:-1])
+
+
+def parse_expression(text):
+    return Parser(text).parse()
+
+
+def to_number(value):
+    """A value as a number, as JavaScript's operators take it."""
+    if isinstance(value, (bool, int)):
+        return int(value)
+    if isinstance(value, float):
+        return value
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 0
+        try:
+            if re.match(r"^0[xXbBoO]", text):
+                return int(text, 0)
+            if re.match(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$", text):
+                return float(text) if re.search(r"[.eE]", text) else int(text)
+            if re.match(r"^[+-]?Infinity$", text):
+                return float(text.replace("Infinity", "inf"))
+        except ValueError:
+            pass
+    return float("nan")
+
+
+def to_text(value):
+    """A value as text, as JavaScript joins it to a string."""
+    return value if isinstance(value, str) else show(value)
+
+
+def to_int32(value):
+    number = to_number(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        return 0
+    number = int(number) & 0xFFFFFFFF
+    return number - 0x100000000 if number & 0x80000000 else number
+
+
+def truthy(value):
+    if isinstance(value, Unreadable):
+        raise ErbError("a value that can't be read (%s) is neither true nor false" % value.text)
+    if value is None or value is UNDEFINED:
+        return False
+    if isinstance(value, (bool, int, float)):
+        return value == value and value != 0
+    return len(value) > 0 if isinstance(value, str) else True
+
+
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def same(left, right):
+    """=== on two values. A row is the same as itself: its list's row of that number."""
+    if is_number(left) and is_number(right):
+        return left == right
+    if isinstance(left, Row) and isinstance(right, Row):
+        return left.state is right.state and left.index is not None and left.index == right.index
+    if isinstance(left, Rows) and isinstance(right, Rows):
+        return left.state is right.state
+    if type(left) is not type(right):
+        return False
+    return left == right if isinstance(left, (bool, str)) else left is right
+
+
+def loosely_same(left, right):
+    """== on two values."""
+    nullish = lambda value: value is None or value is UNDEFINED
+    if nullish(left) or nullish(right):
+        return nullish(left) and nullish(right)
+    if isinstance(left, (Row, Rows)) or isinstance(right, (Row, Rows)) or type(left) is type(right):
+        return same(left, right)
+    return to_number(left) == to_number(right)
+
+
+def arithmetic(operator, left, right):
+    """An arithmetic operator on two numbers, as JavaScript works it: whole numbers stay whole."""
+    not_a_number = float("nan")
+    infinity = float("inf")
+    try:
+        if operator == "+":
+            return left + right
+        if operator == "-":
+            return left - right
+        if operator == "*":
+            return left * right
+        if operator == "/":
+            if right == 0:
+                return not_a_number if left == 0 or left != left else math.copysign(infinity, left) * math.copysign(1, right)
+            whole = isinstance(left, int) and isinstance(right, int) and left % right == 0
+            return left // right if whole else left / right
+        if operator == "%":
+            if right == 0 or left in (infinity, -infinity):
+                return not_a_number
+            if isinstance(left, int) and isinstance(right, int):
+                return int(math.copysign(abs(left) % abs(right), left))
+            return math.fmod(left, right)
+        result = left**right
+        return not_a_number if isinstance(result, complex) else result
+    except ZeroDivisionError:
+        return infinity
+    except OverflowError:
+        return infinity
+
+
+def compare(operator, left, right):
+    if not (isinstance(left, str) and isinstance(right, str)):
+        left, right = to_number(left), to_number(right)
+    if operator == "<":
+        return left < right
+    if operator == "<=":
+        return left <= right
+    return left > right if operator == ">" else left >= right
+
+
+def kind_of(value):
+    """What a value is, for an error."""
+    if isinstance(value, Row):
+        return "a row"
+    if isinstance(value, Rows):
+        return "a list"
+    if isinstance(value, str):
+        return "a string"
+    return "a boolean" if isinstance(value, bool) else "a number"
+
+
+class Scope:
+    """What an expression's names read: a frame's parameters and locals, then the app's state."""
+
+    def __init__(self, app, frame=0):
+        self.app = app
+        self.base = 0
+        self.locals = {}
+        chain = app.frame_chain() if app.runtime.flag("in_vm") else []
+        if 0 <= frame < len(chain):
+            function, offset, self.base = chain[frame]
+            self.locals = {local["name"]: local for local in frame_locals(app, function, offset)}
+
+    def has(self, name):
+        labels = state_labels(self.app.panel)
+        return name in self.locals or any(
+            name in (state["name"], state["storage"], labels[state["storage"]]) for state in self.app.panel["states"]
+        )
+
+    def read(self, name):
+        if name in self.locals:
+            return local_read(self.app, self.locals[name], self.base)
+        if not self.has(name):
+            labels = state_labels(self.app.panel)
+            names = list(self.locals) + [labels[state["storage"]] for state in self.app.panel["states"] if not state["hidden"]]
+            raise ErbError("nothing here is named %s; the locals and the app's state: %s" % (name, ", ".join(names) or "none"))
+        return state_read(self.app, self.app.state(name))
+
+    def labelled(self, label):
+        """A state by the label the commands show, such as a component's `Counter.taps`, or None."""
+        labels = state_labels(self.app.panel)
+        for state in self.app.panel["states"]:
+            if labels[state["storage"]] == label:
+                return state
+        return None
+
+
+class Skipped(Exception):
+    """An optional chain (`a?.b.c`) met null or undefined: the whole chain is undefined."""
+
+
+class Evaluator:
+    def __init__(self, scope):
+        self.scope = scope
+
+    def value(self, node):
+        if node.kind in ("member", "index"):
+            try:
+                return self.link(node)
+            except Skipped:
+                return UNDEFINED
+        return getattr(self, node.kind)(node)
+
+    def usable(self, node):
+        """A node's value, for an operator to work on."""
+        value = self.value(node)
+        if isinstance(value, Unreadable):
+            raise ErbError("%s can't be read: it is %s" % (node.text, value.text))
+        return value
+
+    def plain(self, node, operator):
+        """A node's value, for an operator that takes numbers, strings and booleans."""
+        value = self.usable(node)
+        if isinstance(value, (Row, Rows)):
+            raise ErbError("%s is %s, which `%s` can't take" % (node.text, kind_of(value), operator))
+        return value
+
+    def literal(self, node):
+        return node.parts[0]
+
+    def name(self, node):
+        return self.scope.read(node.parts[0])
+
+    def link(self, node):
+        """A member or an index, in a chain that an optional link ends."""
+        target_node, key, optional = node.parts
+        if node.kind == "member" and target_node.kind == "name" and not self.scope.has(target_node.parts[0]):
+            state = self.scope.labelled("%s.%s" % (target_node.parts[0], key))
+            if state is not None:
+                return state_read(self.scope.app, state)
+        if target_node.kind in ("member", "index"):
+            target = self.link(target_node)
+        else:
+            target = self.value(target_node)
+        if isinstance(target, Unreadable):
+            raise ErbError("%s can't be read: it is %s" % (target_node.text, target.text))
+        if node.kind == "index":
+            key = self.usable(key)
+        if target is None or target is UNDEFINED:
+            if optional:
+                raise Skipped()
+            raise ErbError("%s is %s, so it has no %s" % (target_node.text, show(target), to_text(key)))
+        whole = is_number(key) and math.isfinite(key) and key == int(key)
+        if isinstance(target, Row) and isinstance(key, str):
+            return target.field(key)
+        if isinstance(target, Rows) and node.kind == "index" and is_number(key):
+            return target.row(int(key)) if whole else UNDEFINED
+        if isinstance(target, str) and node.kind == "index" and is_number(key):
+            return target[int(key)] if whole and 0 <= key < len(target) else UNDEFINED
+        if isinstance(target, Rows) and key == "length":
+            return target.count
+        if isinstance(target, str) and key == "length":
+            return len(target.encode("utf-16-le")) // 2
+        raise ErbError("%s is %s, which has no %s here" % (target_node.text, kind_of(target), to_text(key)))
+
+    def unary(self, node):
+        operator, operand = node.parts
+        if operator == "typeof":
+            value = self.usable(operand)
+            if value is UNDEFINED:
+                return "undefined"
+            return type_name(value) if isinstance(value, (bool, int, float, str)) else "object"
+        if operator == "!":
+            return not truthy(self.usable(operand))
+        value = self.plain(operand, operator)
+        if operator == "~":
+            return ~to_int32(value)
+        return arithmetic("-", 0, to_number(value)) if operator == "-" else to_number(value)
+
+    def binary(self, node):
+        operator, left_node, right_node = node.parts
+        if operator in ("&&", "||", "??"):
+            left = self.usable(left_node)
+            if operator == "??":
+                keep = left is not None and left is not UNDEFINED
+            else:
+                keep = truthy(left) == (operator == "||")
+            return left if keep else self.usable(right_node)
+        if operator in ("===", "!==", "==", "!="):
+            left, right = self.usable(left_node), self.usable(right_node)
+            equal = same(left, right) if len(operator) == 3 else loosely_same(left, right)
+            return equal == (operator[0] == "=")
+        left, right = self.plain(left_node, operator), self.plain(right_node, operator)
+        if operator == "+" and (isinstance(left, str) or isinstance(right, str)):
+            return to_text(left) + to_text(right)
+        if operator in ("<", "<=", ">", ">="):
+            return compare(operator, left, right)
+        if operator in ("&", "|", "^", "<<", ">>", ">>>"):
+            return bitwise(operator, left, right)
+        return arithmetic(operator, to_number(left), to_number(right))
+
+    def conditional(self, node):
+        test, then, otherwise = node.parts
+        return self.value(then if truthy(self.usable(test)) else otherwise)
+
+
+def bitwise(operator, left, right):
+    """A bitwise operator, on 32-bit integers."""
+    left, right = to_int32(left), to_int32(right)
+    if operator == "&":
+        return left & right
+    if operator == "|":
+        return left | right
+    if operator == "^":
+        return left ^ right
+    if operator == "<<":
+        return to_int32(left << (right & 31))
+    if operator == ">>":
+        return left >> (right & 31)
+    return (left & 0xFFFFFFFF) >> (right & 31)
+
+
+def evaluate(tree, scope):
+    return Evaluator(scope).value(tree)
+
+
+def evaluate_text(app, text, frame=0):
+    """An expression's value over a frame's locals and the app's state."""
+    scope = Scope(app, frame)
+    # A state's label needn't read as an expression: `Counter:16.taps`.
+    state = None if text in scope.locals else scope.labelled(text)
+    return state_read(app, state) if state is not None else evaluate(parse_expression(text), scope)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
 # Commands
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -661,11 +1320,14 @@ class ErbCommand(gdb.Command):
 erb file PATH        Load the app's debug file (dist/app.erdbg).
 erb where            The app's source line and call chain, with each function's parameters.
 erb locals [N]       The current function's parameters and locals, or the Nth caller's.
+erb print EXPR       An expression over the locals and the state: item.label, count + 1, rows.length > 3.
 erb error            The last fault or refused load.
 erb state [NAME]     Every state, or one.
 erb set NAME VALUE   Set a state; the app runs its update at its next tick.
 erb watch NAME       Stop when a state changes, on the line that wrote it.
 erb break [LINE]     Stop at a source line (App.jsx:41, or 41); with no line, list the breakpoints.
+                     LINE hits N stops from the Nth pass on; LINE if EXPR stops when the expression is true.
+erb log LINE TEXT    Print a message at a source line without stopping, with each {expression} in it worked out.
 erb delete [N...]    Delete breakpoints, or all of them.
 erb faults [on|off]  Stop when the app faults or a load is refused (on by default).
 erb step             Run to the next statement, into a function the app calls.
@@ -756,6 +1418,21 @@ class ErbLocals(gdb.Command):
             print("No locals.")
         for local in shown:
             print("%s = %s" % (local["name"], local_value(app, local, base)))
+
+
+class ErbPrint(gdb.Command):
+    """An expression's value, over the current function's locals and the app's state: erb print rows.length > 3.
+It takes names, members and indexes (item.label, rows[2].done), literals and operators. It reads the board and runs
+nothing on it, so it has no calls and no assignments."""
+
+    def __init__(self):
+        super().__init__("erb print", gdb.COMMAND_DATA)
+
+    def invoke(self, argument, from_tty):
+        text = argument.strip()
+        if not text:
+            raise ErbError("give an expression: erb print count + 1")
+        print("%s = %s" % (text, show(evaluate_text(App(), text))))
 
 
 def frame_locals(app, function, offset):
@@ -1216,6 +1893,17 @@ class Hook:
         self.write("stop_count", "H", len(places))
         self.arm()
 
+    def step_ends(self, function, offset, base):
+        """Whether the step under way ends at a place, as the VM tests it."""
+        kind = self.step()
+        if kind in (STEP_NONE, STEP_ANY):
+            return kind == STEP_ANY
+        outside = not self.read("step_from", "I") <= offset < self.read("step_to", "I")
+        step_base = self.read("step_base", "I")
+        if kind == STEP_INTO:
+            return function != self.read("step_function", "H") or outside
+        return base < step_base or (kind == STEP_OVER and base == step_base and outside)
+
     def arm(self):
         armed = self.read("stop_count", "H") > 0 or self.step() != STEP_NONE
         self.write("armed", "B", 1 if armed else 0)
@@ -1278,13 +1966,14 @@ def parse_line(text):
     return line
 
 
-# The app's breakpoints, each {"number", "line"}; the hook holds their places for the layout the board runs.
+# The app's breakpoints, each {"number", "line"} and its terms; the hook holds their places for the layout the board
+# runs.
 breakpoints = []
 breakpoint_numbers = [0]
 # Set while the app is stopped where a step reached the return to the runtime.
 returned = [False]
 # The hook's breakpoint, and whether the board's last stop was in it.
-hook_state = {"breakpoint": None, "stopped": False, "noted": False}
+hook_state = {"breakpoint": None, "stopped": False, "noted": False, "hit": []}
 # Whether a fault or a refused load stops the board, and the one it is stopped at.
 fault_stops = [True]
 fault_stop = [None]
@@ -1338,6 +2027,84 @@ def statement_line(panel, function, offset):
     return start, line
 
 
+HIT_FORM = re.compile(r"^(>=|<=|==|=|>|<|%)?\s*(\d+)$")
+
+
+def set_terms(entry, condition=None, hits=None, log=None):
+    """Gives a breakpoint its condition, hit count and log message. Each is parsed here, so a mistake is said when
+    the breakpoint is set."""
+    terms = tuple((term or "").strip() or None for term in (condition, hits, log))
+    if entry.get("terms", (None, None, None)) == terms and "passes" in entry:
+        return
+    condition, hits, log = terms
+    tree = parse_expression(condition) if condition else None
+    test = None
+    if hits:
+        match = HIT_FORM.match(hits)
+        if not match or (match.group(1) == "%" and int(match.group(2)) == 0):
+            raise ErbError("a hit count is a number, or one after >, >=, ==, <, <= or %%, not `%s`" % hits)
+        test = (match.group(1) or ">=", int(match.group(2)))
+    parts = None
+    if log:
+        # Text and {expression} parts by turns.
+        parts = [part if index % 2 == 0 else parse_expression(part) for index, part in enumerate(re.split(r"\{(.*?)\}", log))]
+    entry.update(terms=terms, tree=tree, test=test, parts=parts, passes=0)
+
+
+def terms_text(entry):
+    """A breakpoint's terms, as `erb break` lists them."""
+    condition, hits, log = entry.get("terms", (None, None, None))
+    return "".join("  %s %s" % (word, term) for word, term in (("hits", hits), ("if", condition), ("log", log)) if term)
+
+
+def hit_counts(test, passes):
+    """Whether a hit count takes a pass. A bare number takes that pass and each after it."""
+    operator, number = test
+    if operator == "%":
+        return passes % number == 0
+    if operator in ("=", "=="):
+        return passes == number
+    if operator in ("<", "<="):
+        return passes < number or (operator == "<=" and passes == number)
+    return passes > number or (operator == ">=" and passes == number)
+
+
+def log_line(text):
+    """Prints a logpoint's message, to the editor in a debug adapter's session, as GDB's own logpoints do."""
+    server = sys.modules.get("gdb.dap.server")
+    if server is not None and hasattr(server, "send_event"):
+        server.send_event("output", {"category": "console", "output": text + "\n"})
+    else:
+        print(text)
+
+
+def stops_at(entry, scope):
+    """Whether a breakpoint the app reached stops it. It doesn't when its condition is false or its hit count
+    leaves the pass out, and one with a message logs it instead. A condition that can't be worked out stops."""
+    try:
+        if entry.get("tree") is not None and not truthy(evaluate(entry["tree"], scope)):
+            return False
+    except gdb.GdbError as error:
+        log_line("erb breakpoint %d's condition: %s" % (entry["number"], error))
+        return True
+    entry["passes"] = entry.get("passes", 0) + 1
+    if entry.get("test") and not hit_counts(entry["test"], entry["passes"]):
+        return False
+    if entry.get("parts") is None:
+        return True
+    message = ""
+    for index, part in enumerate(entry["parts"]):
+        if index % 2 == 0:
+            message += part
+            continue
+        try:
+            message += to_text(evaluate(part, scope))
+        except gdb.GdbError as error:
+            message += "<%s>" % error
+    log_line(message)
+    return False
+
+
 def write_stops():
     """Writes the breakpoints' places for the layout the board runs into the hook. Raises when it can't."""
     app = App()
@@ -1381,6 +2148,8 @@ class HookBreakpoint(gdb.Breakpoint):
         event = hook.event()
         if event == AT_LOAD:
             hook.set_step(STEP_NONE)
+            for entry in breakpoints:
+                entry["passes"] = 0
             if breakpoints:
                 try:
                     write_stops()
@@ -1409,10 +2178,15 @@ class HookBreakpoint(gdb.Breakpoint):
             begin, end = statement_range(app.panel, function, offset) if has_lines else (0, END_OF_FUNCTION)
             hook.set_step(STEP_OVER if step == STEP_OVER else STEP_INTO, function, begin, end, runtime.u32("frame_base"))
             return False
+        reached = [entry for entry in breakpoints if (function, offset) in line_places(app.panel, entry["line"])]
+        scope = Scope(app) if reached else None
+        stopping = [entry for entry in reached if stops_at(entry, scope)]
+        if reached and not stopping and not hook.step_ends(function, offset, runtime.u32("frame_base")):
+            # The step under way, if any, goes on.
+            return False
         hook.set_step(STEP_NONE)
-        numbers = [
-            str(entry["number"]) for entry in breakpoints if (function, offset) in line_places(app.panel, entry["line"])
-        ]
+        hook_state["hit"] = [entry["number"] for entry in stopping]
+        numbers = [str(number) for number in hook_state["hit"]]
         prefix = "erb breakpoint %s, " % ", ".join(numbers) if numbers else ""
         self.report(prefix + stop_line(app, function, offset))
         return True
@@ -1483,38 +2257,66 @@ def note_missing_hook():
         print("Note: %s" % NO_HOOK)
 
 
+def add_breakpoint(line, condition=None, hits=None, log=None):
+    """Adds a breakpoint at a source line, as `erb break` and `erb log` name it, and says so."""
+    if debug_file is None:
+        raise ErbError("no debug file: load the app's with `erb file dist/app.erdbg`")
+    if not has_hook():
+        raise ErbError(NO_HOOK)
+    entry = {"number": breakpoint_numbers[0] + 1, "line": parse_line(line)}
+    set_terms(entry, condition, hits, log)
+    hook_breakpoint()
+    breakpoint_numbers[0] += 1
+    breakpoints.append(entry)
+    try:
+        write_stops()
+        pending = ""
+    except ErbError as error:
+        if "ERB_DEBUG_STOPS" in str(error):
+            breakpoints.remove(entry)
+            raise
+        pending = " (set when the app loads)"
+    print("erb breakpoint %d at %s:%d%s%s" % (entry["number"], debug_file["file"], entry["line"], terms_text(entry), pending))
+
+
 class ErbBreak(gdb.Command):
     """Stop at a source line: erb break App.jsx:41, or erb break 41. With no line, list the breakpoints.
-Needs firmware built with ERB_DEBUG_HOOK=1. A breakpoint set before the app loads is written when it does."""
+erb break 41 if count === 5 stops when the expression is true, as `erb print` works it out at each pass.
+erb break 41 hits 3 stops from the third pass on; hits ==3, >3, <3 and %3 (every third) pick others.
+Needs firmware built with ERB_DEBUG_HOOK=1. A breakpoint set before the app loads is written when it does.
+The debugger tests a condition, not the board, so each pass halts the board for a moment."""
 
     def __init__(self):
         super().__init__("erb break", gdb.COMMAND_BREAKPOINTS)
 
     def invoke(self, argument, from_tty):
-        if debug_file is None:
-            raise ErbError("no debug file: load the app's with `erb file dist/app.erdbg`")
         if not argument.strip():
+            if debug_file is None:
+                raise ErbError("no debug file: load the app's with `erb file dist/app.erdbg`")
             if not breakpoints:
                 print("No erb breakpoints.")
             for entry in breakpoints:
-                print("%d  %s:%d" % (entry["number"], debug_file["file"], entry["line"]))
+                print("%d  %s:%d%s" % (entry["number"], debug_file["file"], entry["line"], terms_text(entry)))
             return
-        if not has_hook():
-            raise ErbError(NO_HOOK)
-        line = parse_line(argument)
-        hook_breakpoint()
-        breakpoint_numbers[0] += 1
-        entry = {"number": breakpoint_numbers[0], "line": line}
-        breakpoints.append(entry)
-        try:
-            write_stops()
-            pending = ""
-        except ErbError as error:
-            if "ERB_DEBUG_STOPS" in str(error):
-                breakpoints.remove(entry)
-                raise
-            pending = " (set when the app loads)"
-        print("erb breakpoint %d at %s:%d%s" % (entry["number"], debug_file["file"], line, pending))
+        match = re.match(r"^(\S+)(?:\s+hits\s+(\S+))?(?:\s+if\s+(.+))?$", argument.strip())
+        if not match:
+            raise ErbError("erb break LINE [hits N] [if EXPRESSION]: erb break 41 if count === 5")
+        add_breakpoint(match.group(1), match.group(3), match.group(2))
+
+
+class ErbLog(gdb.Command):
+    """Print a message each time a source line is reached, without stopping: erb log App.jsx:41 pressed {count}.
+Each {expression} is worked out as `erb print` does. `erb break` lists it and `erb delete` deletes it.
+Needs firmware built with ERB_DEBUG_HOOK=1."""
+
+    def __init__(self):
+        super().__init__("erb log", gdb.COMMAND_BREAKPOINTS)
+
+    def invoke(self, argument, from_tty):
+        parts = argument.strip().split(None, 1)
+        if len(parts) != 2:
+            raise ErbError("name the line and the message: erb log 41 pressed {count}")
+        add_breakpoint(parts[0], log=parts[1])
 
 
 class ErbDelete(gdb.Command):
@@ -1632,6 +2434,7 @@ def on_stop(event):
 
 def on_resume(event):
     hook_state["stopped"] = False
+    hook_state["hit"] = []
     fault_stop[0] = None
     returned[0] = False
 
@@ -1676,36 +2479,39 @@ def dap_status(request):
     if status["hookStop"] and returned[0]:
         status["description"] = "%s returns to the runtime" % frames[0]["name"]
     elif status["hookStop"]:
-        place = chain[0][:2]
-        status["hit"] = [entry["number"] for entry in breakpoints if place in line_places(app.panel, entry["line"])]
+        status["hit"] = hook_state["hit"]
     return status
 
 
 def dap_breakpoints(request):
-    """Replaces the app's breakpoints with the editor's. A line with no code moves to the next line that has some."""
+    """Replaces the app's breakpoints with the editor's, each a line and its condition, hit count and log message. A
+    line with no code moves to the next line that has some."""
     if debug_file is None:
         raise ErbError("no debug file")
     # A line that stays keeps its number, so the editor's breakpoint keeps its id.
     kept = {entry["line"]: entry for entry in breakpoints}
     del breakpoints[:]
     if not has_hook():
-        return {"breakpoints": [{"verified": False, "message": NO_HOOK} for _ in request["lines"]]}
+        return {"breakpoints": [{"verified": False, "message": NO_HOOK} for _ in request["breakpoints"]]}
     hook_breakpoint()
     coded = sorted(
         {entry["line"] for panel in debug_file["panels"] for function in panel["functions"] for entry in function["lines"]}
     )
     answers = []
-    for wanted in request["lines"]:
-        line = next((candidate for candidate in coded if candidate >= wanted), None)
+    for wanted in request["breakpoints"]:
+        line = next((candidate for candidate in coded if candidate >= wanted["line"]), None)
         if line is None:
-            answers.append({"verified": False, "message": "%s:%d has no code" % (debug_file["file"], wanted)})
+            answers.append({"verified": False, "message": "%s:%d has no code" % (debug_file["file"], wanted["line"])})
             continue
         entry = next((entry for entry in breakpoints if entry["line"] == line), None)
         if entry is None:
-            entry = kept.get(line)
-            if entry is None:
-                breakpoint_numbers[0] += 1
-                entry = {"number": breakpoint_numbers[0], "line": line}
+            entry = kept.get(line) or {"number": breakpoint_numbers[0] + 1, "line": line}
+            try:
+                set_terms(entry, wanted.get("condition"), wanted.get("hitCondition"), wanted.get("logMessage"))
+            except ErbError as error:
+                answers.append({"verified": False, "message": str(error)})
+                continue
+            breakpoint_numbers[0] = max(breakpoint_numbers[0], entry["number"])
             breakpoints.append(entry)
         answers.append({"id": entry["number"], "line": line, "verified": True})
     # The hook holds so many places: the last breakpoints that don't fit are refused.
@@ -1760,7 +2566,7 @@ def dap_variables(request):
         data = read(address + LIST_HEADER_BYTES, count * state["rowBytes"]) if count else b""
         return {
             "variables": [
-                {"name": "[%d]" % row, "value": row_text(state, data, row * state["rowBytes"]), "type": "row"}
+                {"name": "[%d]" % row, "value": show(read_row(state, data, row * state["rowBytes"], row)), "type": "row"}
                 for row in range(count)
             ]
         }
@@ -1782,15 +2588,13 @@ def dap_set(request):
 
 
 def dap_evaluate(request):
-    """A name's value: a local of the frame, else a state."""
+    """An expression's value, over a frame's locals and the app's state."""
     app = App()
-    chain = app.frame_chain() if app.runtime.flag("in_vm") else []
-    if 0 <= request.get("frame", -1) < len(chain):
-        function, offset, base = chain[request["frame"]]
-        for local in frame_locals(app, function, offset):
-            if local["name"] == request["name"]:
-                return {"value": local_value(app, local, base), "type": local.get("type") or ""}
-    return state_variable(app, app.state(request["name"]))
+    value = evaluate_text(app, request["expression"].strip(), request.get("frame", -1))
+    answer = {"value": show(value), "type": type_name(value)}
+    if isinstance(value, Rows):
+        answer.update(rows=value.count, storage=value.state["storage"])
+    return answer
 
 
 def settle_threads():
@@ -1900,12 +2704,14 @@ ErbCommand()
 ErbFile()
 ErbWhere()
 ErbLocals()
+ErbPrint()
 ErbErrorCommand()
 ErbState()
 ErbSet()
 ErbWatch()
 note_missing_hook()
 ErbBreak()
+ErbLog()
 ErbDelete()
 ErbFaults()
 ErbStep()
