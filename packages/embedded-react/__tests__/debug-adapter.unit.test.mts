@@ -80,10 +80,21 @@ class FakeGdb {
         return this.status;
       case 'breakpoints':
         return {
-          breakpoints: request.lines.map((line: number, index: number) =>
-            line === 99
-              ? {verified: false, message: 'App.tsx:99 has no code'}
-              : {id: index + 1, line: line === 30 ? 32 : line, verified: true},
+          breakpoints: request.breakpoints.map(
+            ({line, condition}: Body, index: number) =>
+              line === 99
+                ? {verified: false, message: 'App.tsx:99 has no code'}
+                : condition === 'count ='
+                  ? {
+                      line,
+                      verified: false,
+                      message: '`count =` has an assignment',
+                    }
+                  : {
+                      id: index + 1,
+                      line: line === 30 ? 32 : line,
+                      verified: true,
+                    },
           ),
         };
       case 'variables':
@@ -114,10 +125,16 @@ class FakeGdb {
       case 'set':
         return {value: `${request.state}=${request.value}`};
       case 'evaluate':
-        if (request.name !== 'step') {
-          return {error: `no state named ${request.name}`};
+        switch (request.expression) {
+          case 'step':
+            return {value: '1', type: 'number'};
+          case 'total + 1':
+            return {value: '5', type: 'number'};
+          case 'rows':
+            return {value: '[…]', type: 'list', rows: 2, storage: 's3'};
+          default:
+            return {error: `nothing here is named ${request.expression}`};
         }
-        return {value: '1', type: 'int'};
       default:
         return {};
     }
@@ -176,6 +193,12 @@ class FakeGdb {
         });
       case 'setBreakpoints':
         return this.respond(request, {breakpoints: [{id: 4, verified: true}]});
+      case 'evaluate':
+        return this.respond(
+          request,
+          undefined,
+          'No symbol in current context.',
+        );
       case 'setExceptionBreakpoints':
         this.exceptionFilters = args.filters;
         return this.respond(request, {
@@ -338,7 +361,7 @@ describe('debug adapter', () => {
     });
     expect(editor.gdb.erbRequests.at(-1)).toEqual({
       do: 'breakpoints',
-      lines: [30, 99],
+      breakpoints: [{line: 30}, {line: 99}],
     });
     expect(app.body.breakpoints).toEqual([
       {id: APP_ID + 1, verified: true, line: 32, source: {path: APP_PATH}},
@@ -357,27 +380,33 @@ describe('debug adapter', () => {
     expect(editor.gdb.asked).toEqual(['setBreakpoints']);
   });
 
-  it('refuses a condition on an app breakpoint instead of dropping it', async () => {
+  it("sends an app breakpoint's condition, hit count and log message to the script", async () => {
     const editor = new Editor();
     await editor.start('launch');
     await editor.stopInApp();
     const response = await editor.request('setBreakpoints', {
       source: {path: APP_PATH},
       breakpoints: [
-        {line: 40, condition: 'count === 5'},
-        {line: 41},
-        {line: 42, logMessage: 'pressed'},
+        {line: 40, condition: 'count === 5', hitCondition: '%2'},
+        {line: 41, condition: 'count ='},
+        {line: 42, logMessage: 'pressed {count}'},
       ],
     });
     expect(editor.gdb.erbRequests.at(-1)).toEqual({
       do: 'breakpoints',
-      lines: [41],
+      breakpoints: [
+        {line: 40, condition: 'count === 5', hitCondition: '%2'},
+        {line: 41, condition: 'count ='},
+        {line: 42, logMessage: 'pressed {count}'},
+      ],
     });
     expect(
       response.body.breakpoints.map((entry: Body) => entry.verified),
-    ).toEqual([false, true, false]);
-    expect(response.body.breakpoints[0].message).toMatch(/condition/);
+    ).toEqual([true, false, true]);
+    // The script says what is wrong with a condition it can't read.
+    expect(response.body.breakpoints[1].message).toMatch(/assignment/);
     expect(response.body.breakpoints[1].line).toBe(41);
+    expect(response.body.breakpoints[2].line).toBe(42);
   });
 
   it("halts a running board to set the app's breakpoints, without a stop in the editor", async () => {
@@ -635,7 +664,7 @@ describe('debug adapter', () => {
     ]);
   });
 
-  it('evaluates a name in an app frame, and hands the debug console to GDB', async () => {
+  it('evaluates an expression in an app frame, and hands the debug console to GDB', async () => {
     const editor = new Editor();
     await editor.start('launch');
     await editor.stopInApp();
@@ -645,18 +674,95 @@ describe('debug adapter', () => {
       context: 'hover',
     });
     expect(hover.body.result).toBe('1');
+    const watch = await editor.request('evaluate', {
+      expression: ' total + 1 ',
+      frameId: APP_ID + 1,
+      context: 'watch',
+    });
+    expect(watch.body.result).toBe('5');
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'evaluate',
+      expression: 'total + 1',
+      frame: 1,
+    });
     const unknown = await editor.request('evaluate', {
       expression: 'styles.root',
       frameId: APP_ID,
       context: 'hover',
     });
     expect(unknown.success).toBe(false);
+    expect(unknown.message).toMatch(/nothing here is named/);
     await editor.request('evaluate', {
       expression: 'erb pools',
       frameId: APP_ID,
       context: 'repl',
     });
     expect(editor.gdb.consoleCommands.at(-1)).toBe('erb pools');
+  });
+
+  it("opens a list an expression names to the list's rows", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    const list = await editor.request('evaluate', {
+      expression: 'rows',
+      frameId: APP_ID,
+      context: 'watch',
+    });
+    expect(list.body.indexedVariables).toBe(2);
+    const rows = await editor.request('variables', {
+      variablesReference: list.body.variablesReference,
+    });
+    expect(rows.body.variables).toEqual([
+      {name: '[0]', value: 's3', type: 'row', variablesReference: 0},
+    ]);
+  });
+
+  it("reads `erb print` in the debug console from the editor's selected frame", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    const printed = await editor.request('evaluate', {
+      expression: 'erb print total + 1',
+      frameId: APP_ID + 1,
+      context: 'repl',
+    });
+    expect(printed.body.result).toBe('5');
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'evaluate',
+      expression: 'total + 1',
+      frame: 1,
+    });
+  });
+
+  it("watches the app's state from a C frame, where GDB has no such name", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    const watch = await editor.request('evaluate', {
+      expression: 'total + 1',
+      frameId: 3,
+      context: 'watch',
+    });
+    expect(watch.body.result).toBe('5');
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'evaluate',
+      expression: 'total + 1',
+      frame: -1,
+    });
+    // What neither reads keeps GDB's error, and a hover in C stays GDB's.
+    const neither = await editor.request('evaluate', {
+      expression: 'buffer->length',
+      frameId: 3,
+      context: 'watch',
+    });
+    expect(neither.message).toMatch(/No symbol/);
+    const hover = await editor.request('evaluate', {
+      expression: 'total + 1',
+      frameId: 3,
+      context: 'hover',
+    });
+    expect(hover.success).toBe(false);
   });
 
   it('runs the board on after attaching, with its breakpoints written', async () => {

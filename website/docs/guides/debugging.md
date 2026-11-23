@@ -1,6 +1,6 @@
 ---
 title: 'Debugging on a board'
-description: 'Debug a Flow B app on the board through a debug probe: GDB commands that read the app by its own names, breakpoints and stepping in its source, a stop when the app faults, and the same from VS Code.'
+description: 'Debug a Flow B app on the board through a debug probe: GDB commands that read the app by its own names, expressions over its locals and state, breakpoints with conditions and stepping in its source, a stop when the app faults, and the same from VS Code.'
 ---
 
 A Flow B app on a board can be debugged the way its firmware is: through a debug probe, with GDB. A script in the
@@ -133,6 +133,7 @@ A halted core runs nothing: no frames, no touch, no timers.
 | `erb file PATH`      | Loads the app's debug file                                                                  |
 | `erb where`          | The app's source line and the lines that called it, with each function's parameters         |
 | `erb locals [N]`     | The current function's parameters and locals, or those of the Nth caller in `erb where`     |
+| `erb print EXPR`     | An expression's value, over the current function's locals and the app's state               |
 | `erb state [NAME]`   | Every state by name, or one. `erb state all` adds the state the compiler made               |
 | `erb set NAME VALUE` | Sets a state. The app runs its update at its next tick, as after a setter                   |
 | `erb watch NAME`     | Stops when a state changes, and names the line that wrote it                                |
@@ -140,13 +141,14 @@ A halted core runs nothing: no frames, no touch, no timers.
 | `erb pools`          | What the app and the engine use of their pools                                              |
 | `er nodes`           | The node tree: each node's type, its rect on the screen, and the source line of its element |
 | `erb break [LINE]`   | Stops at a source line (`App.tsx:41`, or `41`). With no line, lists the breakpoints         |
+| `erb log LINE TEXT`  | Prints a message each time a source line is reached, without stopping                       |
 | `erb delete [N...]`  | Deletes breakpoints by number, or all of them                                               |
 | `erb step`           | Runs to the next statement, into a function the app calls                                   |
 | `erb next`           | Runs to the next statement, over a function the app calls                                   |
 | `erb finish`         | Runs until the function returns to its caller                                               |
 | `erb faults [MODE]`  | Stops when the app faults or a load is refused: `on`, the default, or `off`                 |
 
-The last six need the hook. `help erb` lists them in GDB.
+The last seven need the hook. `help erb` lists them in GDB.
 
 - **A state's name** is the one the source gives it. A component's state reads `Counter.taps`, and
   `Counter:16.taps` or `Counter:16[2].taps` when more than one instance has it.
@@ -161,6 +163,62 @@ The last six need the hook. `help erb` lists them in GDB.
   app called reads from the driver up to the app's line.
 
 GDB's own commands still work on the firmware: `break`, `step`, `print`, `watch`, `bt`.
+
+### Expressions
+
+`erb print` evaluates an expression as the app's source writes it, over the current function's parameters and
+locals and the app's state:
+
+```text
+(gdb) erb print item.label
+item.label = "two"
+(gdb) erb print count + 1
+count + 1 = 6
+(gdb) erb print rows.length > 3 && !rows[2].done
+rows.length > 3 && !rows[2].done = true
+```
+
+An expression takes names, members and indexes (`item.label`, `rows[2].done`, `rows.length`), numbers, strings,
+`true`, `false`, `null` and `undefined`, and JavaScript's arithmetic, comparison, logical, bitwise and conditional
+operators, with `?.` and `??`. A row's optional field that it leaves out is `undefined`, and so is a row past the
+list's end.
+
+Numbers are worked out as JavaScript does, in the debugger. The app's whole numbers saturate at the ends of their
+range, so an expression can differ from the app there: `count + 1` goes past the largest int where the app stays
+on it.
+
+It reads the board and runs nothing on it, so it can't call the app's functions or a native module, and it can't
+assign. The error names what it met:
+
+```text
+(gdb) erb print setCount(5)
+`setCount(5)` has a call, which the debugger doesn't evaluate: it reads names, members and indexes, literals and
+operators, and runs nothing on the board
+```
+
+A local the compiler folded away shows as `<optimised out>` and can't be used in an operator.
+
+### Conditions, hit counts and logpoints
+
+A handler that runs sixty times a second can be stopped on the one pass that matters:
+
+```text
+(gdb) erb break App.tsx:34 if count === 5
+erb breakpoint 1 at App.tsx:34  if count === 5
+(gdb) erb break App.tsx:41 hits 3
+erb breakpoint 2 at App.tsx:41  hits 3
+(gdb) erb log App.tsx:34 pressed {count} of {rows.length}
+erb breakpoint 3 at App.tsx:34  log pressed {count} of {rows.length}
+```
+
+- **`if EXPRESSION`** stops when the expression is true, read as `erb print` reads it. One that can't be worked
+  out at a pass stops there and says why.
+- **`hits N`** stops from the Nth pass on. `hits ==N` stops on that pass only, `hits >N` and `hits <N` after and
+  before it, and `hits %N` on every Nth. With a condition too, only the passes it holds at are counted.
+- **`erb log`** prints its message at each pass and doesn't stop. Each `{expression}` in it is worked out.
+
+The debugger tests these, not the board. Each pass halts the board, reads what the expression names, and resumes
+it, so a condition on a line that runs every frame slows the app while it is set.
 
 A session on a counter:
 
@@ -388,7 +446,12 @@ next line that has some.
   board resumes.
 - **The step buttons** step the app: over a statement, into a function the app calls, out to its caller.
 
-A breakpoint with a condition isn't supported yet, and is shown as unverified.
+- **Hover and Watch** take an [expression](#expressions): hover over `item.label` in the source, or watch
+  `rows.length > 3`. A watched expression that names only state still reads at a stop in C. In the Debug Console,
+  `erb print count + 1` evaluates in the frame selected in the call stack.
+- **A breakpoint's condition, hit count and log message** work as
+  [`erb break` and `erb log`](#conditions-hit-counts-and-logpoints) do: **Edit Breakpoint** in the gutter. A
+  logpoint's message goes to the Debug Console. One the debugger can't read is shown as unverified, with why.
 
 ### At a fault
 

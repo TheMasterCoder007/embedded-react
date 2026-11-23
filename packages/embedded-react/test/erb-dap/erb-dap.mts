@@ -19,9 +19,10 @@
 //
 // It builds tools/erb-frames' headless host as erb-gdb does, compiles the native-calls fixture with its debug file, and
 // plays an editor's part of a session: a breakpoint in the fixture's source and one on a C function, a tap that
-// reaches both, the call stack and variables at each stop, and the step buttons in C and in the app. A second session
-// runs the list-fault fixture, whose handler reads a row its list doesn't have, to the stop at the fault, and a third
-// gives the host that package cut short, to the stop at the refused load.
+// reaches both, the call stack and variables at each stop, expressions in hover and Watch, and the step buttons in C
+// and in the app. A second session presses the counter fixture's button six times past a logpoint, a breakpoint with a
+// condition and one with a hit count. A third runs the list-fault fixture, whose handler reads a row its list doesn't
+// have, to the stop at the fault, and a fourth gives the host that package cut short, to the stop at the refused load.
 //
 // Needs CMake, a C compiler and GDB 14 or later with Python, so it runs on Linux.
 
@@ -51,10 +52,13 @@ const BUILD_DIR = process.env.ERB_GDB_BUILD_DIR || join(HOST_DIR, 'build-gdb');
 const FIXTURES = join(PACKAGE_DIR, 'test/erb-frames/fixtures');
 const FIXTURE = join(FIXTURES, 'native-calls.tsx');
 const FAULT_FIXTURE = join(FIXTURES, 'list-fault.tsx');
+const COUNTER_FIXTURE = join(FIXTURES, 'counter.tsx');
 
 const SCREEN = {width: 240, height: 320};
 /** The "next" button: its handler calls Probe.next() first. */
 const TAP = '32,20';
+/** The counter's "+" button, six times. */
+const COUNTER_TAPS = Array(6).fill('122,142').join(' ');
 const WAIT_MS = Number(process.env.ERB_DAP_WAIT_MS) || 60000;
 const VM_FUNCTION = 'erb_vm_run';
 /** What is left of a package cut short, so its load is refused. */
@@ -97,6 +101,8 @@ function run(command: string, args: string[]): void {
 /** The editor's end of a session with the adapter. */
 class Editor {
   readonly transcript: string[] = [];
+  /** What the adapter has printed to the debug console. */
+  printed = '';
   private readonly adapter = spawn(
     process.execPath,
     [join(PACKAGE_DIR, 'cli.mts'), 'debug-adapter'],
@@ -113,6 +119,9 @@ class Editor {
       if (message.type === 'response') {
         this.responses.get(message.request_seq)?.(message);
       } else if (message.type === 'event') {
+        if (message.event === 'output') {
+          this.printed += message.body?.output ?? '';
+        }
         this.events.push(message);
         this.eventWaiter?.();
       }
@@ -341,6 +350,42 @@ async function session(
     context: 'hover',
   });
   check('a local evaluates by name', hover.body?.result === '1', hover);
+  const evaluated: [string, string, string][] = [
+    ['hover', 'step * 2 + 1', '3'],
+    ['watch', 'total >= 0 && !even ? "odd" : "even"', '"odd"'],
+  ];
+  for (const [context, expression, expected] of evaluated) {
+    const response = await editor.request('evaluate', {
+      expression,
+      frameId: frames[0].id,
+      context,
+    });
+    check(
+      `${context} evaluates ${expression}`,
+      response.body?.result === expected,
+      response,
+    );
+  }
+  const call = await editor.request('evaluate', {
+    expression: 'Probe.next()',
+    frameId: frames[0].id,
+    context: 'watch',
+  });
+  check(
+    'an expression with a call is refused by name',
+    !call.success && /has a call/.test(call.message ?? ''),
+    call,
+  );
+  const printed = await editor.request('evaluate', {
+    expression: 'erb print step + total',
+    frameId: frames[0].id,
+    context: 'repl',
+  });
+  check(
+    'the debug console evaluates with erb print',
+    /^\d+$/.test(printed.body?.result ?? ''),
+    printed,
+  );
 
   const steps: [string, string, (stop: Body, top: Body) => boolean][] = [
     [
@@ -393,6 +438,100 @@ async function session(
     "the debug console runs the script's commands",
     /^total = 41$/m.test(console.body?.result ?? ''),
     console,
+  );
+  const ended = await editor.request('disconnect', {terminateDebuggee: true});
+  check('the session ends', ended.success, ended);
+}
+
+/**
+ * Plays a session with a logpoint, a condition and a hit count on a handler that runs six times.
+ *
+ * @param editor  The editor's end.
+ * @param host  The host's program.
+ * @param packagePath  The fixture's package.
+ * @param debugPath  Its debug file.
+ */
+async function conditionSession(
+  editor: Editor,
+  host: string,
+  packagePath: string,
+  debugPath: string,
+): Promise<void> {
+  const appSource = {name: 'counter.tsx', path: COUNTER_FIXTURE};
+  await editor.request('initialize', {
+    clientID: 'erb-dap',
+    adapterID: 'embedded-react',
+    linesStartAt1: true,
+    columnsStartAt1: true,
+  });
+  const launched = editor.request('launch', {
+    program: host,
+    args: [
+      join(BUILD_DIR, 'frame.raw'),
+      String(SCREEN.width),
+      String(SCREEN.height),
+      packagePath,
+      COUNTER_TAPS,
+      '0',
+    ],
+    debugFile: debugPath,
+    setupCommands: ['set debuginfod enabled off'],
+  });
+  await editor.event('initialized');
+  const set = await editor.request('setBreakpoints', {
+    source: appSource,
+    breakpoints: [
+      {line: 18, condition: 'count ='},
+      {line: 19, logMessage: 'press {count + 1}'},
+      {line: 20, condition: 'count === 4'},
+      {line: 21, hitCondition: '6'},
+    ],
+  });
+  const made: Body[] = set.body?.breakpoints ?? [];
+  check(
+    'a breakpoint takes a condition, a hit count or a log message, and a bad condition is refused by name',
+    made.length === 4 &&
+      !made[0].verified &&
+      /has an assignment/.test(made[0].message ?? '') &&
+      made.slice(1).every(entry => entry.verified),
+    set,
+  );
+  await editor.request('configurationDone');
+  check('the host launches', (await launched).success, await launched);
+
+  let stopped = await editor.event('stopped');
+  let frames = await editor.stack(stopped.body.threadId);
+  check(
+    'a condition stops on the press it holds at',
+    stopped.body.reason === 'breakpoint' &&
+      stopped.body.hitBreakpointIds?.length === 1 &&
+      stopped.body.hitBreakpointIds[0] === made[2].id &&
+      frames[0]?.line === 20,
+    [stopped.body, frames[0]],
+  );
+  const count = await editor.request('evaluate', {
+    expression: 'count',
+    frameId: frames[0].id,
+    context: 'watch',
+  });
+  check('the stop is the fifth press', count.body?.result === '4', count);
+  check(
+    'a logpoint prints each press without a stop',
+    /^press 1\npress 2\npress 3\npress 4\npress 5\n$/m.test(
+      editor.printed.replace(/^(?!press ).*\n/gm, ''),
+    ),
+    editor.printed,
+  );
+
+  await editor.request('continue', {threadId: stopped.body.threadId});
+  stopped = await editor.event('stopped');
+  frames = await editor.stack(stopped.body.threadId);
+  check(
+    'a hit count stops on its pass',
+    stopped.body.hitBreakpointIds?.[0] === made[3].id &&
+      frames[0]?.line === 21 &&
+      /^press 6$/m.test(editor.printed),
+    [stopped.body, frames[0], editor.printed],
   );
   const ended = await editor.request('disconnect', {terminateDebuggee: true});
   check('the session ends', ended.success, ended);
@@ -590,6 +729,7 @@ run('cmake', ['--build', BUILD_DIR, '-j']);
 const host = join(BUILD_DIR, 'erb-frames');
 const sessions: [typeof session, string, string][] = [
   [session, FIXTURE, 'native-calls'],
+  [conditionSession, COUNTER_FIXTURE, 'counter'],
   [faultSession, FAULT_FIXTURE, 'list-fault'],
   [refusedSession, FAULT_FIXTURE, 'list-fault'],
 ];

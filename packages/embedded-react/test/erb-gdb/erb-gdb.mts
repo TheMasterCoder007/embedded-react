@@ -19,8 +19,10 @@
 // It builds tools/erb-frames' headless host with debug info and the VM's breakpoint hook, compiles fixtures with their
 // debug files, and runs the host under GDB, once for each. In the native-calls fixture a tap presses a button whose
 // handler calls the probe module, which GDB stops in. A breakpoint set before the run then stops the same handler,
-// which is stepped through. The lists fixture stops in a row's handler, which is entered with its row, and the
-// animations fixture in a fade's completion, which another function calls. The list-fault fixture's handler reads a
+// which is stepped through. The lists fixture stops in a row's handler, which is entered with its row, where
+// expressions are evaluated over the row and the state. The counter fixture is pressed six times past a logpoint, a
+// breakpoint with a condition and one with a hit count. The
+// animations fixture stops in a fade's completion, which another function calls. The list-fault fixture's handler reads a
 // row its list doesn't have, which stops the run by itself, and runs through with fault stops off. A package cut
 // short is refused, which stops the run too. The update-loop fixture's effect keeps setting its own state, which stops
 // with that effect's line. Each command's output is checked against what the app must show at that
@@ -185,6 +187,106 @@ const LIST_CHECKS: Check[] = [
     command: 'erb locals',
     expected: /^item = \{[^}]*label: "(one|two|three)"[^}]*\}$/m,
   },
+  {
+    command: 'erb print item.label',
+    expected: /^item\.label = "(one|two|three)"$/m,
+  },
+  {command: 'erb print picked + 1', expected: /^picked \+ 1 = 1$/m},
+  {
+    command: 'erb print items.length > 3',
+    expected: /^items\.length > 3 = false$/m,
+  },
+  {
+    command: 'erb print items[1].n * 2 + items[0].w',
+    expected: /^items\[1\]\.n \* 2 \+ items\[0\]\.w = 46\.5$/m,
+  },
+  // The third row leaves n out.
+  {
+    command: 'erb print items[2].n ?? items[9]?.label',
+    expected: / = undefined$/m,
+  },
+  {
+    command: 'erb print item === items[0] ? "first" : "later"',
+    expected: / = "(first|later)"$/m,
+  },
+  {
+    command: 'erb print setPicked(1)',
+    run: caught('erb print setPicked(1)'),
+    expected:
+      /^`setPicked\(1\)` has a call, which the debugger doesn't evaluate/m,
+  },
+  {
+    command: 'erb print picked = 1',
+    run: caught('erb print picked = 1'),
+    expected: /^`picked = 1` has an assignment \(=\)/m,
+  },
+  {
+    command: 'erb print item.lable',
+    run: caught('erb print item.lable'),
+    expected: /^a row of items has no lable; it has label, n, w$/m,
+  },
+];
+
+file = 'counter.tsx';
+/** Six presses of "+": a logpoint, a condition that holds on the fifth, and a hit count that takes the sixth. */
+const COUNTER_BEFORE: Check[] = [
+  {
+    command: `erb log ${file}:19 press {count + 1} {count > 2 ? "high" : "low"}`,
+    expected: new RegExp(
+      `^erb breakpoint 1 at ${file}:19  log press \\{count \\+ 1\\}`,
+      'm',
+    ),
+  },
+  {
+    command: `erb break ${file}:20 if count === 4`,
+    expected: new RegExp(
+      `^erb breakpoint 2 at ${file}:20  if count === 4 \\(set when the app loads\\)$`,
+      'm',
+    ),
+  },
+  {
+    command: `erb break ${file}:21 hits 6`,
+    expected: new RegExp(`^erb breakpoint 3 at ${file}:21  hits 6`, 'm'),
+  },
+  {
+    command: `erb break ${file}:20 if count =`,
+    run: caught(`erb break ${file}:20 if count =`),
+    expected: /^`count =` has an assignment \(=\)/m,
+  },
+];
+/** Each press is logged without a stop, and the condition stops the fifth. */
+const COUNTER_STOP = new RegExp(
+  `^press 1 low$[\\s\\S]*^press 4 high$[\\s\\S]*^press 5 high$[\\s\\S]*^erb breakpoint 2, ${file}:20  onPress$`,
+  'm',
+);
+const COUNTER_CHECKS: Check[] = [
+  {command: 'erb print count', expected: /^count = 4$/m},
+  {
+    command: 'erb print mood === "calm" && label.length > 3',
+    expected: / = true$/m,
+  },
+  // The compiler folded the handler's argument away.
+  {command: 'erb print step', expected: /^step = <optimised out>$/m},
+  {
+    command: 'erb print step + 1',
+    run: caught('erb print step + 1'),
+    expected: /^step can't be read: it is <optimised out>$/m,
+  },
+  {
+    command: 'erb break',
+    expected: new RegExp(
+      `^1  ${file}:19  log press[^\\n]*\\n2  ${file}:20  if count === 4\\n3  ${file}:21  hits 6$`,
+      'm',
+    ),
+  },
+  {
+    command: 'continue',
+    expected: new RegExp(
+      `^press 6 high$[\\s\\S]*^erb breakpoint 3, ${file}:21  onPress$`,
+      'm',
+    ),
+  },
+  {command: 'erb print count >= 5', expected: /^count >= 5 = true$/m},
 ];
 
 file = 'animations.tsx';
@@ -283,6 +385,16 @@ const SESSIONS: Session[] = [
     before: LIST_BEFORE,
     setup: [],
     checks: LIST_CHECKS,
+  },
+  {
+    fixture: 'counter',
+    // The "+" button, six times.
+    taps: Array(6).fill('122,142').join(' '),
+    settle: 0,
+    before: COUNTER_BEFORE,
+    setup: [],
+    stop: COUNTER_STOP,
+    checks: COUNTER_CHECKS,
   },
   {
     fixture: 'animations',
@@ -394,7 +506,7 @@ function runSession(session: Session, host: string): number {
   );
   writeFileSync(debugPath, result.debugFile);
 
-  const runCommand = `run ${join(BUILD_DIR, 'frame.raw')} ${SCREEN.width} ${SCREEN.height} ${packagePath} ${session.taps} ${session.settle}`;
+  const runCommand = `run ${join(BUILD_DIR, 'frame.raw')} ${SCREEN.width} ${SCREEN.height} ${packagePath} "${session.taps}" ${session.settle}`;
   const atRun: Check[] = session.stop
     ? [{command: 'run', run: runCommand, expected: session.stop}]
     : [];

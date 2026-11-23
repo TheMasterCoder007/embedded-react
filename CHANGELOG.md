@@ -34,6 +34,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `embedded-react decode-fault` prints a fault record's C call chain and the app's source line, from the
   firmware's ELF.
 - Flow B: an update loop fault names the line where the last effect changed a state.
+- Flow B debugger: expressions over an app's locals and state (`erb print item.label`, `rows.length > 3`), in
+  an editor's hover and Watch too. They read the board and run nothing on it.
+- Flow B debugger: a breakpoint takes a condition, a hit count and a log message (`erb break 41 if count === 5`,
+  `erb log`, and an editor's Edit Breakpoint).
 
 ## [0.25.0] - 2026-11-20
 ### Added

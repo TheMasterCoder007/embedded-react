@@ -920,6 +920,11 @@ The debugger works out the places from `app.erdbg`: a breakpoint's line is each 
 a step's range is the statement it is in. A step that returns partway through a statement is run on to the next one
 by the debugger, without stopping.
 
+The hook stops at a place and tests nothing else. A breakpoint's condition, hit count and log message are the
+debugger's: at each stop the script evaluates them on the host, from the frame's registers and the arena, and
+resumes the board when the breakpoint doesn't stop. A pass costs a halt, a few reads over the probe and a resume.
+The expressions are parsed and evaluated in the script, which runs no code on the board.
+
 Code that runs from flash needs a hardware breakpoint on `erb_debug_break()`. GDB uses one where the debug server's
 memory map says flash, so the map has to cover every bank the code is in. On a dual-bank STM32H7, OpenOCD's
 `target/stm32h7x.cfg` declares the second bank only with `-c "set DUAL_BANK 1"` before it. Without it, code in the
@@ -931,8 +936,8 @@ second bank gets software breakpoints, which never fire.
 on stdin and stdout, and runs GDB with GDB's own adapter (`gdb -i dap`, so GDB 14 or later with Python) and
 `gdb/erb.py` loaded. A request about C goes to GDB as it came. A request about the app is answered from the script:
 
-- A breakpoint in the app's source file goes to the hook. One on a line with no code moves to the next line that has
-  some.
+- A breakpoint in the app's source file goes to the hook, with its condition, hit count and log message. One on a
+  line with no code moves to the next line that has some.
 - A stop the hook made is shown as a stop on the app's line, and step in, over and out step the app. At any other
   stop they step C.
 - A fault or a refused load is shown as an exception with the reason as its text, on the app's line when the app's
@@ -940,6 +945,8 @@ on stdin and stdout, and runs GDB with GDB's own adapter (`gdb -i dap`, so GDB 1
 - The call stack has the app's frames inside the VM's frame, under whatever C the app called.
 - An app frame's variables are its locals and the app's state, and every C frame has the state too. A state can be
   set there.
+- Hover and Watch in an app frame evaluate an expression over them, and `erb print` in the Debug Console reads the
+  frame the editor has selected.
 
 The script's commands need the board halted, so a breakpoint set while it runs halts it and resumes it.
 
