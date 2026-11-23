@@ -36,12 +36,12 @@ extern "C"
 /** @brief ErbDebug::magic: "ERBD". */
 #define ERB_DEBUG_MAGIC 0x44425245u
 
-/** @brief Raised when a field of ErbDebug or ErbDebugControl changes. */
-#define ERB_DEBUG_VERSION 2u
+/** @brief Raised when a field of ErbDebug or ErbDebugControl changes, or an event is added. */
+#define ERB_DEBUG_VERSION 3u
 
 /**
- * @brief Set to 1 to build the VM's breakpoint hook, for breakpoints and stepping from GDB. Off, the VM has no code
- *        for it. A debug build's option: on, the VM tests one flag on every instruction.
+ * @brief Set to 1 to build the VM's breakpoint hook, for breakpoints, stepping and a stop at a fault from GDB. Off,
+ *        the VM has no code for it. A debug build's option: on, the VM tests one flag on every instruction.
  */
 #ifndef ERB_DEBUG_HOOK
 #define ERB_DEBUG_HOOK 0
@@ -68,6 +68,8 @@ extern "C"
         ERB_DEBUG_AT_STOP = 0, /**< At a stop, or where a step ends. */
         ERB_DEBUG_AT_RETURN,   /**< A step reached the return to the runtime. */
         ERB_DEBUG_AT_LOAD,     /**< A package loaded and none of its code has run: a debugger writes its stops. */
+        ERB_DEBUG_AT_FAULT,    /**< The app faulted and nothing has handled it yet: ErbDebug::error says why. */
+        ERB_DEBUG_AT_REFUSED,  /**< A load was refused: ErbDebug::error says why. */
     } ErbDebugEvent;
 
     /** @brief A place to stop: a function and an instruction in it. */
@@ -81,7 +83,7 @@ extern "C"
     /**
      * @brief Where the hook stops. A debugger writes it while the board is halted; the VM tests armed before each
      *        instruction, and calls erb_debug_break() at a stop or at the end of a step. The runtime also calls it
-     *        after each load.
+     *        after each load, when the app faults and when a load is refused.
      */
     typedef struct
     {

@@ -20,8 +20,10 @@
 // debug files, and runs the host under GDB, once for each. In the native-calls fixture a tap presses a button whose
 // handler calls the probe module, which GDB stops in. A breakpoint set before the run then stops the same handler,
 // which is stepped through. The lists fixture stops in a row's handler, which is entered with its row, and the
-// animations fixture in a fade's completion, which another function calls. Each command's output is checked against
-// what the app must show at that point.
+// animations fixture in a fade's completion, which another function calls. The list-fault fixture's handler reads a
+// row its list doesn't have, which stops the run by itself, and runs through with fault stops off. A package cut
+// short is refused, which stops the run too. Each command's output is checked against what the app must show at that
+// point.
 //
 // Needs CMake, a C compiler and GDB with Python, so it runs on Linux.
 
@@ -67,6 +69,10 @@ interface Session {
   before: Check[];
   /** Commands before the run that aren't checked. */
   setup: string[];
+  /** What the run prints as it stops, when that is checked. */
+  stop?: RegExp;
+  /** The bytes of the package the host is given, when it is cut short so the load is refused. */
+  keepBytes?: number;
   /** Checks once the run stops. */
   checks: Check[];
 }
@@ -200,6 +206,49 @@ const COMPLETION_CHECKS: Check[] = [
   {command: 'erb locals 1', expected: /^No locals\.$/m},
 ];
 
+file = 'list-fault.tsx';
+/** A fault stops the run by itself, before the runtime tears the app down. */
+const FAULT_STOP = new RegExp(
+  `^App fault: list read past its end\\n  check: list row past the list's end\\n  at ${file}:18  onPress$`,
+  'm',
+);
+const FAULT_CHECKS: Check[] = [
+  {command: 'erb where', expected: new RegExp(`^${file}:18  onPress$`, 'm')},
+  {command: 'erb locals', expected: /^row = 5$/m},
+  {
+    command: 'erb error',
+    expected: /^list read past its end$[\s\S]*^The app stopped\.$/m,
+  },
+  {
+    command: 'erb step',
+    run: caught('erb step'),
+    expected: /^the app faulted, so it has no next statement/m,
+  },
+  {command: 'erb faults', expected: /^A fault stops the board\.$/m},
+];
+const FAULTS_OFF: Check[] = [
+  {command: 'erb faults off', expected: /^A fault doesn't stop the board\.$/m},
+];
+
+/** A refused load stops the run with no app loaded. */
+const REFUSED_STOP = /^Load refused: not a package, or corrupt$/m;
+const REFUSED_CHECKS: Check[] = [
+  {
+    command: 'erb error',
+    expected: /^not a package, or corrupt$[\s\S]*^The app was not loaded\.$/m,
+  },
+  {
+    command: 'erb where',
+    run: caught('erb where'),
+    expected: /^no app is running: `erb error` says why$/m,
+  },
+  {
+    command: 'erb step',
+    run: caught('erb step'),
+    expected: /^the app wasn't loaded, so it has no next statement/m,
+  },
+];
+
 const SESSIONS: Session[] = [
   {
     fixture: 'native-calls',
@@ -226,6 +275,35 @@ const SESSIONS: Session[] = [
     before: COMPLETION_BEFORE,
     setup: [],
     checks: COMPLETION_CHECKS,
+  },
+  {
+    fixture: 'list-fault',
+    taps: '32,20',
+    settle: 0,
+    before: [],
+    setup: [],
+    stop: FAULT_STOP,
+    checks: FAULT_CHECKS,
+  },
+  {
+    fixture: 'list-fault',
+    taps: '32,20',
+    settle: 0,
+    before: FAULTS_OFF,
+    setup: [],
+    // The host runs to its end, and says the app stopped.
+    stop: /exited with code 01/,
+    checks: [],
+  },
+  {
+    fixture: 'list-fault',
+    taps: '32,20',
+    settle: 0,
+    before: [],
+    setup: [],
+    stop: REFUSED_STOP,
+    checks: REFUSED_CHECKS,
+    keepBytes: 200,
   },
 ];
 
@@ -281,10 +359,20 @@ function runSession(session: Session, host: string): number {
   });
   const packagePath = join(BUILD_DIR, `${session.fixture}.erpkg`);
   const debugPath = join(BUILD_DIR, `${session.fixture}.erdbg`);
-  writeFileSync(packagePath, packPackage(result).bytes);
+  const packageBytes = packPackage(result).bytes;
+  writeFileSync(
+    packagePath,
+    session.keepBytes === undefined
+      ? packageBytes
+      : packageBytes.subarray(0, session.keepBytes),
+  );
   writeFileSync(debugPath, result.debugFile);
 
-  const checks = [...session.before, ...session.checks];
+  const runCommand = `run ${join(BUILD_DIR, 'frame.raw')} ${SCREEN.width} ${SCREEN.height} ${packagePath} ${session.taps} ${session.settle}`;
+  const atRun: Check[] = session.stop
+    ? [{command: 'run', run: runCommand, expected: session.stop}]
+    : [];
+  const checks = [...session.before, ...atRun, ...session.checks];
   const commands = [
     'set pagination off',
     'set confirm off',
@@ -293,8 +381,8 @@ function runSession(session: Session, host: string): number {
     `erb file ${debugPath}`,
     ...marked(session.before, 0),
     ...session.setup,
-    `run ${join(BUILD_DIR, 'frame.raw')} ${SCREEN.width} ${SCREEN.height} ${packagePath} ${session.taps} ${session.settle}`,
-    ...marked(session.checks, session.before.length),
+    ...(atRun.length ? marked(atRun, session.before.length) : [runCommand]),
+    ...marked(session.checks, session.before.length + atRun.length),
     'kill',
   ];
   const scriptPath = join(BUILD_DIR, `erb-gdb-${session.fixture}.gdb`);

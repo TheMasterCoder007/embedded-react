@@ -41,6 +41,10 @@ class FakeGdb {
   /** What `erb dap status` answers at the next stop. */
   status: Body = {loaded: true, hookStop: false, frames: [], hit: []};
   frames: Body[] = [];
+  /** Whether the firmware has the hook. */
+  hook = true;
+  /** The exception filters GDB was last given. */
+  exceptionFilters: string[] = [];
   private seq = 1;
   private deferred: Message | null = null;
   /** GDB can't list a running board's threads. */
@@ -103,6 +107,10 @@ class FakeGdb {
           };
         }
         return {variables: [{name: 'step', value: '1', type: 'int'}]};
+      case 'faults':
+        return this.hook
+          ? {verified: true}
+          : {verified: false, message: 'the firmware has no breakpoint hook'};
       case 'set':
         return {value: `${request.state}=${request.value}`};
       case 'evaluate':
@@ -134,7 +142,10 @@ class FakeGdb {
     this.asked.push(request.command);
     switch (request.command) {
       case 'initialize':
-        this.respond(request, {supportsDisassembleRequest: true});
+        this.respond(request, {
+          supportsDisassembleRequest: true,
+          exceptionBreakpointFilters: [{filter: 'throw', label: 'C++ throw'}],
+        });
         return this.event('initialized');
       case 'launch':
       case 'attach':
@@ -165,6 +176,11 @@ class FakeGdb {
         });
       case 'setBreakpoints':
         return this.respond(request, {breakpoints: [{id: 4, verified: true}]});
+      case 'setExceptionBreakpoints':
+        this.exceptionFilters = args.filters;
+        return this.respond(request, {
+          breakpoints: args.filters.map(() => ({id: 9, verified: true})),
+        });
       default:
         return this.respond(request, {});
     }
@@ -293,8 +309,13 @@ describe('debug adapter', () => {
       'capabilities',
       'initialized',
     ]);
-    expect(editor.events[0].body.capabilities).toEqual({
+    expect(editor.events[0].body.capabilities).toMatchObject({
       supportsDisassembleRequest: true,
+      supportsExceptionInfoRequest: true,
+      exceptionBreakpointFilters: [
+        {filter: 'erb-faults', label: 'Stop on app faults', default: true},
+        {filter: 'throw', label: 'C++ throw'},
+      ],
     });
     await editor.request('configurationDone');
     expect((await launched).success).toBe(true);
@@ -405,6 +426,114 @@ describe('debug adapter', () => {
     expect(paged.body.stackFrames.map((frame: Body) => frame.id)).toEqual([
       APP_ID + 1,
       2,
+    ]);
+  });
+
+  it("shows a fault as an exception on the app's line", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    editor.gdb.status = {
+      loaded: true,
+      hookStop: true,
+      frames: [{name: 'onPress', line: 32}],
+      hit: [],
+      fault: {
+        reason: 'list read past its end',
+        text: 'list read past its end\n  at App.tsx:32  onPress',
+        refused: false,
+      },
+    };
+    editor.gdb.frames = [
+      {id: 1, name: 'erb_debug_break', line: 874},
+      {id: 2, name: 'erb_rt_fault', line: 460},
+      {id: 3, name: 'erb_vm_run [App.tsx:32  onPress]', line: 1272},
+      {id: 4, name: 'main', line: 10},
+    ];
+    const stopped = editor.nextEvent('stopped');
+    editor.gdb.event('stopped', {
+      reason: 'breakpoint',
+      threadId: 1,
+      hitBreakpointIds: [-1],
+    });
+    expect((await stopped).body).toEqual({
+      reason: 'exception',
+      description: 'App fault',
+      text: 'list read past its end',
+      threadId: 1,
+    });
+    const info = await editor.request('exceptionInfo', {threadId: 1});
+    expect(info.body).toEqual({
+      exceptionId: 'list read past its end',
+      description: 'list read past its end\n  at App.tsx:32  onPress',
+      breakMode: 'always',
+    });
+    const stack = await editor.request('stackTrace', {threadId: 1});
+    expect(stack.body.stackFrames.map((frame: Body) => frame.name)).toEqual([
+      'onPress',
+      'erb_vm_run [App.tsx:32  onPress]',
+      'main',
+    ]);
+    const locals = await editor.request('variables', {
+      variablesReference: LOCALS,
+    });
+    expect(locals.body.variables[0]).toMatchObject({name: 'step', value: '1'});
+    // The app has no next statement, so the step button runs the firmware on.
+    editor.gdb.asked.length = 0;
+    await editor.request('next', {threadId: 1});
+    expect(editor.gdb.asked).toEqual(['next']);
+    // The next stop is not the fault's.
+    const paused = editor.nextEvent('stopped');
+    editor.gdb.status = {loaded: false, note: 'no app is running'};
+    editor.gdb.event('stopped', {reason: 'pause', threadId: 1});
+    expect((await paused).body.reason).toBe('pause');
+    editor.gdb.asked.length = 0;
+    await editor.request('exceptionInfo', {threadId: 1});
+    expect(editor.gdb.asked).toEqual(['exceptionInfo']);
+  });
+
+  it('shows a refused load with no app running as an exception', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    editor.gdb.status = {
+      loaded: false,
+      note: 'no app is running',
+      fault: {
+        reason: 'needs more than the firmware reserves',
+        text: 'needs more than the firmware reserves\n  arena: needs 57552, the firmware reserves 32768',
+        refused: true,
+      },
+    };
+    const stopped = editor.nextEvent('stopped');
+    editor.gdb.event('stopped', {reason: 'breakpoint', threadId: 1});
+    expect((await stopped).body).toEqual({
+      reason: 'exception',
+      description: 'Load refused',
+      text: 'needs more than the firmware reserves',
+      threadId: 1,
+    });
+  });
+
+  it('takes the fault checkbox itself and hands GDB its own filters', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    const set = await editor.request('setExceptionBreakpoints', {
+      filters: ['throw', 'erb-faults'],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({do: 'faults', stop: true});
+    expect(editor.gdb.exceptionFilters).toEqual(['throw']);
+    expect(set.body.breakpoints).toEqual([
+      {id: 9, verified: true},
+      {verified: true},
+    ]);
+    await editor.request('setExceptionBreakpoints', {filters: []});
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({do: 'faults', stop: false});
+    // A firmware without the hook can't stop at a fault, and the checkbox says so.
+    editor.gdb.hook = false;
+    const refused = await editor.request('setExceptionBreakpoints', {
+      filters: ['erb-faults'],
+    });
+    expect(refused.body.breakpoints).toEqual([
+      {verified: false, message: 'the firmware has no breakpoint hook'},
     ]);
   });
 

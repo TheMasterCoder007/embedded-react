@@ -1,8 +1,8 @@
 # Embedded React for VS Code
 
 Debugs a Flow B app on a board from the editor: breakpoints in the gutter of the app's source, the step buttons, the
-app's frames in the call stack, and its state and locals in the Variables pane. C breakpoints and stepping work in the
-same session.
+app's frames in the call stack, and its state and locals in the Variables pane. An app fault stops on the line that
+faulted, with its reason. C breakpoints and stepping work in the same session.
 
 The extension only registers the `embedded-react` debug type. The debug adapter is in the project's `embedded-react`
 package (`embedded-react debug-adapter`), so it always matches the compiler that wrote `app.erdbg`.
@@ -10,7 +10,7 @@ package (`embedded-react debug-adapter`), so it always matches the compiler that
 ## Needs
 
 - A project with `embedded-react` installed, and an app built with `embedded-react build --aot`.
-- Firmware built with `ERB_DEBUG_HOOK=1`, for breakpoints and stepping in the app.
+- Firmware built with `ERB_DEBUG_HOOK=1`, for breakpoints and stepping in the app and the stop at a fault.
 - GDB 14 or later for the board, built with Python.
 - A GDB server for the probe, such as OpenOCD.
 

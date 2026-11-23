@@ -452,6 +452,14 @@ ErbStatus erb_rt_fault(ErbStatus status, const char* detail, const char* name, u
         erb_debug_lookup(&g_erb.program, function, offset, &error->file, &error->line);
     }
     g_erb.faulted = true;
+#if ERB_DEBUG_HOOK
+    if (!s_fault_pending)
+    {
+        /* A debugger stops here, with the handler that faulted still on the VM's stack. */
+        erb_debug_control.event = ERB_DEBUG_AT_FAULT;
+        erb_debug_break();
+    }
+#endif
     s_fault_pending = true;
     return status;
 }
@@ -2049,6 +2057,10 @@ bool erb_load(const void* package, size_t package_bytes, const ErbConfig* config
         }
         /* The running app, if any, is untouched. */
         g_erb.error = *out;
+#if ERB_DEBUG_HOOK
+        erb_debug_control.event = ERB_DEBUG_AT_REFUSED;
+        erb_debug_break();
+#endif
         return false;
     }
     if (start(config) != ERB_OK)
