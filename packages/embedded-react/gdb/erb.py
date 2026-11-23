@@ -1613,6 +1613,8 @@ def dap_breakpoints(request):
     """Replaces the app's breakpoints with the editor's. A line with no code moves to the next line that has some."""
     if debug_file is None:
         raise ErbError("no debug file")
+    # A line that stays keeps its number, so the editor's breakpoint keeps its id.
+    kept = {entry["line"]: entry for entry in breakpoints}
     del breakpoints[:]
     if not has_hook():
         return {"breakpoints": [{"verified": False, "message": NO_HOOK} for _ in request["lines"]]}
@@ -1628,8 +1630,10 @@ def dap_breakpoints(request):
             continue
         entry = next((entry for entry in breakpoints if entry["line"] == line), None)
         if entry is None:
-            breakpoint_numbers[0] += 1
-            entry = {"number": breakpoint_numbers[0], "line": line}
+            entry = kept.get(line)
+            if entry is None:
+                breakpoint_numbers[0] += 1
+                entry = {"number": breakpoint_numbers[0], "line": line}
             breakpoints.append(entry)
         answers.append({"id": entry["number"], "line": line, "verified": True})
     # The hook holds so many places: the last breakpoints that don't fit are refused.

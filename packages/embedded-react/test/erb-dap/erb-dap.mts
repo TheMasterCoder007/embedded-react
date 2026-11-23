@@ -257,10 +257,15 @@ async function session(
       appBreakpoints[1].line === 32,
     set,
   );
-  await editor.request('setBreakpoints', {
+  const kept = await editor.request('setBreakpoints', {
     source: appSource,
     breakpoints: [{line: 34}],
   });
+  check(
+    'a breakpoint that stays keeps its id',
+    kept.body?.breakpoints?.[0]?.id === appBreakpoints[0].id,
+    kept,
+  );
   const functionSet = await editor.request('setFunctionBreakpoints', {
     breakpoints: [{name: 'probe_next'}],
   });

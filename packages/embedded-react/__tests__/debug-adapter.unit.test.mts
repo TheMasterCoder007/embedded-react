@@ -336,6 +336,29 @@ describe('debug adapter', () => {
     expect(editor.gdb.asked).toEqual(['setBreakpoints']);
   });
 
+  it('refuses a condition on an app breakpoint instead of dropping it', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    const response = await editor.request('setBreakpoints', {
+      source: {path: APP_PATH},
+      breakpoints: [
+        {line: 40, condition: 'count === 5'},
+        {line: 41},
+        {line: 42, logMessage: 'pressed'},
+      ],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'breakpoints',
+      lines: [41],
+    });
+    expect(
+      response.body.breakpoints.map((entry: Body) => entry.verified),
+    ).toEqual([false, true, false]);
+    expect(response.body.breakpoints[0].message).toMatch(/condition/);
+    expect(response.body.breakpoints[1].line).toBe(41);
+  });
+
   it("halts a running board to set the app's breakpoints, without a stop in the editor", async () => {
     const editor = new Editor();
     await editor.start('launch');

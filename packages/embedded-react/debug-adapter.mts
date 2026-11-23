@@ -180,6 +180,19 @@ function escapeFilename(name: string): string {
 }
 
 /**
+ * Whether an editor's breakpoint asks for more than a stop on its line.
+ *
+ * @param breakpoint  The breakpoint, as setBreakpoints gives it.
+ *
+ * @returns True when it has a condition, a hit count or a log message.
+ */
+function isConditional(breakpoint: Record<string, any>): boolean {
+  return Boolean(
+    breakpoint.condition || breakpoint.hitCondition || breakpoint.logMessage,
+  );
+}
+
+/**
  * A path's last part, whichever slash it uses.
  *
  * @param path  The path.
@@ -778,6 +791,7 @@ export class DebugAdapter {
     if (config.program) {
       await this.console(`file ${escapeFilename(config.program)}`);
     }
+    // `source` and `erb file` take the rest of the line as the path, spaces and all, so these aren't escaped.
     await this.console(`source ${this.script}`);
     await this.console(`erb file ${config.debugFile}`);
     const info = await this.erb({do: 'info'});
@@ -929,24 +943,38 @@ export class DebugAdapter {
     }
     return this.inLane(async () => {
       this.appSource = path;
-      const wanted: number[] = args.breakpoints
-        ? args.breakpoints.map((entry: {line: number}) => entry.line)
-        : (args.lines ?? []);
+      const wanted: Record<string, any>[] =
+        args.breakpoints ?? (args.lines ?? []).map((line: number) => ({line}));
+      // The hook stops at a place and tests nothing, so a breakpoint that asks for more is refused, not set bare.
+      const plain = wanted.filter(entry => !isConditional(entry));
       const answer = await this.whileHalted(() =>
         this.erb({
           do: 'breakpoints',
-          lines: wanted.map(line => line + this.lineShift),
+          lines: plain.map(entry => entry.line + this.lineShift),
         }),
       );
+      const set: Record<string, any>[] = [...answer.breakpoints];
       this.respond(request, {
-        breakpoints: answer.breakpoints.map((entry: Record<string, any>) => ({
-          id: entry.id === undefined ? undefined : APP_BREAKPOINT + entry.id,
-          verified: entry.verified,
-          message: entry.message,
-          line:
-            entry.line === undefined ? undefined : entry.line - this.lineShift,
-          source: args.source,
-        })),
+        breakpoints: wanted.map(entry => {
+          if (isConditional(entry)) {
+            return {
+              verified: false,
+              message:
+                "A breakpoint in the app can't have a condition, a hit count or a log message yet.",
+              line: entry.line,
+              source: args.source,
+            };
+          }
+          const made = set.shift() ?? {verified: false};
+          return {
+            id: made.id === undefined ? undefined : APP_BREAKPOINT + made.id,
+            verified: made.verified,
+            message: made.message,
+            line:
+              made.line === undefined ? undefined : made.line - this.lineShift,
+            source: args.source,
+          };
+        }),
       });
     });
   }

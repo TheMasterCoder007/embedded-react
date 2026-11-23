@@ -950,11 +950,11 @@ needed, and `target` to attach to a board, as GDB's `target remote` takes it. Th
 GDB leaves a board halted when it disconnects, so a configuration for OpenOCD ends with
 `"disconnectCommands": ["monitor resume"]`.
 
-On an ESP32-S3's built-in JTAG, OpenOCD reads the flash mapping when GDB connects, and fails to on a chip a debug
-session has already run on. GDB then takes the code in flash for RAM and its breakpoints never fire. Resetting the
-chip before GDB connects avoids it: the server's arguments end with `-c "init; reset halt"`. Espressif's GDB picks
-its Python from the first `python3` on `PATH` and has none for a version it wasn't built for, so `environment` sets
-a `PATH` with one it has.
+On an ESP32-S3's built-in JTAG, OpenOCD reads the flash mapping when GDB connects. On a chip that has already had a
+debug session since its last power-on reset, that read fails. GDB then takes the code in flash for RAM and its
+breakpoints never fire. Resetting the chip before GDB connects avoids it: the server's arguments end with `-c "init;
+reset halt"`. Espressif's GDB picks its Python from the first `python3` on `PATH` and has none for a version it
+wasn't built for, so `environment` sets a `PATH` with one it has.
 
 The VS Code extension in `editors/vscode` registers the adapter as the `embedded-react` debug type and runs it from
 the project's own `embedded-react` package. Any editor that hosts a debug adapter can run the same command. CI plays
