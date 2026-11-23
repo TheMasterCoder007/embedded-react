@@ -50,6 +50,7 @@ const sidebars: SidebarsConfig = {
         'guides/demos',
         'guides/performance',
         'guides/memory',
+        'guides/debugging',
       ],
     },
     {

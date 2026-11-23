@@ -1,6 +1,6 @@
 ---
 title: 'Guides'
-description: 'Board-by-board setup, hot reload, the AOT subset, native modules, performance and memory.'
+description: 'Board-by-board setup, hot reload, the AOT subset, native modules, performance, memory and debugging.'
 ---
 
 The concepts pages explain how Embedded React works. These guides are about getting a particular
@@ -39,3 +39,5 @@ Not sure which flow your board wants? [Two flows](../concepts/two-flows.md) has 
   microcontroller, and the on-device overlay that shows you which subsystem to blame for a slow frame.
 - [Memory](./memory.md): the engine's compile-time pools, the JavaScript heap in Flow A, and how the
   three board examples were sized to fit.
+- [Debugging on a board](./debugging.md): a Flow B app through a debug probe, with GDB commands that read it by
+  its own names, breakpoints in its source, and the same from VS Code.

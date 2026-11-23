@@ -34,7 +34,9 @@ ESP32-S3 built-in JTAG" fill one in), then start it:
 }
 ```
 
-[The debug adapter](https://embedded-react.dev/internals/flow-b-packages#the-debug-adapter) describes each field.
+[Debugging on a board](https://embedded-react.dev/guides/debugging#from-an-editor) has a configuration for each board
+family, and [The debug adapter](https://embedded-react.dev/internals/flow-b-packages#the-debug-adapter) describes each
+field.
 
 ## Build
 
