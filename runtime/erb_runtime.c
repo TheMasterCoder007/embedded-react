@@ -814,13 +814,15 @@ static ErbStatus settle(void)
 {
     uint32_t passes = 0;
     ErbVmPlace last_change = {.function = ERB_NONE};
+    uint32_t passes_alone = 0; /* Update passes since an effect changed a state. */
     for (;;)
     {
         while (g_erb.program.dirty_words && any_dirty())
         {
             if (++passes > ERB_MAX_UPDATE_PASSES)
             {
-                if (last_change.function == ERB_NONE)
+                /* An update that ran alone for most of the passes is looping by itself. */
+                if (last_change.function == ERB_NONE || passes_alone > ERB_MAX_UPDATE_PASSES / 2u)
                 {
                     return erb_rt_fault(ERB_ERROR_UPDATE_LOOP, "state keeps changing in effects", NULL, ERB_NONE, 0u);
                 }
@@ -831,6 +833,7 @@ static ErbStatus settle(void)
                                     last_change.function,
                                     last_change.program_counter);
             }
+            passes_alone++;
             /* The pass reads its own copy, so what it sets lands in the next pass. */
             uint32_t* words = dirty_words();
             memcpy(words + g_erb.program.dirty_words, words, g_erb.program.dirty_words * sizeof(uint32_t));
@@ -857,6 +860,7 @@ static ErbStatus settle(void)
         if (s_effect_change.function != ERB_NONE)
         {
             last_change = s_effect_change;
+            passes_alone = 0;
         }
         if (status != ERB_OK)
         {
