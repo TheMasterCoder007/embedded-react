@@ -919,6 +919,47 @@ memory map says flash, so the map has to cover every bank the code is in. On a d
 `target/stm32h7x.cfg` declares the second bank only with `-c "set DUAL_BANK 1"` before it. Without it, code in the
 second bank gets software breakpoints, which never fire.
 
+### The debug adapter
+
+`embedded-react debug-adapter` lets an editor debug the app in its own source. It speaks the Debug Adapter Protocol
+on stdin and stdout, and runs GDB with GDB's own adapter (`gdb -i dap`, so GDB 14 or later with Python) and
+`gdb/erb.py` loaded. A request about C goes to GDB as it came. A request about the app is answered from the script:
+
+- A breakpoint in the app's source file goes to the hook. One on a line with no code moves to the next line that has
+  some.
+- A stop the hook made is shown as a stop on the app's line, and step in, over and out step the app. At any other
+  stop they step C.
+- The call stack has the app's frames inside the VM's frame, under whatever C the app called.
+- An app frame's variables are its locals and the app's state, and every C frame has the state too. A state can be
+  set there.
+
+The script's commands need the board halted, so a breakpoint set while it runs halts it and resumes it.
+
+An editor starts the adapter with a configuration. `program` (the firmware's ELF) and `debugFile` (`app.erdbg`) are
+needed, and `target` to attach to a board, as GDB's `target remote` takes it. The rest are optional:
+
+| Field                                                       | What it does                                                                                                                                            |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gdb`                                                       | The GDB to run. `gdb` when left out.                                                                                                                    |
+| `server`, `serverReady`, `serverTimeout`                    | A GDB server to start and end with the session (its program and arguments), the text it prints when GDB can connect, and how long to wait for it in ms. |
+| `setupCommands`, `postAttachCommands`, `disconnectCommands` | GDB commands to run before the ELF loads, once connected, and before the session ends.                                                                  |
+| `environment`                                               | Environment variables for GDB and the GDB server, over the editor's own.                                                                                |
+| `stopOnAttach`                                              | Leaves the board halted once attached. It runs on when left out.                                                                                        |
+| `source`                                                    | The app's source file, when it isn't beside the debug file.                                                                                             |
+
+GDB leaves a board halted when it disconnects, so a configuration for OpenOCD ends with
+`"disconnectCommands": ["monitor resume"]`.
+
+On an ESP32-S3's built-in JTAG, OpenOCD reads the flash mapping when GDB connects, and fails to on a chip a debug
+session has already run on. GDB then takes the code in flash for RAM and its breakpoints never fire. Resetting the
+chip before GDB connects avoids it: the server's arguments end with `-c "init; reset halt"`. Espressif's GDB picks
+its Python from the first `python3` on `PATH` and has none for a version it wasn't built for, so `environment` sets
+a `PATH` with one it has.
+
+The VS Code extension in `editors/vscode` registers the adapter as the `embedded-react` debug type and runs it from
+the project's own `embedded-react` package. Any editor that hosts a debug adapter can run the same command. CI plays
+an editor's session against the Linux host (`npm run erb:dap`).
+
 ### A hard fault with no probe attached
 
 An app can't cause a hard fault, but firmware, a driver or a native module can. The firmware keeps an

@@ -247,6 +247,8 @@ jobs:
       # Runs gdb/erb.py against the headless Flow B host, stopped in a handler, a list row's handler and an
       # animation's completion.
       - run: npm run erb:gdb
+      # Plays an editor's session with the debug adapter against the same host.
+      - run: npm run erb:dap
 
   erb-fuzz:
     name: Fuzz the package loader and VM

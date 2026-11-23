@@ -72,3 +72,5 @@ Add `-DER_HOTRELOAD=1` to the build to send a package over the native USB port o
 check the error screen after the reset. After a panic the log has a `fault record:` line, which
 `npx embedded-react decode-fault` traces with the firmware's ELF.
 `-DERB_DEBUG_HOOK=1` adds the hook for breakpoints and stepping from GDB (`erb break`, `erb step`).
+`-DER_BOARD_CRASH_TEST=3` panics when an app calls `Chip.freeMemory()`, to check a debugger's stop in a call the
+app made.

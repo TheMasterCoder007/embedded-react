@@ -25,10 +25,12 @@ symbols. Breakpoints and stepping (erb break, step, next, finish) need firmware 
 stops itself where the debugger asks. GDB must be built with Python 3.8 or later.
 """
 
+import base64
 import json
 import os
 import re
 import struct
+import sys
 
 import gdb
 
@@ -746,16 +748,20 @@ class ErbLocals(gdb.Command):
         if not 0 <= number < len(chain):
             raise ErbError("the app's call chain has %d frame%s" % (len(chain), "" if len(chain) == 1 else "s"))
         function, offset, base = chain[number]
-        named = app.locals_at(function, offset)
-        if not named:
+        shown = frame_locals(app, function, offset)
+        if not shown:
             print("No locals.")
-            return
-        # A name declared again in an inner block hides the outer one.
-        shown = {}
-        for local in named:
-            shown[local["name"]] = local
-        for local in sorted(shown.values(), key=lambda local: not local.get("parameter")):
+        for local in shown:
             print("%s = %s" % (local["name"], local_value(app, local, base)))
+
+
+def frame_locals(app, function, offset):
+    """The parameters and locals a frame shows, parameters first."""
+    # A name declared again in an inner block hides the outer one.
+    shown = {}
+    for local in app.locals_at(function, offset):
+        shown[local["name"]] = local
+    return sorted(shown.values(), key=lambda local: not local.get("parameter"))
 
 
 class ErbErrorCommand(gdb.Command):
@@ -870,18 +876,23 @@ class ErbSet(gdb.Command):
             raise ErbError("name the state and its value: erb set count 3")
         app = App()
         state = app.state(parts[0])
-        write(app.arena + state["offset"], encode_value(state, parts[1]))
-        if "dirtyBit" in state:
-            bit = state["dirtyBit"]
-            word = app.arena + app.panel["regions"]["dirty"]["offset"] + 4 * (bit // 32)
-            write(word, struct.pack(endian() + "I", read_value("I", word) | (1 << (bit % 32))))
-            app.runtime.request_update()
-        value = state_value(app, state)
-        for watchpoint in watchpoints:
-            if watchpoint.is_valid() and watchpoint.state["storage"] == state["storage"]:
-                watchpoint.previous = value
-                watchpoint.copying = None
-        print("%s = %s" % (app.label(state), value))
+        print("%s = %s" % (app.label(state), set_state(app, state, parts[1])))
+
+
+def set_state(app, state, text):
+    """Writes a state from its text and asks the app for an update. Returns the value it now shows."""
+    write(app.arena + state["offset"], encode_value(state, text))
+    if "dirtyBit" in state:
+        bit = state["dirtyBit"]
+        word = app.arena + app.panel["regions"]["dirty"]["offset"] + 4 * (bit // 32)
+        write(word, struct.pack(endian() + "I", read_value("I", word) | (1 << (bit % 32))))
+        app.runtime.request_update()
+    value = state_value(app, state)
+    for watchpoint in watchpoints:
+        if watchpoint.is_valid() and watchpoint.state["storage"] == state["storage"]:
+            watchpoint.previous = value
+            watchpoint.copying = None
+    return value
 
 
 # The states being watched, so a value the debugger writes isn't taken for one the app wrote.
@@ -1260,21 +1271,27 @@ hook_state = {"breakpoint": None, "stopped": False, "noted": False}
 source_lines = {}
 
 
-def source_text(line):
-    """A source line's text, when the source file can be found beside the debug file or here."""
+def source_path():
+    """The app's source file, when it can be found beside the debug file or here, else an empty string."""
     path = source_lines.get("path")
     if path is None:
-        found = ""
+        path = ""
         if debug_path:
             folder = os.path.dirname(os.path.abspath(debug_path))
             for candidate in (os.getcwd(), folder, os.path.dirname(folder)):
                 for sub in ("", "src"):
                     full = os.path.join(candidate, sub, debug_file["file"])
-                    if not found and os.path.isfile(full):
-                        found = full
-        source_lines["path"] = found
+                    if not path and os.path.isfile(full):
+                        path = os.path.abspath(full)
+        source_lines["path"] = path
+    return path
+
+
+def source_text(line):
+    """A source line's text, when the source file can be found."""
+    if "lines" not in source_lines:
         try:
-            with open(found, encoding="utf-8") as handle:
+            with open(source_path(), encoding="utf-8") as handle:
                 source_lines["lines"] = handle.read().splitlines()
         except OSError:
             source_lines["lines"] = []
@@ -1378,8 +1395,8 @@ class HookBreakpoint(gdb.Breakpoint):
         return True
 
 
-def run_step(kind):
-    """Starts a step and resumes the board, then shows where it stopped."""
+def arm_step(kind):
+    """Writes a step into the hook, for the board's next resume."""
     if not has_hook():
         raise ErbError(NO_HOOK)
     app = App()
@@ -1397,6 +1414,11 @@ def run_step(kind):
     else:
         start, end = statement_range(app.panel, function, offset)
         hook.set_step(kind, function, start, end, base)
+
+
+def run_step(kind):
+    """Starts a step and resumes the board, then shows where it stopped."""
+    arm_step(kind)
     gdb.execute("continue")
 
 
@@ -1555,6 +1577,185 @@ gdb.events.new_objfile.connect(on_new_objfile)
 
 
 # ----------------------------------------------------------------------------------------------------------------------
+# The debug adapter's requests
+# ----------------------------------------------------------------------------------------------------------------------
+
+MOST_ROWS_LISTED = 256
+STEP_KINDS = {"into": STEP_INTO, "over": STEP_OVER, "out": STEP_OUT}
+
+
+def dap_info(request):
+    return {"file": debug_file["file"] if debug_file else None, "source": source_path(), "hook": has_hook()}
+
+
+def dap_status(request):
+    """Where the board stopped, as the adapter shows it: the app's frames, and whether the hook made the stop."""
+    try:
+        app = App()
+    except gdb.GdbError as error:
+        return {"loaded": False, "note": str(error)}
+    functions = app.panel["functions"]
+    chain = app.frame_chain() if app.runtime.flag("in_vm") else []
+    frames = []
+    for function, offset, _ in chain:
+        named = function < len(functions) and functions[function]["name"]
+        frames.append({"name": named or "function %d" % function, "line": statement_line(app.panel, function, offset)[1]})
+    status = {"loaded": True, "hookStop": hook_state["stopped"] and bool(frames), "frames": frames, "hit": []}
+    if status["hookStop"] and returned[0]:
+        status["description"] = "%s returns to the runtime" % frames[0]["name"]
+    elif status["hookStop"]:
+        place = chain[0][:2]
+        status["hit"] = [entry["number"] for entry in breakpoints if place in line_places(app.panel, entry["line"])]
+    return status
+
+
+def dap_breakpoints(request):
+    """Replaces the app's breakpoints with the editor's. A line with no code moves to the next line that has some."""
+    if debug_file is None:
+        raise ErbError("no debug file")
+    del breakpoints[:]
+    if not has_hook():
+        return {"breakpoints": [{"verified": False, "message": NO_HOOK} for _ in request["lines"]]}
+    hook_breakpoint()
+    coded = sorted(
+        {entry["line"] for panel in debug_file["panels"] for function in panel["functions"] for entry in function["lines"]}
+    )
+    answers = []
+    for wanted in request["lines"]:
+        line = next((candidate for candidate in coded if candidate >= wanted), None)
+        if line is None:
+            answers.append({"verified": False, "message": "%s:%d has no code" % (debug_file["file"], wanted)})
+            continue
+        entry = next((entry for entry in breakpoints if entry["line"] == line), None)
+        if entry is None:
+            breakpoint_numbers[0] += 1
+            entry = {"number": breakpoint_numbers[0], "line": line}
+            breakpoints.append(entry)
+        answers.append({"id": entry["number"], "line": line, "verified": True})
+    # The hook holds so many places: the last breakpoints that don't fit are refused.
+    while True:
+        try:
+            write_stops()
+            break
+        except ErbError as error:
+            if "ERB_DEBUG_STOPS" not in str(error) or not breakpoints:
+                # Not running: the load writes them.
+                break
+            refused = breakpoints.pop()
+            for answer in answers:
+                if answer.get("id") == refused["number"]:
+                    answer.update(verified=False, message=str(error))
+    return {"breakpoints": answers}
+
+
+def dap_step(request):
+    kind = STEP_KINDS[request["kind"]]
+    if kind == STEP_OUT and (returned[0] or not Runtime().flag("in_vm")):
+        # Nothing to return from: on to the app's next statement.
+        kind = STEP_INTO
+    arm_step(kind)
+    return {}
+
+
+def state_variable(app, state):
+    variable = {"name": app.label(state), "value": state_value(app, state), "type": state["type"], "storage": state["storage"]}
+    if state["type"] == "list":
+        variable["rows"] = read_value("I", app.arena + state["offset"])
+    return variable
+
+
+def dap_variables(request):
+    app = App()
+    scope = request["scope"]
+    if scope == "state":
+        return {"variables": [state_variable(app, state) for state in app.panel["states"] if not state["hidden"]]}
+    if scope == "rows":
+        state = app.state(request["state"])
+        address = app.arena + state["offset"]
+        count = min(read_value("I", address), MOST_ROWS_LISTED)
+        data = read(address + LIST_HEADER_BYTES, count * state["rowBytes"]) if count else b""
+        return {
+            "variables": [
+                {"name": "[%d]" % row, "value": row_text(state, data, row * state["rowBytes"]), "type": "row"}
+                for row in range(count)
+            ]
+        }
+    chain = app.frame_chain() if app.runtime.flag("in_vm") else []
+    if not 0 <= request["frame"] < len(chain):
+        return {"variables": []}
+    function, offset, base = chain[request["frame"]]
+    return {
+        "variables": [
+            {"name": local["name"], "value": local_value(app, local, base), "type": local.get("type") or ""}
+            for local in frame_locals(app, function, offset)
+        ]
+    }
+
+
+def dap_set(request):
+    app = App()
+    return {"value": set_state(app, app.state(request["state"]), request["value"])}
+
+
+def dap_evaluate(request):
+    """A name's value: a local of the frame, else a state."""
+    app = App()
+    chain = app.frame_chain() if app.runtime.flag("in_vm") else []
+    if 0 <= request.get("frame", -1) < len(chain):
+        function, offset, base = chain[request["frame"]]
+        for local in frame_locals(app, function, offset):
+            if local["name"] == request["name"]:
+                return {"value": local_value(app, local, base), "type": local.get("type") or ""}
+    return state_variable(app, app.state(request["name"]))
+
+
+def settle_threads():
+    """GDB's adapter takes a thread it first sees for a sign that the board runs, and then refuses what needs it
+    halted. An RTOS's threads are first seen when they are listed after attaching, so they are listed here, and the
+    adapter told the board is halted."""
+    gdb.selected_inferior().threads()
+    events = sys.modules.get("gdb.dap.events")
+    if events is not None and hasattr(events, "inferior_running"):
+        events.inferior_running = False
+
+
+def dap_sync(request):
+    """After attaching: the app doesn't count the halt, and the hook holds the breakpoints set before."""
+    settle_threads()
+    mark_halted()
+    if breakpoints:
+        write_stops()
+    return {}
+
+
+DAP_REQUESTS = {
+    "info": dap_info,
+    "status": dap_status,
+    "breakpoints": dap_breakpoints,
+    "step": dap_step,
+    "variables": dap_variables,
+    "set": dap_set,
+    "evaluate": dap_evaluate,
+    "sync": dap_sync,
+}
+
+
+class ErbDap(gdb.Command):
+    """A request from the debug adapter (embedded-react debug-adapter): base64 JSON in, a line of JSON out."""
+
+    def __init__(self):
+        super().__init__("erb dap", gdb.COMMAND_SUPPORT)
+
+    def invoke(self, argument, from_tty):
+        request = json.loads(base64.b64decode(argument.strip()).decode("utf-8"))
+        try:
+            answer = DAP_REQUESTS[request["do"]](request)
+        except (gdb.GdbError, gdb.error, gdb.MemoryError) as error:
+            answer = {"error": str(error)}
+        print("@erb " + json.dumps(answer))
+
+
+# ----------------------------------------------------------------------------------------------------------------------
 # The app's line in a backtrace
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -1623,5 +1824,6 @@ ErbStep()
 ErbNext()
 ErbFinish()
 ErbPools()
+ErbDap()
 ErCommand()
 ErNodes()

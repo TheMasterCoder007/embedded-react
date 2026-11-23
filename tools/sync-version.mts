@@ -222,6 +222,12 @@ const MANIFESTS: Manifest[] = [
     read: jsonRead,
     write: jsonWrite,
   },
+  {path: 'editors/vscode/package.json', read: jsonRead, write: jsonWrite},
+  {
+    path: 'editors/vscode/package-lock.json',
+    read: lockRead,
+    write: lockWrite,
+  },
   {path: 'library.json', read: jsonRead, write: jsonWrite},
   {
     path: 'demos/thermostat/package.json',
