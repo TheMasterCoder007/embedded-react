@@ -19,7 +19,8 @@
 //
 // It builds tools/erb-frames' headless host as erb-gdb does, compiles the native-calls fixture with its debug file, and
 // plays an editor's part of a session: a breakpoint in the fixture's source and one on a C function, a tap that
-// reaches both, the call stack and variables at each stop, and the step buttons in C and in the app.
+// reaches both, the call stack and variables at each stop, and the step buttons in C and in the app. A second session
+// runs the list-fault fixture, whose handler reads a row its list doesn't have, to the stop at the fault.
 //
 // Needs CMake, a C compiler and GDB 14 or later with Python, so it runs on Linux.
 
@@ -46,7 +47,9 @@ const PACKAGE_DIR = resolve(HERE, '../..');
 const ROOT = resolve(PACKAGE_DIR, '../..');
 const HOST_DIR = join(ROOT, 'tools/erb-frames');
 const BUILD_DIR = process.env.ERB_GDB_BUILD_DIR || join(HOST_DIR, 'build-gdb');
-const FIXTURE = join(PACKAGE_DIR, 'test/erb-frames/fixtures/native-calls.tsx');
+const FIXTURES = join(PACKAGE_DIR, 'test/erb-frames/fixtures');
+const FIXTURE = join(FIXTURES, 'native-calls.tsx');
+const FAULT_FIXTURE = join(FIXTURES, 'list-fault.tsx');
 
 const SCREEN = {width: 240, height: 320};
 /** The "next" button: its handler calls Probe.next() first. */
@@ -392,6 +395,107 @@ async function session(
   check('the session ends', ended.success, ended);
 }
 
+/**
+ * Plays a session that runs to a fault.
+ *
+ * @param editor  The editor's end.
+ * @param host  The host's program.
+ * @param packagePath  The fixture's package.
+ * @param debugPath  Its debug file.
+ */
+async function faultSession(
+  editor: Editor,
+  host: string,
+  packagePath: string,
+  debugPath: string,
+): Promise<void> {
+  const initialized = await editor.request('initialize', {
+    clientID: 'erb-dap',
+    adapterID: 'embedded-react',
+    linesStartAt1: true,
+    columnsStartAt1: true,
+  });
+  const filters: Body[] = initialized.body?.exceptionBreakpointFilters ?? [];
+  check(
+    'the adapter offers a stop on app faults, on by default',
+    filters.some(filter => filter.filter === 'erb-faults' && filter.default),
+    initialized,
+  );
+  const launched = editor.request('launch', {
+    program: host,
+    args: [
+      join(BUILD_DIR, 'frame.raw'),
+      String(SCREEN.width),
+      String(SCREEN.height),
+      packagePath,
+      TAP,
+      '0',
+    ],
+    debugFile: debugPath,
+    setupCommands: ['set debuginfod enabled off'],
+  });
+  await editor.event('initialized');
+  const set = await editor.request('setExceptionBreakpoints', {
+    filters: ['erb-faults'],
+  });
+  check('the fault stop is taken', set.success, set);
+  await editor.request('configurationDone');
+  check('the host launches', (await launched).success, await launched);
+
+  const stopped = await editor.event('stopped');
+  const frames = await editor.stack(stopped.body.threadId);
+  check(
+    "a fault stops as an exception on the app's line",
+    stopped.body.reason === 'exception' &&
+      stopped.body.text === 'list read past its end' &&
+      frames[0]?.name === 'onPress' &&
+      frames[0].line === 18 &&
+      frames[0].source?.path === FAULT_FIXTURE &&
+      String(frames[1]?.name).startsWith(VM_FUNCTION),
+    [stopped.body, frames.slice(0, 2)],
+  );
+  const info = await editor.request('exceptionInfo', {
+    threadId: stopped.body.threadId,
+  });
+  check(
+    'the exception has the reason and the place',
+    info.body?.exceptionId === 'list read past its end' &&
+      /list-fault\.tsx:18 {2}onPress/.test(info.body?.description ?? ''),
+    info,
+  );
+  const variables = await editor.variables(frames[0].id);
+  check(
+    'the handler that faulted has its locals',
+    variables.Locals?.includes('row = 5') &&
+      variables['App state']?.includes('picked = 0'),
+    variables,
+  );
+  const ended = await editor.request('disconnect', {terminateDebuggee: true});
+  check('the session ends', ended.success, ended);
+}
+
+/**
+ * Compiles a fixture into the build folder.
+ *
+ * @param fixture  The fixture's source file.
+ * @param name  The package's name.
+ *
+ * @returns The package's path and its debug file's.
+ */
+function compileFixture(fixture: string, name: string): [string, string] {
+  const source = readFileSync(fixture, 'utf8');
+  const result = compilePackage(source, name, {
+    filename: fixture,
+    nativeFiles: readNativeFiles(source, dirname(fixture)),
+    screen: SCREEN,
+  });
+  const packagePath = join(BUILD_DIR, `${name}.erpkg`);
+  const debugPath = join(BUILD_DIR, `${name}.erdbg`);
+  writeFileSync(packagePath, packPackage(result).bytes);
+  writeFileSync(debugPath, result.debugFile);
+  return [packagePath, debugPath];
+}
+
 if (spawnSync('gdb', ['--version']).status !== 0) {
   console.error(
     'erb-dap needs GDB 14 or later with Python (it runs on Linux).',
@@ -410,26 +514,23 @@ run('cmake', [
 ]);
 run('cmake', ['--build', BUILD_DIR, '-j']);
 
-const source = readFileSync(FIXTURE, 'utf8');
-const result = compilePackage(source, 'native-calls', {
-  filename: FIXTURE,
-  nativeFiles: readNativeFiles(source, dirname(FIXTURE)),
-  screen: SCREEN,
-});
-const packagePath = join(BUILD_DIR, 'native-calls.erpkg');
-const debugPath = join(BUILD_DIR, 'native-calls.erdbg');
-writeFileSync(packagePath, packPackage(result).bytes);
-writeFileSync(debugPath, result.debugFile);
-
-const editor = new Editor();
-try {
-  await session(editor, join(BUILD_DIR, 'erb-frames'), packagePath, debugPath);
-} catch (error: any) {
-  failed++;
-  console.log(`✗ ${error.message}`);
-}
-editor.end();
-if (failed) {
-  console.log(`\nThe whole session:\n${editor.transcript.join('\n')}`);
-  process.exit(1);
+const host = join(BUILD_DIR, 'erb-frames');
+const sessions: [typeof session, string, string][] = [
+  [session, FIXTURE, 'native-calls'],
+  [faultSession, FAULT_FIXTURE, 'list-fault'],
+];
+for (const [play, fixture, name] of sessions) {
+  const [packagePath, debugPath] = compileFixture(fixture, name);
+  const editor = new Editor();
+  try {
+    await play(editor, host, packagePath, debugPath);
+  } catch (error: any) {
+    failed++;
+    console.log(`✗ ${error.message}`);
+  }
+  editor.end();
+  if (failed) {
+    console.log(`\nThe whole session:\n${editor.transcript.join('\n')}`);
+    process.exit(1);
+  }
 }

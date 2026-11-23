@@ -71,6 +71,15 @@ interface Status {
   frames: {name: string; line: number | null}[];
   hit: number[];
   description?: string;
+  fault?: Fault | null;
+}
+
+/** A fault or a refused load the board stopped at. */
+interface Fault {
+  reason: string;
+  /** What `erb error` prints. */
+  text: string;
+  refused: boolean;
 }
 
 interface Waiter {
@@ -93,6 +102,15 @@ const GDB_EXIT_MS = 1000;
 const ERRORS_KEPT = 2000;
 const ANSWER_MARK = '@erb ';
 
+/** The Breakpoints pane's checkbox for the app's faults. */
+const FAULT_FILTER = {
+  filter: 'erb-faults',
+  label: 'Stop on app faults',
+  description:
+    'Stops when the app faults or a package is refused, before the firmware handles it.',
+  default: true,
+};
+
 /** What the adapter can do before GDB is running. GDB's own list follows in a `capabilities` event. */
 const CAPABILITIES = {
   supportsConfigurationDoneRequest: true,
@@ -101,6 +119,8 @@ const CAPABILITIES = {
   supportsEvaluateForHovers: true,
   supportsSetVariable: true,
   supportsSteppingGranularity: true,
+  supportsExceptionInfoRequest: true,
+  exceptionBreakpointFilters: [FAULT_FILTER],
   supportsTerminateRequest: true,
   supportTerminateDebuggee: true,
 };
@@ -268,6 +288,8 @@ export class DebugAdapter {
   private threadList: Record<string, any>[] = [];
   /** The stop the board is at, when the app is loaded. */
   private status: Status | null = null;
+  /** The fault the board is stopped at. */
+  private fault: Fault | null = null;
   /** Set while a step of the app runs, so its stop reads as a step. */
   private appStep = false;
   private dropAttachStop = false;
@@ -356,6 +378,10 @@ export class DebugAdapter {
         return this.threads(request);
       case 'setBreakpoints':
         return this.setBreakpoints(request, args);
+      case 'setExceptionBreakpoints':
+        return this.setExceptionBreakpoints(request, args);
+      case 'exceptionInfo':
+        return this.exceptionInfo(request);
       case 'configurationDone':
         return this.inLane(() => {
           this.running = this.session === 'launch';
@@ -577,6 +603,7 @@ export class DebugAdapter {
   private resumed(): void {
     this.running = true;
     this.status = null;
+    this.fault = null;
     this.stacks.clear();
     this.rowStates.clear();
   }
@@ -605,8 +632,15 @@ export class DebugAdapter {
       this.say(`embedded-react: ${status.note}`);
     }
     this.status = status?.loaded ? status : null;
+    this.fault = status?.fault ?? null;
     const stopped = {...body};
-    if (this.status?.hookStop) {
+    if (this.fault) {
+      // The editor shows it as an exception, on the app's line when the app's code faulted.
+      stopped.reason = 'exception';
+      stopped.description = this.fault.refused ? 'Load refused' : 'App fault';
+      stopped.text = this.fault.reason;
+      delete stopped.hitBreakpointIds;
+    } else if (this.status?.hookStop) {
       const hit = this.status.hit;
       stopped.reason = hit.length && !stepped ? 'breakpoint' : 'step';
       delete stopped.hitBreakpointIds;
@@ -783,7 +817,16 @@ export class DebugAdapter {
       ...this.initializeArguments,
       adapterID: 'gdb',
     });
-    this.event('capabilities', {capabilities});
+    this.event('capabilities', {
+      capabilities: {
+        ...capabilities,
+        supportsExceptionInfoRequest: true,
+        exceptionBreakpointFilters: [
+          FAULT_FILTER,
+          ...(capabilities.exceptionBreakpointFilters ?? []),
+        ],
+      },
+    });
     for (const command of config.setupCommands ?? []) {
       await this.console(command);
     }
@@ -980,6 +1023,57 @@ export class DebugAdapter {
   }
 
   /**
+   * Takes the app's fault checkbox, and hands GDB the rest.
+   *
+   * @param request  The request.
+   * @param args  Its arguments.
+   */
+  private setExceptionBreakpoints(
+    request: Message,
+    args: Record<string, any>,
+  ): Promise<void> {
+    const filters: string[] = args.filters ?? [];
+    const options: Record<string, any>[] = args.filterOptions ?? [];
+    const asked = [...filters, ...options.map(option => option.filterId)];
+    return this.inLane(async () => {
+      await this.whileHalted(() =>
+        this.erb({do: 'faults', stop: asked.includes(FAULT_FILTER.filter)}),
+      );
+      const response = await this.gdbCall(request.command, {
+        ...args,
+        filters: filters.filter(filter => filter !== FAULT_FILTER.filter),
+        ...(args.filterOptions && {
+          filterOptions: options.filter(
+            option => option.filterId !== FAULT_FILTER.filter,
+          ),
+        }),
+      });
+      // One answer for each filter asked for, in the order asked.
+      const theirs: Record<string, any>[] = [
+        ...(response.body?.breakpoints ?? []),
+      ];
+      this.respond(request, {
+        breakpoints: asked.map(filter =>
+          filter === FAULT_FILTER.filter
+            ? {verified: true}
+            : (theirs.shift() ?? {verified: response.success}),
+        ),
+      });
+    });
+  }
+
+  private async exceptionInfo(request: Message): Promise<void> {
+    if (!this.fault) {
+      return this.forward(request);
+    }
+    this.respond(request, {
+      exceptionId: this.fault.reason,
+      description: this.fault.text,
+      breakMode: 'always',
+    });
+  }
+
+  /**
    * Resumes the board for a request of the editor's.
    *
    * @param request  The request.
@@ -1001,7 +1095,12 @@ export class DebugAdapter {
     args: Record<string, any>,
     kind: 'into' | 'over' | 'out',
   ): Promise<void> {
-    if (!this.status?.hookStop || args.granularity === 'instruction') {
+    // A faulted app has no next statement.
+    if (
+      !this.status?.hookStop ||
+      this.fault ||
+      args.granularity === 'instruction'
+    ) {
       return this.resume(request, args);
     }
     // The hook ends the step where the app's next statement starts, so the board just runs on.

@@ -1,6 +1,6 @@
 ---
 title: 'Debugging on a board'
-description: 'Debug a Flow B app on the board through a debug probe: GDB commands that read the app by its own names, breakpoints and stepping in its source, and the same from VS Code.'
+description: 'Debug a Flow B app on the board through a debug probe: GDB commands that read the app by its own names, breakpoints and stepping in its source, a stop when the app faults, and the same from VS Code.'
 ---
 
 A Flow B app on a board can be debugged the way its firmware is: through a debug probe, with GDB. A script in the
@@ -20,7 +20,8 @@ the board, so they work on a board that has stopped answering.
 - **The firmware's ELF**, as the board runs it. Only its symbols are read, so a release build works.
 - **The app's `app.erdbg`.** Every `embedded-react build --aot` writes it beside the package in `dist/`, release or
   not. It has to be the one written with the package on the board: the script checks, and says when it isn't.
-- **For breakpoints and stepping, firmware built with `ERB_DEBUG_HOOK=1`.** Reading the app needs no option.
+- **For breakpoints, stepping and the stop at a fault, firmware built with `ERB_DEBUG_HOOK=1`.** Reading the app
+  needs no option.
 
 `ERB_DEBUG_HOOK` is a CMake option of `runtime/`, off by default. The ESP32-S3 example takes it as
 `idf.py -D ERB_DEBUG_HOOK=1`, and the RP2040 example as `-DERB_DEBUG_HOOK=1` when it is configured. A firmware that
@@ -99,6 +100,9 @@ Loaded dist/app.erdbg: build 1a2b3c4d, 1 layout
 
 A firmware without the hook gets a note here that breakpoints and stepping are off. The other commands work.
 
+With the hook, the script keeps one breakpoint on the hook's function from here on. Breakpoints, steps and the stop
+at a fault all share it, so they take one of the chip's hardware breakpoints between them.
+
 ### Ending a session
 
 GDB leaves the board halted when it goes. Resume it first:
@@ -140,8 +144,9 @@ A halted core runs nothing: no frames, no touch, no timers.
 | `erb step`           | Runs to the next statement, into a function the app calls                                   |
 | `erb next`           | Runs to the next statement, over a function the app calls                                   |
 | `erb finish`         | Runs until the function returns to its caller                                               |
+| `erb faults [MODE]`  | Stops when the app faults or a load is refused: `on`, the default, or `off`                 |
 
-The last five need the hook. `help erb` lists them in GDB.
+The last six need the hook. `help erb` lists them in GDB.
 
 - **A state's name** is the one the source gives it. A component's state reads `Counter.taps`, and
   `Counter:16.taps` or `Counter:16[2].taps` when more than one instance has it.
@@ -177,6 +182,32 @@ App.tsx:35  onPress
 onPress returns to the runtime
 ```
 
+## Example: an app that faults
+
+The screen goes to the error screen after a tap. With the hook, the board stops by itself when the app faults,
+before the runtime tears the app down:
+
+```text
+(gdb) continue
+App fault: list read past its end
+  check: list row past the list's end
+  at App.tsx:18  onPress
+  build 1a2b3c4d
+18	    setPicked(items[row].n);
+(gdb) erb locals
+row = 5
+```
+
+The handler on line 18 read row 5 of a list that has fewer. `erb where`, `erb locals` and `erb state` read the app
+as it was when it faulted. `continue` runs the firmware on to its error screen, and a step has nowhere to go.
+
+A fault the app's code didn't raise, such as state that keeps changing in an effect, stops the same way with its
+reason, but with no line of the app's to show.
+
+A refused load stops too, with `Load refused:` and what `erb error` says. `erb faults off` turns both stops off.
+
+Without the hook nothing stops the board. Halt it and ask `erb error`, which keeps the reason and the line.
+
 ## Example: a package the firmware refuses
 
 The board shows the error screen after a new package is flashed, and the screen's text is cut short or nobody is
@@ -202,8 +233,8 @@ refused slot at that boot. After the next reset the old app loads cleanly and `e
 ESP32-S3's debug server resets the chip as it starts, so on that board a refusal with a good package behind it is
 read from the error screen or the log, not the probe.
 
-To stop where the firmware decides, put a C breakpoint on the load and step out of it. It stops once for each
-package the firmware tries:
+A firmware with the hook stops by itself at each package it refuses. Without the hook, put a C breakpoint on the
+load and step out of it. It stops once for each package the firmware tries:
 
 ```text
 (gdb) break erb_load
@@ -358,6 +389,14 @@ next line that has some.
 - **The step buttons** step the app: over a statement, into a function the app calls, out to its caller.
 
 A breakpoint with a condition isn't supported yet, and is shown as unverified.
+
+### At a fault
+
+When the app faults, the editor stops on the line that faulted and shows the reason as an exception. The call stack
+and the Variables pane are those of the handler that faulted, as at a breakpoint. **Continue** runs the firmware on
+to its error screen. A refused package stops the same way, with why it was refused.
+
+**Stop on app faults** in the Breakpoints pane turns this off.
 
 ### At a stop in C
 

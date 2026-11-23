@@ -21,8 +21,8 @@ Load the firmware's ELF, then this script, then the app's debug file:
 
 The commands that read run nothing on the board. They find the runtime and the engine through the descriptors the
 firmware exports (erb_debug and er_debug), so they work on any board and need no debug info beyond the ELF's
-symbols. Breakpoints and stepping (erb break, step, next, finish) need firmware built with ERB_DEBUG_HOOK=1, whose VM
-stops itself where the debugger asks. GDB must be built with Python 3.8 or later.
+symbols. Breakpoints and stepping (erb break, step, next, finish) and the stop at a fault need firmware built with
+ERB_DEBUG_HOOK=1, whose VM stops itself where the debugger asks. GDB must be built with Python 3.8 or later.
 """
 
 import base64
@@ -667,13 +667,14 @@ erb set NAME VALUE   Set a state; the app runs its update at its next tick.
 erb watch NAME       Stop when a state changes, on the line that wrote it.
 erb break [LINE]     Stop at a source line (App.jsx:41, or 41); with no line, list the breakpoints.
 erb delete [N...]    Delete breakpoints, or all of them.
+erb faults [on|off]  Stop when the app faults or a load is refused (on by default).
 erb step             Run to the next statement, into a function the app calls.
 erb next             Run to the next statement, over a function the app calls.
 erb finish           Run until the function returns to its caller.
 erb pools            What the app and the engine use of their pools.
 er nodes             The node tree, with each node's rect and source line.
 
-Breakpoints and stepping need firmware built with ERB_DEBUG_HOOK=1."""
+Breakpoints, stepping and the stop at a fault need firmware built with ERB_DEBUG_HOOK=1."""
 
     def __init__(self):
         super().__init__("erb", gdb.COMMAND_DATA, gdb.COMPLETE_NONE, True)
@@ -694,6 +695,8 @@ class ErbFile(gdb.Command):
             % (debug_path, build_hex(debug_file["buildId"]), len(debug_file["panels"]), "" if len(debug_file["panels"]) == 1 else "s")
         )
         note_missing_hook()
+        if fault_stops[0] and has_hook():
+            hook_breakpoint()
         # Attaching halts the board without a stop event.
         if board_halted():
             try:
@@ -772,45 +775,56 @@ class ErbErrorCommand(gdb.Command):
 
     def invoke(self, argument, from_tty):
         runtime = Runtime()
-        fields = runtime.error_fields
-        data = read(runtime.error_address, fields["build_id_at"] + 4)
-        status = unpack("I" if fields["status_bytes"] == 4 else "B" if fields["status_bytes"] == 1 else "H", data, fields["status_at"])
-        if status == 0:
+        error = last_error(runtime)
+        if error is None:
             print("No error: the app is %s." % ("running" if runtime.flag("loaded") else "not loaded"))
             return
-        pointer = "I" if pointer_bytes() == 4 else "Q"
-        name = read_string(unpack(pointer, data, fields["name_at"]))
-        detail = read_string(unpack(pointer, data, fields["detail_at"]))
-        needed = unpack("I", data, fields["needed_at"])
-        available = unpack("I", data, fields["available_at"])
-        resource = unpack("H", data, fields["resource_at"])
-        function = unpack("H", data, fields["function_at"])
-        offset = unpack("I", data, fields["offset_at"])
-        build_id = unpack("I", data, fields["build_id_at"])
-
-        reason = runtime.reason(status) + (": %s" % name if name else "")
-        print(reason)
-        if status == ERROR_TOO_BIG:
-            print("  %s: needs %d, the firmware reserves %d" % (RESOURCE_NAMES.get(resource, "resource %d" % resource), needed, available))
-        elif status == ERROR_ENGINE_ABI:
-            print("  built for engine ABI %d" % needed)
-        elif status == ERROR_NO_PANEL:
-            print("  this screen is %d x %d" % (needed, available))
-        elif status == ERROR_STACK:
-            print("  needs %d cells, the arena has %d" % (needed, available))
-        if detail:
-            print("  check: %s" % detail)
-        if function != NO_FUNCTION:
-            where = "function %d at %d" % (function, offset)
-            if debug_file is not None and build_id == debug_file["buildId"]:
-                app = App(need_running=False)
-                where = app.place(function, offset)
-            elif debug_file is not None:
-                where += " (build %s, but the debug file is build %s)" % (build_hex(build_id), build_hex(debug_file["buildId"]))
-            print("  at %s" % where)
-        if build_id:
-            print("  build %s" % build_hex(build_id))
+        print("\n".join(error["lines"]))
         print("The app %s." % ("stopped" if runtime.flag("faulted") else "is running" if runtime.flag("loaded") else "was not loaded"))
+
+
+def last_error(runtime):
+    """The last fault or refused load: its reason, the lines `erb error` prints, and its source line. None for none."""
+    fields = runtime.error_fields
+    data = read(runtime.error_address, fields["build_id_at"] + 4)
+    status = unpack("I" if fields["status_bytes"] == 4 else "B" if fields["status_bytes"] == 1 else "H", data, fields["status_at"])
+    if status == 0:
+        return None
+    pointer = "I" if pointer_bytes() == 4 else "Q"
+    name = read_string(unpack(pointer, data, fields["name_at"]))
+    detail = read_string(unpack(pointer, data, fields["detail_at"]))
+    needed = unpack("I", data, fields["needed_at"])
+    available = unpack("I", data, fields["available_at"])
+    resource = unpack("H", data, fields["resource_at"])
+    function = unpack("H", data, fields["function_at"])
+    offset = unpack("I", data, fields["offset_at"])
+    build_id = unpack("I", data, fields["build_id_at"])
+
+    reason = runtime.reason(status) + (": %s" % name if name else "")
+    lines = [reason]
+    source_line = None
+    if status == ERROR_TOO_BIG:
+        lines.append("  %s: needs %d, the firmware reserves %d" % (RESOURCE_NAMES.get(resource, "resource %d" % resource), needed, available))
+    elif status == ERROR_ENGINE_ABI:
+        lines.append("  built for engine ABI %d" % needed)
+    elif status == ERROR_NO_PANEL:
+        lines.append("  this screen is %d x %d" % (needed, available))
+    elif status == ERROR_STACK:
+        lines.append("  needs %d cells, the arena has %d" % (needed, available))
+    if detail:
+        lines.append("  check: %s" % detail)
+    if function != NO_FUNCTION:
+        where = "function %d at %d" % (function, offset)
+        if debug_file is not None and build_id == debug_file["buildId"]:
+            app = App(need_running=False)
+            where = app.place(function, offset)
+            source_line = statement_line(app.panel, function, offset)[1]
+        elif debug_file is not None:
+            where += " (build %s, but the debug file is build %s)" % (build_hex(build_id), build_hex(debug_file["buildId"]))
+        lines.append("  at %s" % where)
+    if build_id:
+        lines.append("  build %s" % build_hex(build_id))
+    return {"reason": reason, "lines": lines, "line": source_line}
 
 
 class ErbState(gdb.Command):
@@ -1132,10 +1146,13 @@ STEP_ANY = 4
 AT_STOP = 0
 AT_RETURN = 1
 AT_LOAD = 2
+AT_FAULT = 3
+AT_REFUSED = 4
 END_OF_FUNCTION = 0xFFFFFFFF
 
 NO_HOOK = (
-    "the firmware has no breakpoint hook: build it with ERB_DEBUG_HOOK=1 for erb break, step, next and finish. "
+    "the firmware has no breakpoint hook: build it with ERB_DEBUG_HOOK=1 for erb break, step, next and finish, and "
+    "for the stop at a fault. "
     "The other commands work without it."
 )
 
@@ -1268,6 +1285,9 @@ breakpoint_numbers = [0]
 returned = [False]
 # The hook's breakpoint, and whether the board's last stop was in it.
 hook_state = {"breakpoint": None, "stopped": False, "noted": False}
+# Whether a fault or a refused load stops the board, and the one it is stopped at.
+fault_stops = [True]
+fault_stop = [None]
 source_lines = {}
 
 
@@ -1335,9 +1355,9 @@ def hook_breakpoint():
 
 
 class HookBreakpoint(gdb.Breakpoint):
-    """Where the hook stops: at a breakpoint's place, where a step ends, and after each load, when the breakpoints
-    are written for the package that loaded. A step that comes back from a call partway through a statement runs on
-    to the next one here, without a stop."""
+    """Where the hook stops: at a breakpoint's place, where a step ends, at a fault or a refused load, and after each
+    load, when the breakpoints are written for the package that loaded. A step that comes back from a call partway
+    through a statement runs on to the next one here, without a stop."""
 
     def __init__(self):
         super().__init__("erb_debug_break", gdb.BP_BREAKPOINT, internal=True)
@@ -1367,6 +1387,9 @@ class HookBreakpoint(gdb.Breakpoint):
                 except gdb.GdbError as error:
                     print("erb: the app loaded, but its breakpoints aren't set: %s" % error)
             return False
+        if event in (AT_FAULT, AT_REFUSED):
+            hook.set_step(STEP_NONE)
+            return self.at_fault(runtime, event == AT_REFUSED)
         app = App()
         function, offset = app.frames()[0]
         has_lines = bool(statements(app.panel, function))
@@ -1394,11 +1417,28 @@ class HookBreakpoint(gdb.Breakpoint):
         self.report(prefix + stop_line(app, function, offset))
         return True
 
+    def at_fault(self, runtime, refused):
+        """Stops at a fault or a refused load, with what `erb error` says of it."""
+        if not fault_stops[0]:
+            return False
+        error = last_error(runtime)
+        if error is None:
+            return False
+        lines = ["%s: %s" % ("Load refused" if refused else "App fault", error["reason"])] + error["lines"][1:]
+        source = source_text(error["line"]) if error["line"] else None
+        if source is not None:
+            lines.append("%d\t%s" % (error["line"], source))
+        fault_stop[0] = {"reason": error["reason"], "text": "\n".join(error["lines"]), "refused": refused}
+        self.report("\n".join(lines))
+        return True
+
 
 def arm_step(kind):
     """Writes a step into the hook, for the board's next resume."""
     if not has_hook():
         raise ErbError(NO_HOOK)
+    if fault_stop[0]:
+        raise ErbError("the app %s, so it has no next statement: `continue` runs the firmware on" % ("wasn't loaded" if fault_stop[0]["refused"] else "faulted"))
     app = App()
     hook = Hook(app.runtime)
     hook_breakpoint()
@@ -1502,6 +1542,31 @@ class ErbDelete(gdb.Command):
         print("Deleted %d erb breakpoint%s." % (len(deleted), "" if len(deleted) == 1 else "s"))
 
 
+class ErbFaults(gdb.Command):
+    """Stop when the app faults or a load is refused: erb faults on, or off. With neither, says which it is.
+Needs firmware built with ERB_DEBUG_HOOK=1. The stop is before the fault is handled, so `erb where` and `erb locals`
+still read the handler that faulted."""
+
+    def __init__(self):
+        super().__init__("erb faults", gdb.COMMAND_BREAKPOINTS)
+
+    def invoke(self, argument, from_tty):
+        word = argument.strip()
+        if word not in ("", "on", "off"):
+            raise ErbError("erb faults on, or erb faults off")
+        if word:
+            set_fault_stops(word == "on")
+        print("A fault %s the board." % ("stops" if fault_stops[0] else "doesn't stop"))
+
+
+def set_fault_stops(stop):
+    if stop and not has_hook():
+        raise ErbError(NO_HOOK)
+    fault_stops[0] = stop
+    if stop:
+        hook_breakpoint()
+
+
 class ErbStep(gdb.Command):
     """Run to the next statement, into a function the app calls. Past the end of the app's code it stops at the next
 statement the app runs. Needs firmware built with ERB_DEBUG_HOOK=1."""
@@ -1564,6 +1629,7 @@ def on_stop(event):
 
 def on_resume(event):
     hook_state["stopped"] = False
+    fault_stop[0] = None
     returned[0] = False
 
 
@@ -1590,17 +1656,20 @@ def dap_info(request):
 
 def dap_status(request):
     """Where the board stopped, as the adapter shows it: the app's frames, and whether the hook made the stop."""
+    fault = fault_stop[0] if hook_state["stopped"] else None
     try:
         app = App()
     except gdb.GdbError as error:
-        return {"loaded": False, "note": str(error)}
+        return {"loaded": False, "note": str(error), "fault": fault}
     functions = app.panel["functions"]
     chain = app.frame_chain() if app.runtime.flag("in_vm") else []
     frames = []
     for function, offset, _ in chain:
         named = function < len(functions) and functions[function]["name"]
         frames.append({"name": named or "function %d" % function, "line": statement_line(app.panel, function, offset)[1]})
-    status = {"loaded": True, "hookStop": hook_state["stopped"] and bool(frames), "frames": frames, "hit": []}
+    status = {"loaded": True, "hookStop": hook_state["stopped"] and bool(frames), "frames": frames, "hit": [], "fault": fault}
+    if fault:
+        return status
     if status["hookStop"] and returned[0]:
         status["description"] = "%s returns to the runtime" % frames[0]["name"]
     elif status["hookStop"]:
@@ -1650,6 +1719,13 @@ def dap_breakpoints(request):
                 if answer.get("id") == refused["number"]:
                     answer.update(verified=False, message=str(error))
     return {"breakpoints": answers}
+
+
+def dap_faults(request):
+    """Whether a fault stops the board, as the editor's checkbox says."""
+    if has_hook():
+        set_fault_stops(bool(request["stop"]))
+    return {}
 
 
 def dap_step(request):
@@ -1727,6 +1803,8 @@ def dap_sync(request):
     """After attaching: the app doesn't count the halt, and the hook holds the breakpoints set before."""
     settle_threads()
     mark_halted()
+    if fault_stops[0] and has_hook():
+        hook_breakpoint()
     if breakpoints:
         write_stops()
     return {}
@@ -1736,6 +1814,7 @@ DAP_REQUESTS = {
     "info": dap_info,
     "status": dap_status,
     "breakpoints": dap_breakpoints,
+    "faults": dap_faults,
     "step": dap_step,
     "variables": dap_variables,
     "set": dap_set,
@@ -1824,6 +1903,7 @@ ErbWatch()
 note_missing_hook()
 ErbBreak()
 ErbDelete()
+ErbFaults()
 ErbStep()
 ErbNext()
 ErbFinish()

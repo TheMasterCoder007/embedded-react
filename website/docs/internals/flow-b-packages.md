@@ -910,6 +910,11 @@ debugger keeps a breakpoint on. A step that reaches the return to the runtime st
 calls it after each load, before any of the package's code runs, so the debugger writes its breakpoints for the
 package that loaded.
 
+The runtime calls it once more when the app faults, before the fault is handled, and when a load is refused.
+`control.event` says which of these a call is. At a fault the handler that faulted is still on the register stack,
+so the debugger reads its call chain and locals, and `erb_debug.error` has the reason. The stop needs no place in
+the table and no breakpoint beyond the one on `erb_debug_break()`.
+
 The debugger works out the places from `app.erdbg`: a breakpoint's line is each place a statement on it starts, and
 a step's range is the statement it is in. A step that returns partway through a statement is run on to the next one
 by the debugger, without stopping.
@@ -929,6 +934,8 @@ on stdin and stdout, and runs GDB with GDB's own adapter (`gdb -i dap`, so GDB 1
   some.
 - A stop the hook made is shown as a stop on the app's line, and step in, over and out step the app. At any other
   stop they step C.
+- A fault or a refused load is shown as an exception with the reason as its text, on the app's line when the app's
+  code faulted. The adapter offers it as an exception filter, "Stop on app faults", which is on by default.
 - The call stack has the app's frames inside the VM's frame, under whatever C the app called.
 - An app frame's variables are its locals and the app's state, and every C frame has the state too. A state can be
   set there.
