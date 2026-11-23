@@ -1113,6 +1113,10 @@ def arithmetic(operator, left, right):
             if isinstance(left, int) and isinstance(right, int):
                 return int(math.copysign(abs(left) % abs(right), left))
             return math.fmod(left, right)
+        # A whole power stays whole while a double could hold it, so a huge one costs nothing to work out.
+        whole = isinstance(left, int) and isinstance(right, int) and right >= 0
+        if not (whole and (abs(left) <= 1 or right * abs(left).bit_length() <= 1024)):
+            left, right = float(left), float(right)
         result = left**right
         return not_a_number if isinstance(result, complex) else result
     except ZeroDivisionError:
@@ -1122,7 +1126,10 @@ def arithmetic(operator, left, right):
 
 
 def compare(operator, left, right):
-    if not (isinstance(left, str) and isinstance(right, str)):
+    if isinstance(left, str) and isinstance(right, str):
+        # Strings order by UTF-16 unit.
+        left, right = (text.encode("utf-16-be", "surrogatepass") for text in (left, right))
+    else:
         left, right = to_number(left), to_number(right)
     if operator == "<":
         return left < right
@@ -2522,7 +2529,7 @@ def dap_breakpoints(request):
             try:
                 set_terms(entry, wanted.get("condition"), wanted.get("hitCondition"), wanted.get("logMessage"))
             except ErbError as error:
-                answers.append({"verified": False, "message": str(error)})
+                answers.append({"line": line, "verified": False, "message": str(error)})
                 continue
             breakpoint_numbers[0] = max(breakpoint_numbers[0], entry["number"])
             breakpoints.append(entry)

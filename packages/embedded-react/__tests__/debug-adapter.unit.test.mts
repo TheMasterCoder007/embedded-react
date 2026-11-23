@@ -85,7 +85,11 @@ class FakeGdb {
               line === 99
                 ? {verified: false, message: 'App.tsx:99 has no code'}
                 : condition === 'count ='
-                  ? {verified: false, message: '`count =` has an assignment'}
+                  ? {
+                      line,
+                      verified: false,
+                      message: '`count =` has an assignment',
+                    }
                   : {
                       id: index + 1,
                       line: line === 30 ? 32 : line,
@@ -401,6 +405,7 @@ describe('debug adapter', () => {
     ).toEqual([true, false, true]);
     // The script says what is wrong with a condition it can't read.
     expect(response.body.breakpoints[1].message).toMatch(/assignment/);
+    expect(response.body.breakpoints[1].line).toBe(41);
     expect(response.body.breakpoints[2].line).toBe(42);
   });
 

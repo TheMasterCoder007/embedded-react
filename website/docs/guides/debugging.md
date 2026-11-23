@@ -183,6 +183,10 @@ An expression takes names, members and indexes (`item.label`, `rows[2].done`, `r
 operators, with `?.` and `??`. A row's optional field that it leaves out is `undefined`, and so is a row past the
 list's end.
 
+Numbers are worked out as JavaScript does, in the debugger. The app's whole numbers saturate at the ends of their
+range, so an expression can differ from the app there: `count + 1` goes past the largest int where the app stays
+on it.
+
 It reads the board and runs nothing on it, so it can't call the app's functions or a native module, and it can't
 assign. The error names what it met:
 
