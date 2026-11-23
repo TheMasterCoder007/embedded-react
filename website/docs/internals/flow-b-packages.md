@@ -894,7 +894,7 @@ a stop.
 `gdb/erb.py`, in the npm package, reads them with an app's `app.erdbg` to show its source line, state, locals, pools
 and nodes, and refuses a descriptor version or a `build_id` it doesn't match. A local is read from its frame on the
 register stack: `erb where` walks the frames, and each frame's base gives its registers. CI runs it against the Linux host
-(`npm run erb:gdb`).
+(`npm run erb:gdb`). [Debugging on a board](../guides/debugging.md) is the guide to using it.
 
 ### The breakpoint hook
 
