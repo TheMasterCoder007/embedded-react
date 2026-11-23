@@ -36,8 +36,8 @@ extern "C"
 /** @brief ErbDebug::magic: "ERBD". */
 #define ERB_DEBUG_MAGIC 0x44425245u
 
-/** @brief Raised when a field of ErbDebug or ErbDebugControl changes. */
-#define ERB_DEBUG_VERSION 2u
+/** @brief Raised when a field of ErbDebug or ErbDebugControl changes, or an event is added. */
+#define ERB_DEBUG_VERSION 3u
 
 /**
  * @brief Set to 1 to build the VM's breakpoint hook, for breakpoints, stepping and a stop at a fault from GDB. Off,

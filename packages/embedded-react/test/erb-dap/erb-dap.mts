@@ -20,7 +20,8 @@
 // It builds tools/erb-frames' headless host as erb-gdb does, compiles the native-calls fixture with its debug file, and
 // plays an editor's part of a session: a breakpoint in the fixture's source and one on a C function, a tap that
 // reaches both, the call stack and variables at each stop, and the step buttons in C and in the app. A second session
-// runs the list-fault fixture, whose handler reads a row its list doesn't have, to the stop at the fault.
+// runs the list-fault fixture, whose handler reads a row its list doesn't have, to the stop at the fault, and a third
+// gives the host that package cut short, to the stop at the refused load.
 //
 // Needs CMake, a C compiler and GDB 14 or later with Python, so it runs on Linux.
 
@@ -56,6 +57,8 @@ const SCREEN = {width: 240, height: 320};
 const TAP = '32,20';
 const WAIT_MS = Number(process.env.ERB_DAP_WAIT_MS) || 60000;
 const VM_FUNCTION = 'erb_vm_run';
+/** What is left of a package cut short, so its load is refused. */
+const CUT_BYTES = 200;
 
 let failed = 0;
 
@@ -481,6 +484,70 @@ async function faultSession(
 }
 
 /**
+ * Plays a session whose package is refused.
+ *
+ * @param editor  The editor's end.
+ * @param host  The host's program.
+ * @param packagePath  The fixture's package.
+ * @param debugPath  Its debug file.
+ */
+async function refusedSession(
+  editor: Editor,
+  host: string,
+  packagePath: string,
+  debugPath: string,
+): Promise<void> {
+  const cutPath = join(BUILD_DIR, 'list-fault-cut.erpkg');
+  writeFileSync(cutPath, readFileSync(packagePath).subarray(0, CUT_BYTES));
+  await editor.request('initialize', {
+    clientID: 'erb-dap',
+    adapterID: 'embedded-react',
+    linesStartAt1: true,
+    columnsStartAt1: true,
+  });
+  const launched = editor.request('launch', {
+    program: host,
+    args: [
+      join(BUILD_DIR, 'frame.raw'),
+      String(SCREEN.width),
+      String(SCREEN.height),
+      cutPath,
+      TAP,
+      '0',
+    ],
+    debugFile: debugPath,
+    source: FAULT_FIXTURE,
+    setupCommands: ['set debuginfod enabled off'],
+  });
+  await editor.event('initialized');
+  await editor.request('setExceptionBreakpoints', {filters: ['erb-faults']});
+  await editor.request('configurationDone');
+  check('the host launches', (await launched).success, await launched);
+
+  const stopped = await editor.event('stopped');
+  const frames = await editor.stack(stopped.body.threadId);
+  check(
+    'a refused load stops as an exception, with no app frame',
+    stopped.body.reason === 'exception' &&
+      stopped.body.description === 'Load refused' &&
+      stopped.body.text === 'not a package, or corrupt' &&
+      frames.some(frame => frame.name === 'erb_load') &&
+      !frames.some(frame => frame.source?.path === FAULT_FIXTURE),
+    [stopped.body, frames.slice(0, 3)],
+  );
+  const info = await editor.request('exceptionInfo', {
+    threadId: stopped.body.threadId,
+  });
+  check(
+    'the exception has why the load was refused',
+    info.body?.exceptionId === 'not a package, or corrupt',
+    info,
+  );
+  const ended = await editor.request('disconnect', {terminateDebuggee: true});
+  check('the session ends', ended.success, ended);
+}
+
+/**
  * Compiles a fixture into the build folder.
  *
  * @param fixture  The fixture's source file.
@@ -524,6 +591,7 @@ const host = join(BUILD_DIR, 'erb-frames');
 const sessions: [typeof session, string, string][] = [
   [session, FIXTURE, 'native-calls'],
   [faultSession, FAULT_FIXTURE, 'list-fault'],
+  [refusedSession, FAULT_FIXTURE, 'list-fault'],
 ];
 for (const [play, fixture, name] of sessions) {
   const [packagePath, debugPath] = compileFixture(fixture, name);
