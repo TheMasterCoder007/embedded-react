@@ -41,6 +41,8 @@ class FakeGdb {
   /** What `erb dap status` answers at the next stop. */
   status: Body = {loaded: true, hookStop: false, frames: [], hit: []};
   frames: Body[] = [];
+  /** Whether the firmware has the hook. */
+  hook = true;
   /** The exception filters GDB was last given. */
   exceptionFilters: string[] = [];
   private seq = 1;
@@ -105,6 +107,10 @@ class FakeGdb {
           };
         }
         return {variables: [{name: 'step', value: '1', type: 'int'}]};
+      case 'faults':
+        return this.hook
+          ? {verified: true}
+          : {verified: false, message: 'the firmware has no breakpoint hook'};
       case 'set':
         return {value: `${request.state}=${request.value}`};
       case 'evaluate':
@@ -521,6 +527,14 @@ describe('debug adapter', () => {
     ]);
     await editor.request('setExceptionBreakpoints', {filters: []});
     expect(editor.gdb.erbRequests.at(-1)).toEqual({do: 'faults', stop: false});
+    // A firmware without the hook can't stop at a fault, and the checkbox says so.
+    editor.gdb.hook = false;
+    const refused = await editor.request('setExceptionBreakpoints', {
+      filters: ['erb-faults'],
+    });
+    expect(refused.body.breakpoints).toEqual([
+      {verified: false, message: 'the firmware has no breakpoint hook'},
+    ]);
   });
 
   it('keeps what the app called above its frames at a stop in C', async () => {

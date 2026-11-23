@@ -432,13 +432,19 @@ async function faultSession(
       '0',
     ],
     debugFile: debugPath,
+    // No breakpoint names the source here, and it isn't beside the debug file.
+    source: FAULT_FIXTURE,
     setupCommands: ['set debuginfod enabled off'],
   });
   await editor.event('initialized');
   const set = await editor.request('setExceptionBreakpoints', {
     filters: ['erb-faults'],
   });
-  check('the fault stop is taken', set.success, set);
+  check(
+    'the fault stop is taken',
+    set.body?.breakpoints?.[0]?.verified === true,
+    set,
+  );
   await editor.request('configurationDone');
   check('the host launches', (await launched).success, await launched);
 

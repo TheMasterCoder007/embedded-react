@@ -1036,7 +1036,7 @@ export class DebugAdapter {
     const options: Record<string, any>[] = args.filterOptions ?? [];
     const asked = [...filters, ...options.map(option => option.filterId)];
     return this.inLane(async () => {
-      await this.whileHalted(() =>
+      const faults = await this.whileHalted(() =>
         this.erb({do: 'faults', stop: asked.includes(FAULT_FILTER.filter)}),
       );
       const response = await this.gdbCall(request.command, {
@@ -1055,7 +1055,7 @@ export class DebugAdapter {
       this.respond(request, {
         breakpoints: asked.map(filter =>
           filter === FAULT_FILTER.filter
-            ? {verified: true}
+            ? {verified: faults.verified, message: faults.message}
             : (theirs.shift() ?? {verified: response.success}),
         ),
       });

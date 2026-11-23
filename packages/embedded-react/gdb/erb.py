@@ -1556,6 +1556,9 @@ still read the handler that faulted."""
             raise ErbError("erb faults on, or erb faults off")
         if word:
             set_fault_stops(word == "on")
+        if fault_stops[0] and not has_hook():
+            print("A fault doesn't stop the board: %s" % NO_HOOK)
+            return
         print("A fault %s the board." % ("stops" if fault_stops[0] else "doesn't stop"))
 
 
@@ -1722,10 +1725,11 @@ def dap_breakpoints(request):
 
 
 def dap_faults(request):
-    """Whether a fault stops the board, as the editor's checkbox says."""
-    if has_hook():
-        set_fault_stops(bool(request["stop"]))
-    return {}
+    """Whether a fault stops the board, as the editor's checkbox says. Without the hook it can't."""
+    if not has_hook():
+        return {"verified": False, "message": NO_HOOK}
+    set_fault_stops(bool(request["stop"]))
+    return {"verified": True}
 
 
 def dap_step(request):
