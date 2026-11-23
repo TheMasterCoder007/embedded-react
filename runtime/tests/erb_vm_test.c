@@ -1882,8 +1882,49 @@ static void test_timers_and_effects(void)
         tpkg_set_code(&s_package_spec, FUNCTION_EFFECT, types, 2, effect, 5);
     }
     CHECK(!load() && s_error.status == ERB_ERROR_UPDATE_LOOP, "more than 50 update passes is a fault");
+    CHECK(s_error.function == FUNCTION_EFFECT && s_error.offset == 3u, "at the effect's write to the state");
     CHECK(!erb_running() && er_node_in_use_count() == 0, "and the app is torn down");
     CHECK(er_error_screen_active(), "for the error screen");
+
+    /* An update that keeps setting its own state has no effect to name. */
+    base();
+    {
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
+        const uint32_t update[] = {
+            OP_ABX(GET32, 0, SLOT_COUNT),
+            OP_ABX(LOADI, 1, 1),
+            OP_ABC(ADD, 0, 0, 1),
+            OP_ABX(SET32, 0, SLOT_COUNT),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        tpkg_set_code(&s_package_spec, FUNCTION_UPDATE, types, 2, update, 5);
+    }
+    CHECK(!load() && s_error.status == ERB_ERROR_UPDATE_LOOP, "an update that sets its own state is a fault too");
+    CHECK(s_error.function == ERB_NONE, "with no function");
+
+    /* An effect that changed a state once isn't named for a loop the update then runs alone. */
+    base();
+    {
+        const uint32_t boot[] = {OP_ABX(EFFECT, 0, FUNCTION_EFFECT), OP_ABC(RET, 0, 0, 0)};
+        tpkg_set_code(&s_package_spec, FUNCTION_BOOT, NULL, 0, boot, 2);
+        const uint8_t effect_types[] = {ERB_TYPE_INT};
+        const uint32_t effect[] = {OP_ABX(LOADI, 0, 100), OP_ABX(SET32, 0, SLOT_COUNT), OP_ABC(RET, 0, 0, 0)};
+        tpkg_set_code(&s_package_spec, FUNCTION_EFFECT, effect_types, 1, effect, 3);
+        const uint8_t update_types[] = {ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_BOOL};
+        const uint32_t update[] = {
+            OP_ABX(GET32, 0, SLOT_COUNT),
+            OP_ABX(LOADI, 1, 100),
+            OP_ABC(LT, 2, 0, 1),
+            OP_ABX(JT, 2, 3),
+            OP_ABX(LOADI, 1, 1),
+            OP_ABC(ADD, 0, 0, 1),
+            OP_ABX(SET32, 0, SLOT_COUNT),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        tpkg_set_code(&s_package_spec, FUNCTION_UPDATE, update_types, 3, update, 8);
+    }
+    CHECK(!load() && s_error.status == ERB_ERROR_UPDATE_LOOP, "an update that loops after an effect is a fault");
+    CHECK(s_error.function == ERB_NONE, "with no function either");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
