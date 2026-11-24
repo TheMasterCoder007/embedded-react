@@ -99,8 +99,13 @@ class FakeGdb {
                     },
           ),
         };
-      case 'variables':
-        if (request.scope === 'state') {
+      case 'variables': {
+        const {open} = request;
+        const path: (string | number)[] = open.path ?? [];
+        if (open.scope === 'locals') {
+          return {variables: [{name: 'step', value: '1', type: 'int'}]};
+        }
+        if (path.length === 0 && open.scope === 'state') {
           return {
             variables: [
               {name: 'total', value: '4', type: 'int', storage: 'total'},
@@ -110,22 +115,48 @@ class FakeGdb {
                 type: 'list',
                 storage: 's3',
                 rows: 2,
+                open: {scope: 'state', path: ['rows']},
+              },
+              {
+                name: 'box',
+                value: '{x: 1}',
+                type: 'object',
+                open: {scope: 'state', path: ['box']},
               },
             ],
           };
         }
-        if (request.scope === 'rows') {
+        if (
+          path.at(-1) === 'rows' ||
+          (open.scope === 'value' && !path.length)
+        ) {
+          const start: number = request.start ?? 0;
           return {
-            variables: [{name: '[0]', value: request.state, type: 'row'}],
+            variables: [
+              {
+                name: `[${start}]`,
+                value: '{done: true}',
+                type: 'row',
+                open: {...open, path: [...path, start]},
+              },
+            ],
           };
         }
-        return {variables: [{name: 'step', value: '1', type: 'int'}]};
+        if (path.at(-1) === 'box') {
+          return {
+            variables: [{name: 'x', value: '1', type: 'int', storage: 'box.x'}],
+          };
+        }
+        return {variables: [{name: 'done', value: 'true', type: 'bool'}]};
+      }
       case 'faults':
         return this.hook
           ? {verified: true}
           : {verified: false, message: 'the firmware has no breakpoint hook'};
       case 'set':
-        return {value: `${request.state}=${request.value}`};
+        return {
+          value: `${[...(request.open.path ?? []), request.name].join('.')}=${request.value}`,
+        };
       case 'watch':
         return {
           breakpoints: request.states.map((state: string, index: number) =>
@@ -145,7 +176,12 @@ class FakeGdb {
           case 'total + 1':
             return {value: '5', type: 'number'};
           case 'rows':
-            return {value: '[…]', type: 'list', rows: 2, storage: 's3'};
+            return {
+              value: '[…]',
+              type: 'list',
+              rows: 2,
+              open: {scope: 'value', expression: 'rows', frame: 0, path: []},
+            };
           default:
             return {error: `nothing here is named ${request.expression}`};
         }
@@ -280,8 +316,12 @@ class Editor {
   }
 
   /** Starts a session and runs it to where the board runs. */
-  async start(kind: 'launch' | 'attach', config: Body = {}): Promise<void> {
-    await this.request('initialize', {linesStartAt1: true});
+  async start(
+    kind: 'launch' | 'attach',
+    config: Body = {},
+    client: Body = {},
+  ): Promise<void> {
+    await this.request('initialize', {linesStartAt1: true, ...client});
     const initialized = this.nextEvent('initialized');
     const started = this.request(kind, {
       program: '/work/build/my firmware.elf',
@@ -660,16 +700,18 @@ describe('debug adapter', () => {
       name: 'rows',
       indexedVariables: 2,
     });
-    const rows = await editor.request('variables', {
-      variablesReference: state.body.variables[1].variablesReference,
-    });
-    expect(rows.body.variables[0].value).toBe('s3');
     const set = await editor.request('setVariable', {
       variablesReference: STATE,
-      name: 'rows',
+      name: 'total',
       value: '5',
     });
-    expect(set.body.value).toBe('s3=5');
+    expect(set.body.value).toBe('total=5');
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'set',
+      open: {scope: 'state'},
+      name: 'total',
+      value: '5',
+    });
     // A C frame keeps GDB's scopes, with the app's state after them.
     const cScopes = await editor.request('scopes', {frameId: 3});
     expect(cScopes.body.scopes.map((scope: Body) => scope.name)).toEqual([
@@ -727,9 +769,89 @@ describe('debug adapter', () => {
     const rows = await editor.request('variables', {
       variablesReference: list.body.variablesReference,
     });
-    expect(rows.body.variables).toEqual([
-      {name: '[0]', value: 's3', type: 'row', variablesReference: 0},
+    expect(rows.body.variables[0]).toMatchObject({name: '[0]', type: 'row'});
+    const fields = await editor.request('variables', {
+      variablesReference: rows.body.variables[0].variablesReference,
+    });
+    expect(fields.body.variables).toEqual([
+      {name: 'done', value: 'true', type: 'bool', variablesReference: 0},
     ]);
+    expect(editor.gdb.erbRequests.at(-1)).toMatchObject({
+      do: 'variables',
+      open: {scope: 'value', expression: 'rows', frame: 0, path: [0]},
+    });
+  });
+
+  it('opens a list to a page of rows, a row to its fields, and sets a field', async () => {
+    const editor = new Editor();
+    await editor.start('launch', {}, {supportsInvalidatedEvent: true});
+    await editor.stopInApp();
+    const state = await editor.request('variables', {
+      variablesReference: STATE,
+    });
+    const list = state.body.variables[1];
+    expect(list).toMatchObject({name: 'rows', indexedVariables: 2});
+    const rows = await editor.request('variables', {
+      variablesReference: list.variablesReference,
+      filter: 'indexed',
+      start: 1,
+      count: 1,
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'variables',
+      open: {scope: 'state', path: ['rows']},
+      filter: 'indexed',
+      start: 1,
+      count: 1,
+    });
+    const row = rows.body.variables[0];
+    expect(row).toMatchObject({name: '[1]', value: '{done: true}'});
+    const fields = await editor.request('variables', {
+      variablesReference: row.variablesReference,
+    });
+    expect(fields.body.variables[0]).toMatchObject({name: 'done'});
+    // A value read again keeps its reference.
+    const again = await editor.request('variables', {
+      variablesReference: STATE,
+    });
+    expect(again.body.variables[1].variablesReference).toBe(
+      list.variablesReference,
+    );
+    const invalidated = editor.nextEvent('invalidated');
+    const set = await editor.request('setVariable', {
+      variablesReference: row.variablesReference,
+      name: 'done',
+      value: 'false',
+    });
+    expect(set.body.value).toBe('rows.1.done=false');
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'set',
+      open: {scope: 'state', path: ['rows', 1]},
+      name: 'done',
+      value: 'false',
+    });
+    // The row's own line shows the field, so the editor reads the values again.
+    expect(await invalidated).toMatchObject({
+      body: {areas: ['variables']},
+    });
+  });
+
+  it("offers a data breakpoint on an object state's field", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    const state = await editor.request('variables', {
+      variablesReference: STATE,
+    });
+    const box = state.body.variables[2];
+    await editor.request('variables', {
+      variablesReference: box.variablesReference,
+    });
+    const field = await editor.request('dataBreakpointInfo', {
+      variablesReference: box.variablesReference,
+      name: 'x',
+    });
+    expect(field.body.dataId).toBe('erb:box.x');
   });
 
   it("reads `erb print` in the debug console from the editor's selected frame", async () => {

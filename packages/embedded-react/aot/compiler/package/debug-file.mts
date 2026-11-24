@@ -67,6 +67,8 @@ export interface DebugLocal {
   list?: number;
   /** For a row of a filtered or sorted list: that list, by its slot, which holds the row of `list`. */
   through?: number;
+  /** The constant a folded name stands for, when it is one. */
+  value?: number | string | boolean;
   from: number;
   to: number;
 }
@@ -222,12 +224,13 @@ const TEMPLATE_KINDS = new Map<number, DebugTemplate['kind']>(
  * @returns The local.
  */
 function debugLocal(program: Program, local: ProgramLocal): DebugLocal {
-  const {name, type, register, parameter, from, to} = local;
+  const {name, type, register, parameter, value, from, to} = local;
   const described: DebugLocal = {
     name,
     ...(type !== undefined && {type}),
     ...(parameter && {parameter}),
     ...(register !== undefined && {register}),
+    ...(value !== undefined && {value}),
     from,
     to,
   };

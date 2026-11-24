@@ -519,39 +519,138 @@ class Unreadable:
         self.text = text
 
 
-class Row:
-    """A list's row: its bytes, and its number in the list when it was read from one."""
+class Place:
+    """Where a value is kept: it is read from there, and set there."""
 
-    def __init__(self, state, data, at=0, index=None):
+    kind = None
+    values = None
+
+    def read(self):
+        raise NotImplementedError
+
+    def write(self, text):
+        """Sets the value from its text."""
+        raise NotImplementedError
+
+
+class Record:
+    """An object: its fields by name, each a place, or an object within it."""
+
+    def __init__(self):
+        self.members = {}
+
+    def add(self, path, place):
+        """Puts a place at a path of field names. A name already taken by a value keeps the place by its whole path."""
+        record = self
+        for depth, name in enumerate(path[:-1]):
+            inner = record.members.setdefault(name, Record())
+            if not isinstance(inner, Record):
+                record.members[".".join(path[depth:])] = place
+                return
+            record = inner
+        record.members[path[-1]] = place
+
+    def child(self, name):
+        if name not in self.members:
+            raise ErbError("it has no %s; it has %s" % (name, ", ".join(self.members) or "no fields"))
+        return self.members[name]
+
+    def text(self):
+        fields = []
+        for name, member in self.members.items():
+            value = settled(member)
+            # A field a row leaves out.
+            if value is not UNDEFINED:
+                fields.append("%s: %s" % (name, show(value)))
+        return "{" + ", ".join(fields) + "}"
+
+
+def settled(found):
+    """The value of what a name, a member or an index finds: a place's is read."""
+    return found.read() if isinstance(found, Place) else found
+
+
+class Row:
+    """A list's row: its bytes, and its number in the list."""
+
+    def __init__(self, app, state, data, at=0, index=None):
+        self.app = app
         self.state = state
         self.data = data
         self.at = at
         self.index = index
+        self.fields = None
 
-    def has(self, field):
-        """Whether the row holds a field: an optional one has a flag beside it."""
+    @property
+    def address(self):
+        return self.app.arena + self.state["offset"] + LIST_HEADER_BYTES + self.index * self.state["rowBytes"]
+
+    def flag(self, field):
+        """An optional field's flag, which says whether the row holds it, or None for a field every row holds."""
         for flag in self.state["fields"]:
             if flag["name"] == field["name"] + "?":
-                return bool(read_typed("bool", self.data, self.at + flag["offset"]))
-        return True
+                return flag
+        return None
 
-    def field(self, name):
-        for field in self.state["fields"]:
-            if field["name"] == name and not name.endswith("?"):
-                if not self.has(field):
-                    return UNDEFINED
-                return read_typed(field["type"], self.data, self.at + field["offset"], field.get("cap"))
-        names = ", ".join(field["name"] for field in self.state["fields"] if not field["name"].endswith("?"))
-        raise ErbError("a row of %s has no %s; it has %s" % (self.state["name"], name, names))
+    def has(self, field):
+        flag = self.flag(field)
+        return flag is None or bool(read_typed("bool", self.data, self.at + flag["offset"]))
+
+    def tree(self):
+        """The row as an object: a field named `pos.x` is `x` of its `pos`."""
+        if self.fields is None:
+            self.fields = Record()
+            for field in self.state["fields"]:
+                if not field["name"].endswith("?"):
+                    self.fields.add(field["name"].split("."), FieldPlace(self, field))
+        return self.fields
+
+    def child(self, name):
+        members = self.tree().members
+        if name not in members:
+            raise ErbError("a row of %s has no %s; it has %s" % (self.state["name"], name, ", ".join(members)))
+        return members[name]
 
     def text(self):
-        fields = []
-        for field in self.state["fields"]:
-            if field["name"].endswith("?") or not self.has(field):
-                continue
-            value = show(read_typed(field["type"], self.data, self.at + field["offset"], field.get("cap")))
-            fields.append("%s: %s" % (field["name"], value))
-        return "{" + ", ".join(fields) + "}"
+        return self.tree().text()
+
+    def reread(self):
+        """Reads the row again, after a write to it."""
+        self.data = read(self.address, self.state["rowBytes"])
+        self.at = 0
+
+
+class FieldPlace(Place):
+    """A field of a list's row. A list of plain values has one unnamed field, which is the row."""
+
+    def __init__(self, row, field):
+        self.row = row
+        self.field = field
+        self.kind = field["type"]
+        self.values = field.get("values")
+
+    def read(self):
+        row, field = self.row, self.field
+        if not row.has(field):
+            return UNDEFINED
+        return read_typed(field["type"], row.data, row.at + field["offset"], field.get("cap"), field.get("values"))
+
+    def write(self, text):
+        row, field = self.row, self.field
+        name = "%s[%s]%s" % (row.state["name"], row.index, "." + field["name"] if field["name"] else "")
+        if row.index is None:
+            raise ErbError("%s is in no list, so it can't be set" % name)
+        flag = row.flag(field)
+        if text.strip() == "undefined":
+            if flag is None:
+                raise ErbError("every row of %s holds %s" % (row.state["name"], field["name"] or "a value"))
+            write(row.address + flag["offset"], struct.pack(endian() + "i", 0))
+        else:
+            write(row.address + field["offset"], encode_value(field["type"], text, name, field.get("cap"), field.get("values")))
+            if flag is not None:
+                write(row.address + flag["offset"], struct.pack(endian() + "i", 1))
+        mark_changed(row.app, row.state)
+        row.reread()
 
 
 class Rows:
@@ -562,28 +661,30 @@ class Rows:
         self.state = state
         self.address = app.arena + state["offset"]
         self.count = read_value("I", self.address)
+        fields = state["fields"]
+        self.plain = len(fields) == 1 and not fields[0]["name"]
+
+    def children(self, start, count):
+        """Rows from a start, read at once: each a row, or a plain value's place."""
+        start = max(start, 0)
+        count = max(min(count, self.count - start), 0)
+        size = self.state["rowBytes"]
+        data = read(self.address + LIST_HEADER_BYTES + start * size, count * size) if count else b""
+        rows = [Row(self.app, self.state, data, number * size, start + number) for number in range(count)]
+        return [FieldPlace(row, self.state["fields"][0]) if self.plain else row for row in rows]
+
+    def child(self, index):
+        found = self.children(index, 1) if index >= 0 else []
+        return found[0] if found else UNDEFINED
 
     def row(self, index):
-        if not 0 <= index < self.count:
-            return UNDEFINED
-        size = self.state["rowBytes"]
-        return read_row(self.state, read(self.address + LIST_HEADER_BYTES + index * size, size), 0, index)
+        return settled(self.child(index))
 
     def text(self):
         shown = min(self.count, MOST_ROWS_SHOWN)
-        size = self.state["rowBytes"]
-        data = read(self.address + LIST_HEADER_BYTES, shown * size) if shown else b""
-        rows = [show(read_row(self.state, data, row * size, row)) for row in range(shown)]
+        rows = [show(settled(row)) for row in self.children(0, shown)]
         more = ", …" if self.count > shown else ""
         return "[%s%s]  (%d of %d rows)" % (", ".join(rows), more, self.count, self.state["cap"])
-
-
-def read_row(state, data, at, index=None):
-    """A list's row from its bytes at an offset. A list of plain values has one unnamed field, which is the row."""
-    fields = state["fields"]
-    if len(fields) == 1 and not fields[0]["name"]:
-        return read_typed(fields[0]["type"], data, at + fields[0]["offset"], fields[0].get("cap"))
-    return Row(state, data, at, index)
 
 
 def read_float(data, at):
@@ -651,7 +752,10 @@ def show(value):
             # Half of a UTF-16 pair can't be printed: it shows as its escape.
             text = json.dumps(value)
         return text
-    return value.text() if isinstance(value, (Row, Rows)) else value.text
+    return value.text() if isinstance(value, STRUCTURED) else value.text
+
+
+STRUCTURED = (Row, Rows, Record)
 
 
 def type_name(value):
@@ -662,6 +766,8 @@ def type_name(value):
         return "number"
     if isinstance(value, str):
         return "string"
+    if isinstance(value, Record):
+        return "object"
     return "row" if isinstance(value, Row) else "list" if isinstance(value, Rows) else ""
 
 
@@ -716,15 +822,15 @@ def list_row(app, local, row):
         first = counted["fields"][0]
         row = read_value("i", address + LIST_HEADER_BYTES + row * counted["rowBytes"] + first["offset"])
         address = app.arena + state["offset"]
-    data = read(address + LIST_HEADER_BYTES + row * state["rowBytes"], state["rowBytes"])
-    return read_row(state, data, 0, row)
+    return Rows(app, state).row(row)
 
 
 def local_read(app, local, base):
     """A parameter's or a local's value, in the frame at a base."""
     kind = local.get("type")
     if kind is None:
-        return Unreadable("<optimised out>")
+        # A constant has its value in the debug file.
+        return local["value"] if "value" in local else Unreadable("<optimised out>")
     if kind == "list":
         state = app.state_at(local["list"])
         return Rows(app, state) if state else Unreadable("<list>")
@@ -743,6 +849,85 @@ def local_read(app, local, base):
 
 def local_value(app, local, base):
     return show(local_read(app, local, base))
+
+
+class StatePlace(Place):
+    def __init__(self, app, state):
+        self.app = app
+        self.state = state
+        self.kind = state["type"]
+        self.values = state.get("values")
+
+    def read(self):
+        return state_read(self.app, self.state)
+
+    def write(self, text):
+        set_state(self.app, self.state, text)
+
+
+class LocalPlace(Place):
+    """A parameter or a local, in the frame at a base."""
+
+    def __init__(self, app, local, base):
+        self.app = app
+        self.local = local
+        self.base = base
+        self.kind = local.get("type") or ("constant" if "value" in local else "")
+
+    def read(self):
+        return local_read(self.app, self.local, self.base)
+
+    def write(self, text):
+        app, local = self.app, self.local
+        name = local["name"]
+        kind = local.get("type")
+        if kind is None:
+            raise ErbError("the compiler folded %s into the code, so it has no value to set" % name)
+        if kind in ("row", "list"):
+            raise ErbError("%s is a %s: set one of its %s" % (name, kind, "fields" if kind == "row" else "rows"))
+        if "register" not in local:
+            write(app.arena + local["offset"], encode_value(kind, text, name, local.get("cap")))
+        elif kind == "string":
+            raise ErbError("%s reads a string kept elsewhere, so it has no text of its own to set" % name)
+        else:
+            address = app.stack + 4 * (self.base + app.runtime.frame_cells + local["register"])
+            write(address, encode_value(kind, text, name))
+
+
+def state_path(app, state):
+    """Where a state sits among the app's state: its label, or for an object's field the object's label and the
+    field's names."""
+    label = app.label(state)
+    names = state["name"].split(".")
+    if len(names) > 1 and label.endswith(state["name"]):
+        return [label[: len(label) - len(state["name"])] + names[0]] + names[1:]
+    return [label]
+
+
+def state_tree(app, hidden=False):
+    """The app's state, an object state's fields under its name."""
+    tree = Record()
+    for state in app.panel["states"]:
+        if hidden or not state["hidden"]:
+            tree.add(state_path(app, state), StatePlace(app, state))
+    return tree
+
+
+def locals_tree(app, function, offset, base):
+    """A frame's parameters and locals, an object's fields under its name."""
+    tree = Record()
+    for local in frame_locals(app, function, offset):
+        tree.add(local["name"].split("."), LocalPlace(app, local, base))
+    return tree
+
+
+def mark_changed(app, state):
+    """Has the app run its update for a state the debugger wrote, as after a setter."""
+    if "dirtyBit" in state:
+        bit = state["dirtyBit"]
+        word = app.arena + app.panel["regions"]["dirty"]["offset"] + 4 * (bit // 32)
+        write(word, struct.pack(endian() + "I", read_value("I", word) | (1 << (bit % 32))))
+        app.runtime.request_update()
 
 
 def state_labels(panel):
@@ -1086,7 +1271,7 @@ def loosely_same(left, right):
     nullish = lambda value: value is None or value is UNDEFINED
     if nullish(left) or nullish(right):
         return nullish(left) and nullish(right)
-    if isinstance(left, (Row, Rows)) or isinstance(right, (Row, Rows)) or type(left) is type(right):
+    if isinstance(left, STRUCTURED) or isinstance(right, STRUCTURED) or type(left) is type(right):
         return same(left, right)
     return to_number(left) == to_number(right)
 
@@ -1144,6 +1329,8 @@ def kind_of(value):
         return "a row"
     if isinstance(value, Rows):
         return "a list"
+    if isinstance(value, Record):
+        return "an object"
     if isinstance(value, str):
         return "a string"
     return "a boolean" if isinstance(value, bool) else "a number"
@@ -1156,33 +1343,54 @@ class Scope:
         self.app = app
         self.base = 0
         self.locals = {}
+        self.frame = Record()
+        self.state = state_tree(app, hidden=True)
         chain = app.frame_chain() if app.runtime.flag("in_vm") else []
         if 0 <= frame < len(chain):
             function, offset, self.base = chain[frame]
             self.locals = {local["name"]: local for local in frame_locals(app, function, offset)}
+            self.frame = locals_tree(app, function, offset, self.base)
 
     def has(self, name):
         labels = state_labels(self.app.panel)
-        return name in self.locals or any(
-            name in (state["name"], state["storage"], labels[state["storage"]]) for state in self.app.panel["states"]
+        return (
+            name in self.frame.members
+            or any(name in (state["name"], state["storage"], labels[state["storage"]]) for state in self.app.panel["states"])
+            or self.object(name) is not None
         )
 
-    def read(self, name):
-        if name in self.locals:
-            return local_read(self.app, self.locals[name], self.base)
+    def object(self, name):
+        """An object state by its name, or by the name alone when one component has it."""
+        found = self.state.members.get(name)
+        if found is None:
+            named = [member for key, member in self.state.members.items() if key.endswith("." + name)]
+            found = named[0] if len(named) == 1 else None
+        return found if isinstance(found, Record) else None
+
+    def find(self, name):
+        """What a name is: a local's place, a state's, or an object of them."""
+        if name in self.frame.members:
+            return self.frame.members[name]
+        found = self.object(name)
+        if found is not None:
+            return found
         if not self.has(name):
-            labels = state_labels(self.app.panel)
-            names = list(self.locals) + [labels[state["storage"]] for state in self.app.panel["states"] if not state["hidden"]]
+            names = list(self.frame.members) + [key for key in state_tree(self.app).members]
             raise ErbError("nothing here is named %s; the locals and the app's state: %s" % (name, ", ".join(names) or "none"))
-        return state_read(self.app, self.app.state(name))
+        return StatePlace(self.app, self.app.state(name))
+
+    def read(self, name):
+        return settled(self.find(name))
 
     def labelled(self, label):
-        """A state by the label the commands show, such as a component's `Counter.taps`, or None."""
+        """A state by the label the commands show, such as a component's `Counter.taps`, or an object state by its
+        label. None for neither."""
         labels = state_labels(self.app.panel)
         for state in self.app.panel["states"]:
-            if labels[state["storage"]] == label:
-                return state
-        return None
+            if label in (labels[state["storage"]], state["storage"]):
+                return StatePlace(self.app, state)
+        found = self.state.members.get(label)
+        return found if isinstance(found, Record) else None
 
 
 class Skipped(Exception):
@@ -1211,7 +1419,7 @@ class Evaluator:
     def plain(self, node, operator):
         """A node's value, for an operator that takes numbers, strings and booleans."""
         value = self.usable(node)
-        if isinstance(value, (Row, Rows)):
+        if isinstance(value, STRUCTURED):
             raise ErbError("%s is %s, which `%s` can't take" % (node.text, kind_of(value), operator))
         return value
 
@@ -1222,16 +1430,21 @@ class Evaluator:
         return self.scope.read(node.parts[0])
 
     def link(self, node):
-        """A member or an index, in a chain that an optional link ends."""
+        return settled(self.find(node))
+
+    def find(self, node):
+        """What a name, a member or an index names, in a chain that an optional link ends: a place, or a value that
+        is kept nowhere."""
+        if node.kind == "name":
+            return self.scope.find(node.parts[0])
+        if node.kind not in ("member", "index"):
+            return self.value(node)
         target_node, key, optional = node.parts
         if node.kind == "member" and target_node.kind == "name" and not self.scope.has(target_node.parts[0]):
-            state = self.scope.labelled("%s.%s" % (target_node.parts[0], key))
-            if state is not None:
-                return state_read(self.scope.app, state)
-        if target_node.kind in ("member", "index"):
-            target = self.link(target_node)
-        else:
-            target = self.value(target_node)
+            found = self.scope.labelled("%s.%s" % (target_node.parts[0], key))
+            if found is not None:
+                return found
+        target = settled(self.find(target_node))
         if isinstance(target, Unreadable):
             raise ErbError("%s can't be read: it is %s" % (target_node.text, target.text))
         if node.kind == "index":
@@ -1242,9 +1455,13 @@ class Evaluator:
             raise ErbError("%s is %s, so it has no %s" % (target_node.text, show(target), to_text(key)))
         whole = is_number(key) and math.isfinite(key) and key == int(key)
         if isinstance(target, Row) and isinstance(key, str):
-            return target.field(key)
+            return target.child(key)
+        if isinstance(target, Record) and isinstance(key, str):
+            if key not in target.members:
+                raise ErbError("%s has no %s; it has %s" % (target_node.text, key, ", ".join(target.members)))
+            return target.members[key]
         if isinstance(target, Rows) and node.kind == "index" and is_number(key):
-            return target.row(int(key)) if whole else UNDEFINED
+            return target.child(int(key)) if whole else UNDEFINED
         if isinstance(target, str) and node.kind == "index" and is_number(key):
             # By UTF-16 unit, as `length` counts: half of a pair is a string of its own.
             units = target.encode("utf-16-le", "surrogatepass")
@@ -1320,12 +1537,23 @@ def evaluate(tree, scope):
     return Evaluator(scope).value(tree)
 
 
+def find_text(app, text, frame=0):
+    """What an expression names over a frame's locals and the app's state: a place, or a value kept nowhere."""
+    scope = Scope(app, frame)
+    # A state's label needn't read as an expression: `Counter:16.taps`. A local of the name comes first, an object too.
+    local = text in scope.locals or re.split(r"[.\[]", text)[0] in scope.frame.members
+    found = None if local else scope.labelled(text)
+    if found is not None:
+        return found
+    try:
+        return Evaluator(scope).find(parse_expression(text))
+    except Skipped:
+        return UNDEFINED
+
+
 def evaluate_text(app, text, frame=0):
     """An expression's value over a frame's locals and the app's state."""
-    scope = Scope(app, frame)
-    # A state's label needn't read as an expression: `Counter:16.taps`.
-    state = None if text in scope.locals else scope.labelled(text)
-    return state_read(app, state) if state is not None else evaluate(parse_expression(text), scope)
+    return settled(find_text(app, text, frame))
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -1342,7 +1570,7 @@ erb locals [N]       The current function's parameters and locals, or the Nth ca
 erb print EXPR       An expression over the locals and the state: item.label, count + 1, rows.length > 3.
 erb error            The last fault or refused load.
 erb state [NAME]     Every state, or one.
-erb set NAME VALUE   Set a state; the app runs its update at its next tick.
+erb set NAME VALUE   Set a state, a row's field (rows[2].done) or a local.
 erb watch NAME       Stop when a state changes, on the line that wrote it.
 erb break [LINE]     Stop at a source line (App.jsx:41, or 41); with no line, list the breakpoints.
                      LINE hits N stops from the Nth pass on; LINE if EXPR stops when the expression is true.
@@ -1456,10 +1684,15 @@ nothing on it, so it has no calls and no assignments."""
 
 def frame_locals(app, function, offset):
     """The parameters and locals a frame shows, parameters first."""
-    # A name declared again in an inner block hides the outer one.
+    # A name declared again in an inner block hides the outer one, an object's fields too.
     shown = {}
     for local in app.locals_at(function, offset):
-        shown[local["name"]] = local
+        name = local["name"]
+        root = name.split(".")[0]
+        for other in list(shown):
+            if other != name and other.split(".")[0] == root and (other == root or name == root):
+                del shown[other]
+        shown[name] = local
     return sorted(shown.values(), key=lambda local: not local.get("parameter"))
 
 
@@ -1533,6 +1766,10 @@ class ErbState(gdb.Command):
         app = App()
         words = argument.split()
         if words and words[0] != "all":
+            found = state_tree(app, hidden=True).members.get(words[0])
+            if isinstance(found, Record):
+                print("%s = %s" % (words[0], show(found)))
+                return
             state = app.state(words[0])
             print("%s = %s" % (app.label(state), state_value(app, state)))
             return
@@ -1543,8 +1780,8 @@ class ErbState(gdb.Command):
             print("%s = %s" % (app.label(state), state_value(app, state)))
 
 
-def encode_value(state, text):
-    kind = state["type"]
+def encode_value(kind, text, name, cap=None, values=None):
+    """A value's bytes from its text, for a state, a row's field or a local of a kind."""
     text = text.strip()
     try:
         if kind == "int":
@@ -1553,29 +1790,43 @@ def encode_value(state, text):
             return struct.pack(endian() + "q", int(text, 0))
         if kind == "float":
             return struct.pack(endian() + "f", float(text))
+        if kind == "double":
+            return struct.pack(endian() + "d", float(text))
         if kind == "bool":
             if text not in ("true", "false", "1", "0"):
                 raise ValueError
             return struct.pack(endian() + "i", 1 if text in ("true", "1") else 0)
-    except ValueError:
-        raise ErbError("%s holds a %s, not %s" % (state["name"], kind, text))
+    except (ValueError, OverflowError, struct.error):
+        raise ErbError("%s holds %s, not %s" % (name, KIND_NAMES.get(kind, kind), text))
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
         text = text[1:-1]
-    if kind == "enum":
-        values = state.get("values") or []
+    if kind == "enum" and values:
         if text not in values:
-            raise ErbError("%s is one of %s" % (state["name"], ", ".join(json.dumps(value) for value in values)))
+            raise ErbError("%s is one of %s" % (name, ", ".join(json.dumps(value) for value in values)))
         return struct.pack(endian() + "i", values.index(text))
     if kind == "string":
         encoded = text.encode("utf-8")
-        if len(encoded) > state["cap"]:
-            raise ErbError("%s holds at most %d bytes" % (state["name"], state["cap"]))
+        if len(encoded) > cap:
+            raise ErbError("%s holds at most %d bytes" % (name, cap))
         return encoded + b"\0"
-    raise ErbError("a %s state can't be set from the debugger" % kind)
+    raise ErbError("%s can't be set from the debugger: it holds %s" % (name, KIND_NAMES.get(kind, kind)))
+
+
+KIND_NAMES = {
+    "int": "a whole number",
+    "int64": "a whole number",
+    "float": "a number",
+    "double": "a number",
+    "bool": "true or false",
+    "enum": "one of a set of strings",
+    "list": "a list",
+}
 
 
 class ErbSet(gdb.Command):
-    """Set a state: erb set NAME VALUE. The app runs its update, as a setter would, at its next tick."""
+    """Set a state, a field of a list's row, or a local: erb set NAME VALUE. NAME is a name with members and indexes,
+as `erb print` reads them: count, box.pos.x, rows[2].done, item.label. After a state or a row is set the app runs its
+update, as a setter would, at its next tick. A local is the value the next statement reads."""
 
     def __init__(self):
         super().__init__("erb set", gdb.COMMAND_DATA)
@@ -1583,20 +1834,25 @@ class ErbSet(gdb.Command):
     def invoke(self, argument, from_tty):
         parts = argument.strip().split(None, 1)
         if len(parts) != 2:
-            raise ErbError("name the state and its value: erb set count 3")
-        app = App()
-        state = app.state(parts[0])
-        print("%s = %s" % (app.label(state), set_state(app, state, parts[1])))
+            raise ErbError("name what to set and its value: erb set count 3")
+        place = settable(find_text(App(), parts[0]), parts[0])
+        place.write(parts[1])
+        print("%s = %s" % (parts[0], show(place.read())))
+
+
+def settable(found, name):
+    """A place to set, from what a name finds. A value that is kept nowhere, or is made of others, has none."""
+    if not isinstance(found, Place):
+        if isinstance(found, STRUCTURED):
+            raise ErbError("%s is %s: set one of its %s" % (name, kind_of(found), "rows" if isinstance(found, Rows) else "fields"))
+        raise ErbError("%s is worked out, not kept, so it can't be set" % name)
+    return found
 
 
 def set_state(app, state, text):
     """Writes a state from its text and asks the app for an update. Returns the value it now shows."""
-    write(app.arena + state["offset"], encode_value(state, text))
-    if "dirtyBit" in state:
-        bit = state["dirtyBit"]
-        word = app.arena + app.panel["regions"]["dirty"]["offset"] + 4 * (bit // 32)
-        write(word, struct.pack(endian() + "I", read_value("I", word) | (1 << (bit % 32))))
-        app.runtime.request_update()
+    write(app.arena + state["offset"], encode_value(state["type"], text, state["name"], state.get("cap"), state.get("values")))
+    mark_changed(app, state)
     value = state_value(app, state)
     for watchpoint in watchpoints:
         if watchpoint.is_valid() and watchpoint.state["storage"] == state["storage"]:
@@ -2508,7 +2764,7 @@ gdb.events.new_objfile.connect(on_new_objfile)
 # The debug adapter's requests
 # ----------------------------------------------------------------------------------------------------------------------
 
-MOST_ROWS_LISTED = 256
+ROW_NAME = re.compile(r"^\[(\d+)\]$")
 STEP_KINDS = {"into": STEP_INTO, "over": STEP_OVER, "out": STEP_OUT}
 
 
@@ -2604,44 +2860,86 @@ def dap_step(request):
     return {}
 
 
-def state_variable(app, state):
-    variable = {"name": app.label(state), "value": state_value(app, state), "type": state["type"], "storage": state["storage"]}
-    if state["type"] == "list":
-        variable["rows"] = read_value("I", app.arena + state["offset"])
-    return variable
+def opened(app, where):
+    """What the editor opened: a scope, or an expression's value, and the object, list or row a path of names and
+    row numbers leads to in it."""
+    scope = where["scope"]
+    if scope == "state":
+        found = state_tree(app)
+    elif scope == "locals":
+        chain = app.frame_chain() if app.runtime.flag("in_vm") else []
+        frame = where["frame"]
+        found = locals_tree(app, *chain[frame]) if 0 <= frame < len(chain) else Record()
+    else:
+        found = find_text(app, where["expression"], where.get("frame", -1))
+    for step in where.get("path", []):
+        found = child_of(settled(found), step)
+    return found
+
+
+def child_of(value, step):
+    """A row of a list by its number, or a field of a row or an object by its name."""
+    if isinstance(value, Rows) and isinstance(step, int):
+        found = value.child(step)
+        if found is UNDEFINED:
+            raise ErbError("%s has no row %d" % (value.state["name"], step))
+        return found
+    if isinstance(value, Row) and isinstance(step, str):
+        return value.child(step)
+    if isinstance(value, Record) and isinstance(step, str) and step in value.members:
+        return value.members[step]
+    raise ErbError("the value changed: it has no %s now" % step)
+
+
+def kind_text(found, value):
+    """A value's type, as the Variables pane shows it. An enum's is the values it takes."""
+    if isinstance(found, Place) and found.kind == "enum" and found.values:
+        return " | ".join(json.dumps(choice) for choice in found.values)
+    if isinstance(found, Place) and found.kind:
+        return found.kind
+    return type_name(value)
+
+
+def variable(name, found, where, step):
+    """A row of the Variables pane: a value, and for one that opens, where it is."""
+    value = settled(found)
+    shown = {"name": name, "value": show(value), "type": kind_text(found, value)}
+    if isinstance(value, STRUCTURED):
+        shown["open"] = dict(where, path=where.get("path", []) + [step])
+    if isinstance(value, Rows):
+        shown["rows"] = value.count
+    if isinstance(found, StatePlace):
+        shown["storage"] = found.state["storage"]
+    return shown
 
 
 def dap_variables(request):
+    """What the editor opened holds: a scope's values, an object's or a row's fields, or a list's rows from `start`,
+    `count` of them or all."""
     app = App()
-    scope = request["scope"]
-    if scope == "state":
-        return {"variables": [state_variable(app, state) for state in app.panel["states"] if not state["hidden"]]}
-    if scope == "rows":
-        state = app.state(request["state"])
-        address = app.arena + state["offset"]
-        count = min(read_value("I", address), MOST_ROWS_LISTED)
-        data = read(address + LIST_HEADER_BYTES, count * state["rowBytes"]) if count else b""
-        return {
-            "variables": [
-                {"name": "[%d]" % row, "value": show(read_row(state, data, row * state["rowBytes"], row)), "type": "row"}
-                for row in range(count)
-            ]
-        }
-    chain = app.frame_chain() if app.runtime.flag("in_vm") else []
-    if not 0 <= request["frame"] < len(chain):
+    where = request["open"]
+    value = settled(opened(app, where))
+    if isinstance(value, Rows):
+        if request.get("filter") == "named":
+            return {"variables": []}
+        start = request.get("start") or 0
+        rows = value.children(start, request.get("count") or value.count)
+        return {"variables": [variable("[%d]" % (start + number), row, where, start + number) for number, row in enumerate(rows)]}
+    if request.get("filter") == "indexed" or not isinstance(value, (Row, Record)):
         return {"variables": []}
-    function, offset, base = chain[request["frame"]]
-    return {
-        "variables": [
-            {"name": local["name"], "value": local_value(app, local, base), "type": local.get("type") or ""}
-            for local in frame_locals(app, function, offset)
-        ]
-    }
+    members = (value.tree() if isinstance(value, Row) else value).members
+    return {"variables": [variable(name, found, where, name) for name, found in members.items()]}
 
 
 def dap_set(request):
+    """Sets a value the editor edited, by its name in what was opened."""
     app = App()
-    return {"value": set_state(app, app.state(request["state"]), request["value"])}
+    name = request["name"]
+    value = settled(opened(app, request["open"]))
+    row = ROW_NAME.match(name)
+    place = settable(child_of(value, int(row.group(1)) if row and isinstance(value, Rows) else name), name)
+    place.write(request["value"])
+    return {"value": show(place.read())}
 
 
 WATCH_PACKETS = {gdb.WP_WRITE: "2", gdb.WP_ACCESS: "4"}
@@ -2712,10 +3010,15 @@ def dap_watch(request):
 def dap_evaluate(request):
     """An expression's value, over a frame's locals and the app's state."""
     app = App()
-    value = evaluate_text(app, request["expression"].strip(), request.get("frame", -1))
+    expression = request["expression"].strip()
+    frame = request.get("frame", -1)
+    found = find_text(app, expression, frame)
+    value = settled(found)
     answer = {"value": show(value), "type": type_name(value)}
+    if isinstance(value, STRUCTURED):
+        answer["open"] = {"scope": "value", "expression": expression, "frame": frame, "path": []}
     if isinstance(value, Rows):
-        answer.update(rows=value.count, storage=value.state["storage"])
+        answer["rows"] = value.count
     return answer
 
 

@@ -757,6 +757,54 @@ async function faultSession(
       variables['App state']?.includes('picked = 0'),
     variables,
   );
+
+  // The list opens to its rows, a row to its fields, and a field and a local are set.
+  const scopes = await editor.request('scopes', {frameId: frames[0].id});
+  const [localsScope, stateScope] = ['Locals', 'App state'].map(name =>
+    (scopes.body?.scopes ?? []).find((scope: Body) => scope.name === name),
+  );
+  const named = async (reference: number, name: string): Promise<Body> => {
+    const response = await editor.request('variables', {
+      variablesReference: reference,
+    });
+    return (
+      (response.body?.variables ?? []).find(
+        (variable: Body) => variable.name === name,
+      ) ?? {}
+    );
+  };
+  const list = await named(stateScope?.variablesReference, 'items');
+  const row = await named(list.variablesReference, '[0]');
+  const field = await named(row.variablesReference, 'n');
+  check(
+    'a list opens to its rows and a row to its fields',
+    list.indexedVariables > 0 &&
+      row.variablesReference > 0 &&
+      field.type === 'int',
+    [list, row, field],
+  );
+  const fieldSet = await editor.request('setVariable', {
+    variablesReference: row.variablesReference,
+    name: 'n',
+    value: '41',
+  });
+  const rowAfter = await named(list.variablesReference, '[0]');
+  check(
+    "a row's field is set from the Variables pane",
+    fieldSet.body?.value === '41' && /\bn: 41\b/.test(rowAfter.value ?? ''),
+    [fieldSet, rowAfter],
+  );
+  const localSet = await editor.request('setVariable', {
+    variablesReference: localsScope?.variablesReference,
+    name: 'row',
+    value: '1',
+  });
+  const localAfter = await named(localsScope?.variablesReference, 'row');
+  check(
+    'a local is set from the Variables pane',
+    localSet.body?.value === '1' && localAfter.value === '1',
+    [localSet, localAfter],
+  );
   const ended = await editor.request('disconnect', {terminateDebuggee: true});
   check('the session ends', ended.success, ended);
 }

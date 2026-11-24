@@ -469,6 +469,34 @@ export function App() {
     ]);
   });
 
+  it("names an object's constant fields with their values, and no place", () => {
+    const source = `import {useState} from 'react';
+import {Text, Pressable} from 'embedded-react';
+const LIMITS = {low: 2, unit: 'psi'};
+export function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <Pressable
+      onPress={() => {
+        const limits = LIMITS;
+        const next = {x: count + 1};
+        setCount(next.x + limits.low);
+      }}>
+      <Text>{count}</Text>
+    </Pressable>
+  );
+}`;
+    const [panel] = debugFileOf(source).panels;
+    expect(functionAt(panel, 10).locals).toMatchObject([
+      {name: 'limits.low', value: 2},
+      {name: 'limits.unit', value: 'psi'},
+      {name: 'next.x', type: 'int'},
+    ]);
+    const [low] = functionAt(panel, 10).locals;
+    expect(low.type).toBeUndefined();
+    expect(low.register).toBeUndefined();
+  });
+
   it("names a native event's values, a record's fields by their path", () => {
     const fixtures = `${dirname(fileURLToPath(import.meta.url))}/../../test/erb-frames/fixtures`;
     const debugFileOfFixture = (name: string): DebugFile => {

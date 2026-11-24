@@ -225,6 +225,27 @@ const LIST_CHECKS: Check[] = [
     run: caught('erb print item.lable'),
     expected: /^a row of items has no lable; it has label, n, w$/m,
   },
+  // A row's field is set where the list keeps it, and one a row leaves out is given and taken away.
+  {command: 'erb set items[1].n 9', expected: /^items\[1\]\.n = 9$/m},
+  {command: 'erb set items[2].n 4', expected: /^items\[2\]\.n = 4$/m},
+  {
+    command: 'erb print items[1].n + items[2].n',
+    expected: /^items\[1\]\.n \+ items\[2\]\.n = 13$/m,
+  },
+  {
+    command: 'erb set items[2].n undefined',
+    expected: /^items\[2\]\.n = undefined$/m,
+  },
+  {
+    command: 'erb set items[0] 1',
+    run: caught('erb set items[0] 1'),
+    expected: /^items\[0\] is a row: set one of its fields$/m,
+  },
+  {
+    command: 'erb set items[0].label a-label-far-too-long-for-it',
+    run: caught('erb set items[0].label a-label-far-too-long-for-it'),
+    expected: /^items\[0\]\.label holds at most \d+ bytes$/m,
+  },
 ];
 
 file = 'counter.tsx';

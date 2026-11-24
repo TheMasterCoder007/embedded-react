@@ -256,6 +256,8 @@ export interface ProgramLocal {
   through?: number;
   /** What the function is entered with. */
   parameter?: boolean;
+  /** The constant a folded name stands for, when it is one. */
+  value?: number | string | boolean;
   /** The words it holds its value in: from `from` up to `to`. */
   from: number;
   to: number;
