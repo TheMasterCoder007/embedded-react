@@ -699,6 +699,8 @@ export interface ObjectBinding {
   kind: 'bindObject';
   name: string;
   tree: ObjectTree;
+  /** Whether the name is one this file made, rather than one the app wrote. */
+  made: boolean;
 }
 
 /** What a handler declaration of an object expands to: a local per field, then the object bound over them. */
@@ -854,8 +856,39 @@ export function expandObjectDeclarator(
       entries.push(declaratorOf(fieldName, identifier(name)));
     }
   }
-  entries.push({kind: 'bindObject', name: id.name, tree});
+  entries.push({
+    kind: 'bindObject',
+    name: id.name,
+    tree,
+    made: madeNames.has(id),
+  });
   return {entries, locals};
+}
+
+/**
+ * The fields of an object the app declared that hold a constant, so no local was declared for them.
+ *
+ * @param binding  The object and its name.
+ *
+ * @returns Each one's name, as its local would have it, and its value.
+ */
+export function constantFieldsOf({
+  name,
+  tree,
+  made,
+}: ObjectBinding): {name: string; value: number | string | boolean}[] {
+  if (made) return [];
+  const fields: {name: string; value: number | string | boolean}[] = [];
+  for (const [key, value] of flattenTree(tree)) {
+    if (
+      typeof value === 'string' ||
+      typeof value === 'boolean' ||
+      (typeof value === 'number' && Number.isFinite(value))
+    ) {
+      fields.push({name: `${name}.${key}`, value});
+    }
+  }
+  return fields;
 }
 
 /**

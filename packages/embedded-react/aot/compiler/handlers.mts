@@ -44,6 +44,7 @@ import type {ItemCallback, ListChain} from './list-order.mts';
 import {handlerSplitList, lowerSplitInto} from './list-split.mts';
 import {
   boundObjectOf,
+  constantFieldsOf,
   expandObjectDeclarator,
   isMadeName,
   lowerRecordSet,
@@ -2715,6 +2716,9 @@ export function lowerStmts(
         nextDeclarator();
         const entry = queue.shift()!;
         if (!('type' in entry)) {
+          for (const field of constantFieldsOf(entry)) {
+            lowered.push({kind: 'debugName', ...field});
+          }
           const locals = new Map(environment.locals);
           locals.delete(entry.name);
           environment = {

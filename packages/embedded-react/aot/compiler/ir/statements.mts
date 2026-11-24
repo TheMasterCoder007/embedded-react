@@ -57,6 +57,8 @@ export interface IrDebugName {
   name: string;
   /** The storage name of the list a split fills, which the name reads; none for a name the compiler folded away. */
   listName?: string;
+  /** The constant a folded name stands for, when it is one. */
+  value?: number | string | boolean;
 }
 
 /** `setInterval` / `setTimeout`: a timer whose callback is a function of its own. */

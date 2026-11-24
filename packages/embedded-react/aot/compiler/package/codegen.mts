@@ -1635,6 +1635,7 @@ export class Codegen {
             type: 'list',
             slot: this.listNamed(statement.listName).slot.index,
           }),
+          ...(statement.value !== undefined && {value: statement.value}),
         });
         return;
       case 'setState':

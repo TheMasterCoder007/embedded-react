@@ -24,7 +24,8 @@
 //     and log message
 //   - a stop the hook made shows the app's line, and step in, over and out step the app
 //   - the call stack has the app's frames inside the VM's frame
-//   - an app frame's variables are its locals and the app's state
+//   - an app frame's variables are its locals and the app's state: a list, a row and an object open to what they
+//     hold, and a state, a row's field and a local can be set
 //   - hover and Watch evaluate an expression over them, as `erb print` does
 //   - a data breakpoint on a state stops where the app changes it, as `erb watch` does
 //
@@ -102,6 +103,14 @@ interface Fault {
   refused: boolean;
 }
 
+/** What a variables reference opens. */
+interface Opened {
+  /** Where it is, as the script names it: a scope or an expression, and a path of names and row numbers. */
+  where: Record<string, any>;
+  /** The states in it, by the name the Variables pane shows: each one's storage name, and whether it is a list. */
+  states: Map<string, {storage: string; list: boolean}>;
+}
+
 interface Waiter {
   resolve(response: Message): void;
   reject(error: Error): void;
@@ -115,7 +124,8 @@ const APP_FRAME = 0x10000000;
 const WRITER_FRAME = APP_FRAME - 1;
 const LOCALS_REFERENCE = 0x20000000;
 const STATE_REFERENCE = 0x30000000;
-const ROWS_REFERENCE = 0x30000001;
+/** The first reference of a list, a row or an object the editor can open. */
+const OPENED_REFERENCE = 0x30000001;
 
 const VM_FUNCTION = 'erb_vm_run';
 const PAUSE_TIMEOUT_MS = 5000;
@@ -317,10 +327,14 @@ export class DebugAdapter {
   private quietStop: ((body: Record<string, any>) => void) | null = null;
   /** Each thread's call stack with the app's frames in it, or null when it has none. */
   private readonly stacks = new Map<number, Record<string, any>[] | null>();
-  private readonly rowStates = new Map<number, string>();
-  private readonly stateStorage = new Map<string, string>();
-  /** The states that are lists, by the name the Variables pane shows. */
-  private readonly listStates = new Set<string>();
+  /** The lists, rows and objects the editor can open at this stop, by reference. */
+  private readonly opened = new Map<number, Opened>();
+  /** Each one's reference, by where it is, so a value read twice keeps its reference. */
+  private readonly openedAt = new Map<string, number>();
+  private readonly stateScope: Opened = {
+    where: {scope: 'state'},
+    states: new Map(),
+  };
   /** Whether the firmware has the breakpoint hook. */
   private hook = false;
   /** How many data breakpoints the editor last set. */
@@ -632,7 +646,8 @@ export class DebugAdapter {
     this.status = null;
     this.fault = null;
     this.stacks.clear();
-    this.rowStates.clear();
+    this.opened.clear();
+    this.openedAt.clear();
   }
 
   /**
@@ -1105,19 +1120,18 @@ export class DebugAdapter {
     request: Message,
     args: Record<string, any>,
   ): void {
-    const storage =
-      args.variablesReference === STATE_REFERENCE
-        ? this.stateStorage.get(args.name)
-        : undefined;
-    if (storage === undefined) {
+    const state = this.container(args.variablesReference)?.states.get(
+      args.name,
+    );
+    if (state === undefined) {
       return this.respond(request, {
         dataId: null,
         description: "Only the app's state can break on a change.",
       });
     }
     this.respond(request, {
-      dataId: STATE_DATA + storage,
-      description: this.listStates.has(args.name)
+      dataId: STATE_DATA + state.storage,
+      description: state.list
         ? `${args.name} (rows added or removed)`
         : args.name,
       accessTypes: ['write'],
@@ -1391,36 +1405,30 @@ export class DebugAdapter {
       await this.forward(request);
       return;
     }
-    let answer;
-    if (reference === STATE_REFERENCE) {
-      answer = await this.erb({do: 'variables', scope: 'state'});
-    } else if (reference > STATE_REFERENCE) {
-      answer = await this.erb({
-        do: 'variables',
-        scope: 'rows',
-        state: this.rowStates.get(reference),
-      });
-    } else {
-      answer = await this.erb({
-        do: 'variables',
-        scope: 'locals',
-        frame: reference - LOCALS_REFERENCE,
-      });
+    const container = this.container(reference);
+    if (!container) {
+      throw new Error('That value is from an earlier stop.');
     }
+    const answer = await this.erb({
+      do: 'variables',
+      open: container.where,
+      start: args.start,
+      count: args.count,
+      filter: args.filter,
+    });
     this.respond(request, {
       variables: answer.variables.map((variable: Record<string, any>) => {
-        const rows = this.rowsReference(variable);
         if (variable.storage) {
-          this.stateStorage.set(variable.name, variable.storage);
-        }
-        if (variable.type === 'list') {
-          this.listStates.add(variable.name);
+          container.states.set(variable.name, {
+            storage: variable.storage,
+            list: variable.type === 'list',
+          });
         }
         return {
           name: variable.name,
           value: variable.value,
           type: variable.type || undefined,
-          variablesReference: rows,
+          variablesReference: this.openReference(variable.open),
           indexedVariables: variable.rows || undefined,
         };
       }),
@@ -1428,18 +1436,43 @@ export class DebugAdapter {
   }
 
   /**
-   * The reference an editor opens a list's rows with.
+   * What a variables reference of the adapter's own opens.
    *
-   * @param variable  A variable or a value, as the script gives it.
+   * @param reference  The reference.
    *
-   * @returns The reference, or 0 for what has no rows.
+   * @returns What it opens, or undefined for a reference of GDB's or of an earlier stop.
    */
-  private rowsReference(variable: Record<string, any>): number {
-    if (!variable.rows) {
+  private container(reference: number): Opened | undefined {
+    if (reference === STATE_REFERENCE) {
+      return this.stateScope;
+    }
+    if (reference >= LOCALS_REFERENCE && reference < STATE_REFERENCE) {
+      return {
+        where: {scope: 'locals', frame: reference - LOCALS_REFERENCE},
+        states: new Map(),
+      };
+    }
+    return this.opened.get(reference);
+  }
+
+  /**
+   * The reference an editor opens a list, a row or an object with.
+   *
+   * @param where  Where the script says it is, if it opens.
+   *
+   * @returns The reference, or 0 for a value that doesn't open.
+   */
+  private openReference(where: Record<string, any> | undefined): number {
+    if (!where) {
       return 0;
     }
-    const reference = ROWS_REFERENCE + this.rowStates.size;
-    this.rowStates.set(reference, variable.storage);
+    const key = JSON.stringify(where);
+    let reference = this.openedAt.get(key);
+    if (reference === undefined) {
+      reference = OPENED_REFERENCE + this.opened.size;
+      this.opened.set(reference, {where, states: new Map()});
+      this.openedAt.set(key, reference);
+    }
     return reference;
   }
 
@@ -1451,15 +1484,24 @@ export class DebugAdapter {
       await this.forward(request);
       return;
     }
-    if (args.variablesReference !== STATE_REFERENCE) {
-      throw new Error("Only the app's state can be set from the debugger.");
+    const container = this.container(args.variablesReference);
+    if (!container) {
+      throw new Error('That value is from an earlier stop.');
     }
     const answer = await this.erb({
       do: 'set',
-      state: this.stateStorage.get(args.name) ?? args.name,
+      open: container.where,
+      name: args.name,
       value: args.value,
     });
     this.respond(request, {value: answer.value});
+    // What holds it shows it too: a row's line, a list's.
+    if (
+      this.opened.has(args.variablesReference) &&
+      this.initializeArguments.supportsInvalidatedEvent
+    ) {
+      this.event('invalidated', {areas: ['variables']});
+    }
   }
 
   private async evaluate(
@@ -1514,7 +1556,7 @@ export class DebugAdapter {
     return {
       result: answer.value,
       type: answer.type || undefined,
-      variablesReference: this.rowsReference(answer),
+      variablesReference: this.openReference(answer.open),
       indexedVariables: answer.rows || undefined,
     };
   }

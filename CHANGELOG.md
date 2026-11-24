@@ -39,6 +39,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B debugger: a breakpoint takes a condition, a hit count and a log message (`erb break 41 if count === 5`,
   `erb log`, and an editor's Edit Breakpoint).
 - Flow B debugger: Break on Value Change on a state in an editor stops on the line that changes it.
+- Flow B debugger: lists, rows and objects open to their fields in an editor's Variables pane, and a row's
+  field or a local can be set (`erb set rows[2].done true`).
 
 ## [0.25.0] - 2026-11-20
 ### Added

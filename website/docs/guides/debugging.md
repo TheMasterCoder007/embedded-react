@@ -135,7 +135,7 @@ A halted core runs nothing: no frames, no touch, no timers.
 | `erb locals [N]`     | The current function's parameters and locals, or those of the Nth caller in `erb where`     |
 | `erb print EXPR`     | An expression's value, over the current function's locals and the app's state               |
 | `erb state [NAME]`   | Every state by name, or one. `erb state all` adds the state the compiler made               |
-| `erb set NAME VALUE` | Sets a state. The app runs its update at its next tick, as after a setter                   |
+| `erb set NAME VALUE` | Sets a state, a field of a list's row, or a local                                           |
 | `erb watch NAME`     | Stops when a state changes, and names the line that wrote it                                |
 | `erb error`          | The last fault or refused load: the reason, the amounts, and the source line                |
 | `erb pools`          | What the app and the engine use of their pools                                              |
@@ -152,7 +152,11 @@ The last seven need the hook. `help erb` lists them in GDB.
 
 - **A state's name** is the one the source gives it. A component's state reads `Counter.taps`, and
   `Counter:16.taps` or `Counter:16[2].taps` when more than one instance has it.
-- **`erb set`** takes numbers, `true` and `false`, a string, and an enum's value by its text. A list can't be set.
+- **`erb set`** takes a name with members and indexes, as [`erb print`](#expressions) reads them: `count`,
+  `box.pos.x`, `rows[2].done`, `item.label`. The value is a number, `true` or `false`, a string, or an enum's
+  value by its text; `undefined` takes away a field a row may leave out. After a state or a row's field is set
+  the app runs its update at its next tick, as after a setter. A local is the value the next statement reads. A
+  whole list, row or object can't be set, only what it holds.
 - **`erb watch`** uses one of the chip's hardware watchpoints. A list stops when rows are added or removed, not
   when a row's field changes.
 - **A breakpoint set before the app loads** is written when it does, so one set before `continue` on a board that
@@ -196,7 +200,10 @@ assign. The error names what it met:
 operators, and runs nothing on the board
 ```
 
-A local the compiler folded away shows as `<optimised out>` and can't be used in an operator.
+An object reads as its fields, `box.pos.x`, for an object state, an object a handler declares, and a row's
+nested fields. A field that is a constant shows its value and can't be set: the compiler folded it into the code.
+A local the compiler folded away with no value of its own, an animation or an inlined helper's parameter, shows
+as `<optimised out>` and can't be used in an operator.
 
 ### Conditions, hit counts and logpoints
 
@@ -442,8 +449,9 @@ next line that has some.
 - **The call stack** has the app's frames on top, each a function of the app and its line. Under them is the C
   that ran the app: the VM, the runtime, and the firmware's frame loop.
 - **The Variables pane** has **Locals**, the selected frame's parameters and locals, and **App state**, every
-  state by name. A list opens to its rows. A state can be edited there, and the app runs its update when the
-  board resumes.
+  state by name. A list opens to its rows, a row to its fields, and an object to its fields; a long list opens a
+  page at a time. **Set Value** edits a state, a row's field or a local: the app runs its update when the board
+  resumes, and a local is the value the next statement reads. An enum's type lists the values it takes.
 - **The step buttons** step the app: over a statement, into a function the app calls, out to its caller.
 
 - **Hover and Watch** take an [expression](#expressions): hover over `item.label` in the source, or watch

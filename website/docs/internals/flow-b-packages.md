@@ -351,7 +351,8 @@ per layout in the package's order. Each panel has:
   function's frame, or at an `offset` in the arena (a string's buffer, with its `cap`, or an effect's local its
   cleanup reads). A row's `register` holds its row number in `list` (a state's `slot`), or for a row of a filtered
   or sorted list, in `through`, whose rows hold the row of `list`. A name with no `type` holds no value of its own:
-  an animation, or an inlined helper's parameter, which stands for the value the helper is called with. The
+  an animation, or an inlined helper's parameter, which stands for the value the helper is called with. One that
+  is a constant, a field of an object a handler declares, has it in `value`. The
   package doesn't change: the compiler only notes where each value is as it assigns registers.
 - `states`, in the app's order. Each has its `name`, its `storage` name (the name, prefixed for an inlined
   component's instance), and for an instance's state, `component`: the component's `name` and the `line` of
@@ -943,8 +944,9 @@ on stdin and stdout, and runs GDB with GDB's own adapter (`gdb -i dap`, so GDB 1
 - A fault or a refused load is shown as an exception with the reason as its text, on the app's line when the app's
   code faulted. The adapter offers it as an exception filter, "Stop on app faults", which is on by default.
 - The call stack has the app's frames inside the VM's frame, under whatever C the app called.
-- An app frame's variables are its locals and the app's state, and every C frame has the state too. A state can be
-  set there.
+- An app frame's variables are its locals and the app's state, and every C frame has the state too. A list, a row
+  and an object open to what they hold: the script says where each is, a scope or an expression and a path of
+  names and row numbers, and the adapter hands that back to open it or to set a value in it.
 - Hover and Watch in an app frame evaluate an expression over them, and `erb print` in the Debug Console reads the
   frame the editor has selected.
 - A data breakpoint on a state is a hardware watchpoint, as `erb watch` sets. GDB's adapter has no data
