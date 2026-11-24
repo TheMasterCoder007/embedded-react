@@ -1666,7 +1666,7 @@ class StateWatchpoint(gdb.Breakpoint):
             else:
                 written = self.writer(app)
             print("%s: %s → %s, written at %s" % (self.label, self.previous, value, written["where"]))
-            watch_stop[0] = {
+            change = {
                 "id": -self.number if self.editor else None,
                 "label": self.label,
                 "previous": self.previous,
@@ -1677,6 +1677,9 @@ class StateWatchpoint(gdb.Breakpoint):
                 # Whether the app is still on the statement that wrote it.
                 "live": written["line"] is not None and self.writer(app) == written,
             }
+            # A state watched from the console too stops as the editor's breakpoint.
+            if self.editor or watch_stop[0] is None:
+                watch_stop[0] = change
             self.settle(value)
         except gdb.GdbError as error:
             print("erb watch: %s" % error)
