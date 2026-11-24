@@ -1172,8 +1172,8 @@ function encodeValue(
     case 'int': {
       if (!whole.test(text)) throw refuse();
       const value = parseWhole(text);
-      if (value < -0x80000000n || value > 0xffffffffn) throw refuse();
-      view.setInt32(0, Number(BigInt.asIntN(32, value)), true);
+      if (value < -0x80000000n || value > 0x7fffffffn) throw refuse();
+      view.setInt32(0, Number(value), true);
       return bytes;
     }
     case 'int64': {

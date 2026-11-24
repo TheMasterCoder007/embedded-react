@@ -384,16 +384,26 @@ class Parser {
   }
 }
 
+const LAST_CODE_POINT = 0x10ffff;
+
 /** A string literal's value. */
 function unquoted(text: string): string {
   return text
     .slice(1, -1)
     .replace(
       /\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/g,
-      (_match, body: string) =>
-        'ux'.includes(body[0]) && body.length > 1
-          ? String.fromCodePoint(parseInt(body.replace(/[ux{}]/g, ''), 16))
-          : (ESCAPES[body] ?? body),
+      (escape, body: string) => {
+        if (!'ux'.includes(body[0]) || body.length === 1) {
+          return ESCAPES[body] ?? body;
+        }
+        const codePoint = parseInt(body.replace(/[ux{}]/g, ''), 16);
+        if (codePoint > LAST_CODE_POINT) {
+          throw new DebugError(
+            `\`${text}\` isn't a string the debugger reads: ${escape} is past the last character, \\u{10ffff}`,
+          );
+        }
+        return String.fromCodePoint(codePoint);
+      },
     );
 }
 

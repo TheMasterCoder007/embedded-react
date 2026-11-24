@@ -340,6 +340,30 @@ async function session(project: string, port: number): Promise<void> {
       returned.body,
     );
 
+    const tooBig = await editor.request('setVariable', {
+      variablesReference: STATE_REFERENCE,
+      name: 'count',
+      value: '4294967295',
+    });
+    check(
+      'a number too big for a state is refused',
+      tooBig.success === false && /whole number/.test(tooBig.message ?? ''),
+      tooBig,
+    );
+    const badEscape = await editor.request('setBreakpoints', {
+      source: {path: source},
+      breakpoints: [
+        {line: pressesLine},
+        {line: setCountLine, condition: 'label === "\\u{110000}"'},
+      ],
+    });
+    const refused = badEscape.body?.breakpoints?.[1];
+    check(
+      'a condition with a bad escape is refused, and the simulator runs on',
+      refused?.verified === false &&
+        /past the last character/.test(refused.message),
+      badEscape.body,
+    );
     const edited = await editor.request('setVariable', {
       variablesReference: STATE_REFERENCE,
       name: 'count',
@@ -496,6 +520,20 @@ async function faultSession(project: string, port: number): Promise<void> {
     for (let waited = 0; waited < 100 && !(await serves(port)); waited++) {
       await new Promise(resolveWait => setTimeout(resolveWait, 100));
     }
+    // A launch owns its simulator, so it doesn't take this one.
+    const second = new Editor();
+    await second.request('initialize', {adapterID: 'embedded-react'});
+    const taken = await second.request('launch', {
+      simulator: true,
+      port,
+      cwd: project,
+    });
+    second.kill();
+    check(
+      'a launch refuses a port a simulator already serves',
+      taken.success === false && /already in use/.test(taken.message ?? ''),
+      taken,
+    );
     await editor.request('initialize', {adapterID: 'embedded-react'});
     const attached = editor.request('attach', {
       simulator: `localhost:${port}`,

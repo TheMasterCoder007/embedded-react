@@ -57,6 +57,28 @@ const exported = new Set(
   ),
 );
 
+/**
+ * How many arguments a call passes.
+ *
+ * @param source  The source the call is in.
+ * @param from  Where its arguments start, after the opening parenthesis.
+ *
+ * @returns The count. A comma after the last argument adds none.
+ */
+function argumentCount(source: string, from: number): number {
+  const passed = [''];
+  let depth = 0;
+  for (let at = from; at < source.length; at++) {
+    const character = source[at];
+    if (character === ')' && depth === 0) break;
+    if ('([{'.includes(character)) depth++;
+    if (')]}'.includes(character)) depth--;
+    if (character === ',' && depth === 0) passed.push('');
+    else passed[passed.length - 1] += character;
+  }
+  return passed.filter(argument => argument.trim()).length;
+}
+
 describe('browser simulator bindings', () => {
   it('reads the declared and exported functions', () => {
     expect(declared.size).toBeGreaterThan(0);
@@ -82,14 +104,15 @@ describe('browser simulator bindings', () => {
   });
 
   it('the Flow B host calls functions the simulator has', () => {
-    const calls = [
-      ...read(FLOW_B_HOST).matchAll(/simulator\._(er_web_\w+)\(([^)]*)\)/g),
-    ];
+    const source = read(FLOW_B_HOST);
+    const calls = [...source.matchAll(/simulator\._(er_web_\w+)\(/g)];
     expect(calls.length).toBeGreaterThan(0);
-    for (const [, name, passed] of calls) {
+    for (const call of calls) {
+      const name = call[1];
       expect(exported, name).toContain(name);
-      const argumentCount = passed.trim() ? passed.split(',').length : 0;
-      expect(argumentCount, name).toBe(declared.get(name));
+      expect(argumentCount(source, call.index + call[0].length), name).toBe(
+        declared.get(name),
+      );
     }
   });
 });

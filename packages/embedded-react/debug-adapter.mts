@@ -980,10 +980,15 @@ export class DebugAdapter {
         ? config.simulator
         : `localhost:${port}`;
     const [host, addressPort] = address.split(':');
-    let started = false;
-    if (kind === 'launch' && !(await portOpen(host, Number(addressPort)))) {
+    const started = kind === 'launch';
+    if (started) {
+      // A launch owns its simulator and ends it with the session, so it doesn't take one that already runs.
+      if (await portOpen(host, Number(addressPort))) {
+        throw new Error(
+          `Port ${addressPort} is already in use. To debug a simulator that runs there, use an attach configuration. Otherwise end what holds the port, or give the configuration another "port".`,
+        );
+      }
       this.startSimulator(config, Number(addressPort));
-      started = true;
     }
     const link = new SimulatorLink(
       address,
@@ -1001,9 +1006,7 @@ export class DebugAdapter {
     this.appSource = config.source ?? (info.source || null);
     this.hook = true;
     const url = `http://${address}/`;
-    this.say(
-      `embedded-react: debugging the app in the simulator at ${url}${started ? '' : ', which was already running'}`,
-    );
+    this.say(`embedded-react: debugging the app in the simulator at ${url}`);
     this.event(SIMULATOR_EVENT, {url});
   }
 

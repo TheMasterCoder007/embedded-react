@@ -797,10 +797,8 @@ export class AppDebugger {
           };
       }
     } catch (error) {
-      if (error instanceof DebugError) {
-        return {error: error.message};
-      }
-      throw error;
+      // Whatever a request trips over is its own failure: the simulator runs on.
+      return {error: error instanceof Error ? error.message : String(error)};
     }
   }
 

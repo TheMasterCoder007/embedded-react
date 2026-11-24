@@ -563,6 +563,7 @@ state, and the stop at a fault. What differs:
 | The board stays frozen after GDB quits                                          | GDB left it halted. `monitor resume` before `disconnect`, or `disconnectCommands` in the editor                                                                            |
 | `continue` says `Could not insert hardware watchpoint`                          | More states are watched than the chip has hardware watchpoints: an ESP32-S3 has two. Delete one                                                                            |
 | `No simulator at localhost:3333`                                                | An attach found no Flow B simulator there. Start one with `embedded-react dev --aot`, or use the launch configuration                                                      |
+| A simulator launch says `Port 3333 is already in use`                           | A launch starts its own simulator. End the one that runs there, give the configuration another `"port"`, or attach to it instead                                           |
 | The simulator says the prebuilt Flow B simulator is missing                     | The package was installed from source. Build it with `node tools/web-sim/build.mts`, which needs the Emscripten SDK                                                        |
 
 A board with no probe attached when it faulted has a different tool: the firmware records the fault, and
