@@ -304,6 +304,95 @@ describe('an app split across files', () => {
     );
   });
 
+  it('takes a name a file imports and exports again', () => {
+    const named = programOf(appOf("import {Card} from './Card';", '<Card />'), {
+      'Card.tsx': CARD,
+    });
+    for (const [imports, parts] of [
+      [
+        "import {Tile} from './parts';",
+        "import {Card as Tile} from './Card';\nexport {Tile};\n",
+      ],
+      [
+        "import {Card} from './parts';",
+        "import {Card} from './Card';\nexport {Card};\n",
+      ],
+      [
+        "import Tile from './parts';",
+        "import {Card} from './Card';\nexport default Card;\n",
+      ],
+    ]) {
+      const tag = imports.includes('Tile') ? '<Tile />' : '<Card />';
+      expect(
+        programOf(appOf(imports, tag), {'parts.ts': parts, 'Card.tsx': CARD}),
+      ).toBe(named);
+    }
+  });
+
+  it('keeps the exported name of a declaration another file made it rename', () => {
+    const entry = appOf(
+      "import {Card} from './a/Card';\nimport {Other} from './b/Other';",
+      '<Card /><Other />',
+    );
+    const other = (imports: string) =>
+      HEAD +
+      `import ${imports} from './Card';\n` +
+      'export function Other() {\n  return <Inner />;\n}\n';
+    const whole =
+      CARD.replace('export function Card', 'function Card') +
+      CARD.slice(HEAD.length)
+        .replace('const STEP = 2;', 'const STEP_B = 4;')
+        .replace('presses + STEP', 'presses + STEP_B')
+        .replace('export function Card', 'function CardB') +
+      'function Other() {\n  return <CardB />;\n}\n' +
+      'export function App() {\n  return <View><Card /><Other /></View>;\n}\n';
+    const second = CARD.replace('const STEP = 2;', 'const STEP = 4;');
+    for (const [imports, card] of [
+      ['{Card as Inner}', second],
+      ['Inner', second.replace('export function', 'export default function')],
+      [
+        '{Card as Inner}',
+        second.replace('export function', 'function') + 'export {Card};\n',
+      ],
+    ]) {
+      expect(
+        programOf(entry, {
+          'a/Card.tsx': CARD,
+          'b/Other.tsx': other(imports),
+          'b/Card.tsx': card,
+        }),
+      ).toBe(programOf(whole));
+    }
+  });
+
+  it("reads another file's import from that file's folder, whatever the entry's native modules are called", () => {
+    const can =
+      "import {nativeModule} from 'embedded-react';\n" +
+      'export interface Can { send(id: number): boolean; }\n' +
+      "export const Can = nativeModule<Can>('can', 1);\n";
+    const card = CARD.replace(
+      'const STEP = 2;\n',
+      "import {STEP} from './can';\n",
+    );
+    const result = compilePackage(
+      appOf("import {Card} from './parts/Card';", '<Card />'),
+      'app',
+      {
+        ...OPTIONS,
+        sourceFiles: {
+          'parts/Card.tsx': card,
+          'parts/can.ts': 'export const STEP = 2;\n',
+        },
+        nativeFiles: {'./can': {path: 'can.ts', source: can, imports: {}}},
+      },
+    );
+    expect(Buffer.from(result.program).toString('hex')).toBe(
+      programOf(appOf("import {Card} from './parts/Card';", '<Card />'), {
+        'parts/Card.tsx': CARD,
+      }),
+    );
+  });
+
   it('refuses two .svg files of one name', () => {
     const svgHead = HEAD.replace('Pressable,', 'Pressable, Svg,');
     expect(

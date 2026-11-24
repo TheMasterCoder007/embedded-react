@@ -83,6 +83,8 @@ interface LinkedModule {
   passedOn: LinkedModule[];
   /** The types it declares, which an import may name without `type`. */
   typeNames: Set<string>;
+  /** The names it imports from the app's other files, each with the file and the name it has there. */
+  imported: Map<string, {from: LinkedModule; name: string}>;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -368,8 +370,9 @@ class Linker {
   ): {path: string | null; native: boolean} {
     if (!importPath.startsWith('.')) return {path: null, native: false};
     const base = normalizePath(`${folderOf(fromPath)}/${importPath}`);
+    // The entry's imports are the keys as written; another file's are read from the entry's folder.
     if (
-      this.nativePaths.has(importPath) ||
+      (folderOf(fromPath) === '' && this.nativePaths.has(importPath)) ||
       this.nativePaths.has(base.startsWith('..') ? base : `./${base}`)
     ) {
       return {path: null, native: true};
@@ -492,6 +495,7 @@ class Linker {
       exports: new Map(),
       passedOn: [],
       typeNames: new Set(),
+      imported: new Map(),
     };
     this.modules.set(path, linked);
     this.reading.push(path);
@@ -702,6 +706,22 @@ class Linker {
    */
   private readExports(linked: LinkedModule): void {
     const {path} = linked.file;
+    // A name imported from another of the app's files and exported again is that file's export.
+    for (const statement of linked.ast.program.body) {
+      if (statement.type !== 'ImportDeclaration') continue;
+      const from = this.moduleOf(statement, path);
+      if (!from) continue;
+      for (const specifier of statement.specifiers) {
+        if (specifier.type === 'ImportNamespaceSpecifier') continue;
+        linked.imported.set(specifier.local.name, {
+          from,
+          name:
+            specifier.type === 'ImportSpecifier'
+              ? specifierName(specifier.imported)
+              : 'default',
+        });
+      }
+    }
     for (const statement of linked.ast.program.body) {
       if (
         statement.type === 'TSInterfaceDeclaration' ||
@@ -723,13 +743,18 @@ class Linker {
         linked.passedOn.push(from);
       } else if (statement.type === 'ExportDefaultDeclaration') {
         const exported = statement.declaration;
-        linked.exports.set('default', {
-          kind: 'local',
-          local:
-            exported.type === 'Identifier'
-              ? exported.name
-              : (exported as t.FunctionDeclaration).id!.name,
-        });
+        const local =
+          exported.type === 'Identifier'
+            ? exported.name
+            : (exported as t.FunctionDeclaration).id!.name;
+        const passed =
+          exported.type === 'Identifier'
+            ? linked.imported.get(local)
+            : undefined;
+        linked.exports.set(
+          'default',
+          passed ? {kind: 'passed', ...passed} : {kind: 'local', local},
+        );
       } else if (statement.type === 'ExportNamedDeclaration') {
         this.readNamedExport(linked, statement);
       }
@@ -791,10 +816,13 @@ class Linker {
           specifier,
         );
       } else {
-        linked.exports.set(exported, {
-          kind: 'local',
-          local: specifier.local.name,
-        });
+        const passed = linked.imported.get(specifier.local.name);
+        linked.exports.set(
+          exported,
+          passed
+            ? {kind: 'passed', ...passed}
+            : {kind: 'local', local: specifier.local.name},
+        );
       }
     }
   }

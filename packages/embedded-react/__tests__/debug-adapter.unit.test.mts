@@ -78,7 +78,12 @@ class FakeGdb {
     switch (request.do) {
       case 'info':
         return {
-          files: ['App.tsx', 'parts/Card.tsx', '../shared/Row.tsx'],
+          files: [
+            'App.tsx',
+            'parts/Card.tsx',
+            '../shared/Row.tsx',
+            'parts/App.tsx',
+          ],
           source: '',
           hook: true,
         };
@@ -679,6 +684,19 @@ describe('debug adapter', () => {
       name: 'Row.tsx',
       path: rowPath,
     });
+    // A file named as the entry is, in a folder of its own, is that file and not the entry.
+    await editor.request('setBreakpoints', {
+      source: {path: '/work/app/parts/App.tsx'},
+      breakpoints: [{line: 3}],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toMatchObject({
+      file: 'parts/App.tsx',
+    });
+    await editor.request('setBreakpoints', {
+      source: {path: APP_PATH},
+      breakpoints: [{line: 30}],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toMatchObject({file: 'App.tsx'});
     // Another file of the same name elsewhere isn't the app's.
     await editor.request('setBreakpoints', {
       source: {path: '/work/other/Row.tsx'},

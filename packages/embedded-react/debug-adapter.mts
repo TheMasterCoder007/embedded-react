@@ -1040,14 +1040,17 @@ export class DebugAdapter {
   private appFileOf(path: unknown): number {
     if (typeof path !== 'string' || this.appFiles === null) return -1;
     const shown = slashed(path);
+    // A path that is exactly one of the files is that file, whatever else it ends like.
+    const exact = this.appFiles.findIndex((file, index) => {
+      const full = this.appPathOf(index);
+      return shown === file || (full !== undefined && shown === slashed(full));
+    });
+    if (exact >= 0) return exact;
     let found = -1;
     this.appFiles.forEach((file, index) => {
       // A file outside the entry's folder (`../shared/Card.tsx`) matches by its path from the entry's, once that
       // is known, and until then by what follows its `../`.
-      const full = this.appPathOf(index);
       const matches =
-        (full !== undefined && shown === slashed(full)) ||
-        shown === file ||
         shown.endsWith(`/${file.replace(/^(\.\.\/)+/, '')}`) ||
         (index === 0 && fileName(path) === fileName(file));
       if (
