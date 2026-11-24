@@ -419,7 +419,7 @@ export function toText(value: Value): string {
 export function truthy(value: Value): boolean {
   if (value instanceof Unreadable) {
     throw new DebugError(
-      `a value that can't be read (${value.text}) is neither true nor false`,
+      `a value an expression can't work on (${value.text}) is neither true nor false`,
     );
   }
   return Boolean(value);
@@ -596,7 +596,7 @@ class Evaluator {
   private usable(node: Node): Value {
     const value = this.value(node);
     if (value instanceof Unreadable) {
-      throw new DebugError(`${node.text} can't be read: it is ${value.text}`);
+      throw new DebugError(`${node.text} ${value.why}`);
     }
     return value;
   }
@@ -633,9 +633,7 @@ class Evaluator {
     }
     const target = settled(this.find(targetNode));
     if (target instanceof Unreadable) {
-      throw new DebugError(
-        `${targetNode.text} can't be read: it is ${target.text}`,
-      );
+      throw new DebugError(`${targetNode.text} ${target.why}`);
     }
     const key: Value =
       node.kind === 'index' ? this.usable(node.index) : node.name;

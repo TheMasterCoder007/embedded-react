@@ -97,9 +97,12 @@ export interface Memory {
 /** A value the debugger can't read, and what it shows in its place. */
 export class Unreadable {
   readonly text: string;
+  /** Why an expression can't work on it, after its name. */
+  readonly why: string;
 
-  constructor(text: string) {
+  constructor(text: string, why = `can't be read: it is ${text}`) {
     this.text = text;
+    this.why = why;
   }
 }
 
@@ -997,8 +1000,16 @@ export function readTyped(
       return view.getInt32(at, true) !== 0;
     case 'float':
       return readFloat(view, at);
-    case 'int64':
-      return Number(view.getBigInt64(at, true));
+    case 'int64': {
+      const whole = view.getBigInt64(at, true);
+      // A number holds a whole number exactly only so far. Past that it is shown in full, and not worked on.
+      return Number.isSafeInteger(Number(whole))
+        ? Number(whole)
+        : new Unreadable(
+            String(whole),
+            `is ${whole}, which is too large for an expression to work on exactly`,
+          );
+    }
     case 'double':
       return view.getFloat64(at, true);
     case 'enum': {

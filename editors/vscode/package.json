@@ -239,8 +239,7 @@
                   "boolean",
                   "string"
                 ],
-                "description": "Debug the app in the Flow B simulator, with no board: true, or where one listens, such as localhost:3333.",
-                "default": true
+                "description": "Debug the app in the Flow B simulator, with no board: true, or where one listens, such as localhost:3333."
               },
               "entry": {
                 "type": "string",
