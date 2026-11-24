@@ -1620,7 +1620,7 @@ class StateWatchpoint(gdb.Breakpoint):
     watchpoint stops at the first access after the copy (a read, which leaves it as it is) and names the line that
     wrote it. A string that keeps its first 4 bytes is the same at that trap and changes after it with no other, so
     the first access that finds it changed names the place of the access before. A list's first word is its row count: its rows are more than a probe can watch, so a change to a
-    row's field doesn't stop. One an editor set is internal, so GDB's adapter doesn't list it as its own."""
+    row's field doesn't stop. A watchpoint an editor set is internal, so GDB's adapter doesn't list it as its own."""
 
     def __init__(self, app, state, editor=False):
         self.state = state
