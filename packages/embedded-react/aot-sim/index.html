@@ -1,0 +1,176 @@
+<!doctype html>
+<!--
+  Copyright 2026 Cory Lamming
+  Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+  The Flow B simulator's page (`embedded-react dev --aot`). The app runs in the dev server, not here: this page
+  draws the rows of the panel the server sends over its WebSocket, and sends back touches and a new size. So the
+  panel is the same in every tab, and it freezes when a debugger stops the app.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>embedded-react — Flow B simulator</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { height: 100%; }
+      body { margin: 0; overflow: hidden; background: #0b0d10; color: #c8d2e0; font: 13px/1.4 system-ui, sans-serif; }
+      #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; overflow: auto; }
+      canvas {
+        image-rendering: pixelated;
+        display: block;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      #panel { position: relative; }
+      #panel.stopped canvas { opacity: 0.55; }
+      #stopped {
+        display: none;
+        position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+        padding: 3px 10px; border-radius: 999px;
+        background: #d9a13a; color: #17120a; font-weight: 600; white-space: nowrap;
+      }
+      #panel.stopped #stopped { display: block; }
+      #bar {
+        position: fixed; left: 10px; bottom: 10px;
+        display: flex; gap: 8px; align-items: center;
+        padding: 5px 9px; border-radius: 8px;
+        background: rgba(21, 24, 29, 0.92); border: 1px solid #2a313c;
+      }
+      #bar select { background: #0b0d10; color: inherit; border: 1px solid #2a313c; border-radius: 5px; padding: 2px 4px; }
+      #dot { width: 8px; height: 8px; border-radius: 50%; background: #5a6472; }
+      #dot.live { background: #47c26b; }
+      #dot.debugging { background: #d9a13a; }
+      #error {
+        display: none;
+        position: fixed; left: 10px; right: 10px; top: 10px;
+        max-height: 45%; overflow: auto;
+        margin: 0; padding: 10px 12px; border-radius: 8px;
+        background: #2a1416; border: 1px solid #7a2f35; color: #f0c4c7;
+        font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="panel">
+        <canvas id="canvas" width="1" height="1"></canvas>
+        <div id="stopped">Stopped in the debugger</div>
+      </div>
+    </div>
+    <pre id="error"></pre>
+    <div id="bar">
+      <span id="dot"></span>
+      <span id="build">connecting…</span>
+      <select id="size" title="The panel's size"></select>
+    </div>
+    <script>
+      const FRAME_HEADER_BYTES = 8;
+      const RECONNECT_MS = 1000;
+      const TOUCH_DOWN = 0;
+      const TOUCH_MOVE = 1;
+      const TOUCH_UP = 2;
+      const COMMON_SIZES = ['240x320', '320x240', '480x320', '480x480', '800x480', '1024x600'];
+
+      const canvas = document.getElementById('canvas');
+      const context = canvas.getContext('2d');
+      const panel = document.getElementById('panel');
+      const dot = document.getElementById('dot');
+      const build = document.getElementById('build');
+      const sizeSelect = document.getElementById('size');
+      const errorBox = document.getElementById('error');
+      let socket = null;
+      let pressed = false;
+
+      function send(message) {
+        if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+      }
+
+      function drawFrame(buffer) {
+        const header = new DataView(buffer, 0, FRAME_HEADER_BYTES);
+        const width = header.getUint16(0, true);
+        const height = header.getUint16(2, true);
+        const top = header.getUint16(4, true);
+        const rows = header.getUint16(6, true);
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+          showSize(width, height);
+        }
+        const pixels = new Uint8ClampedArray(buffer, FRAME_HEADER_BYTES, width * rows * 4);
+        context.putImageData(new ImageData(pixels, width, rows), 0, top);
+      }
+
+      function showSize(width, height) {
+        const value = `${width}x${height}`;
+        if (![...sizeSelect.options].some(option => option.value === value)) {
+          sizeSelect.add(new Option(value.replace('x', ' × '), value));
+        }
+        sizeSelect.value = value;
+      }
+
+      function showStatus(status) {
+        const sizes = [...new Set([...status.sizes.map(size => `${size.width}x${size.height}`), ...COMMON_SIZES])];
+        const current = sizeSelect.value;
+        sizeSelect.replaceChildren(...sizes.map(value => new Option(value.replace('x', ' × '), value)));
+        if (canvas.width > 1) showSize(canvas.width, canvas.height);
+        else if (current) sizeSelect.value = current;
+        build.textContent = status.build ? `build ${status.build}` : 'no build yet';
+        dot.className = status.debugging ? 'debugging' : 'live';
+        dot.title = status.debugging ? 'A debugger is attached' : 'Running';
+        panel.classList.toggle('stopped', status.stopped);
+        errorBox.textContent = status.error || '';
+        errorBox.style.display = status.error ? 'block' : 'none';
+      }
+
+      function connect() {
+        socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+        socket.binaryType = 'arraybuffer';
+        socket.onmessage = event => {
+          if (typeof event.data === 'string') showStatus(JSON.parse(event.data));
+          else drawFrame(event.data);
+        };
+        socket.onclose = () => {
+          dot.className = '';
+          build.textContent = 'the dev server is not running';
+          setTimeout(connect, RECONNECT_MS);
+        };
+      }
+
+      function touch(phase, event) {
+        const bounds = canvas.getBoundingClientRect();
+        send({
+          type: 'touch',
+          phase,
+          x: Math.round(((event.clientX - bounds.left) * canvas.width) / bounds.width),
+          y: Math.round(((event.clientY - bounds.top) * canvas.height) / bounds.height),
+        });
+      }
+
+      canvas.addEventListener('pointerdown', event => {
+        pressed = true;
+        canvas.setPointerCapture(event.pointerId);
+        touch(TOUCH_DOWN, event);
+      });
+      canvas.addEventListener('pointermove', event => {
+        if (pressed) touch(TOUCH_MOVE, event);
+      });
+      const release = event => {
+        if (!pressed) return;
+        pressed = false;
+        touch(TOUCH_UP, event);
+      };
+      canvas.addEventListener('pointerup', release);
+      canvas.addEventListener('pointercancel', release);
+      sizeSelect.addEventListener('change', () => {
+        const [width, height] = sizeSelect.value.split('x').map(Number);
+        send({type: 'resize', width, height});
+      });
+
+      connect();
+    </script>
+  </body>
+</html>

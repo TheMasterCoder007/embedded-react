@@ -6,5 +6,8 @@ host page drives through `cwrap` (`web_backend.h`: `er_web_init`, `er_web_load_s
 `er_web_load_pack`, `er_web_resize`, `er_web_pump`, `er_web_touch`, `er_web_framebuffer`,
 `er_web_clear_persist`, …). Shipped as `npx embedded-react dev` and used by the site's playground.
 
+`aot_backend.c` is the same for the Flow B simulator (`npx embedded-react dev --aot`): it loads a package into the
+Flow B runtime, and hands the runtime's debug hook to its host (`aot_backend.h`).
+
 **Docs:** [Run it in the simulator](https://embedded-react.dev/getting-started/simulator); the build
 is in `tools/web-sim`.

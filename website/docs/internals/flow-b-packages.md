@@ -974,6 +974,24 @@ needed, and `target` to attach to a board, as GDB's `target remote` takes it. Th
 GDB leaves a board halted when it disconnects, so a configuration for OpenOCD ends with
 `"disconnectCommands": ["monitor resume"]`.
 
+#### The simulator in GDB's place
+
+With `"simulator"` in the configuration the adapter runs no GDB. It connects to the Flow B simulator
+(`embedded-react dev --aot`), which answers the requests about the app that the script answers on a board, so the
+editor's side is the same code. A launch starts the simulator and ends it with the session, and an attach takes one
+that runs. `simulator` is `true` or where it listens (`localhost:3333`), `port` its port, `entry` the app's
+component file, `screen` the panel's size, and `cwd` the app's project.
+
+The simulator is the Flow B runtime built to WebAssembly with the hook and `ERB_DEBUG_HOST=1`, which has
+`erb_debug_break()` call the host's `erb_debug_host_break()`. It runs in a thread of the dev server, and the page
+only draws the panel the server sends. At the hook's call the thread decides what GDB's breakpoint on
+`erb_debug_break()` decides on a board: a condition, a hit count, a log message, where a step ends. When the app
+stops, the call doesn't return. The thread waits inside it and answers the debugger from the simulator's memory,
+through the same descriptor and debug file, until the debugger resumes the app.
+
+A probe has hardware watchpoints for a data breakpoint, and the simulator has none. While a state is watched it
+arms the hook at every instruction and compares the state at each, so the stop names the statement that wrote it.
+
 On an ESP32-S3's built-in JTAG, OpenOCD reads the flash mapping when GDB connects. On a chip that has already had a
 debug session since its last power-on reset, that read fails. GDB then takes the code in flash for RAM and its
 breakpoints never fire. Resetting the chip before GDB connects avoids it: the server's arguments end with `-c "init;

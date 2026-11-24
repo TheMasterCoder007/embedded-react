@@ -34,13 +34,21 @@ const HOSTS = [
   'packages/embedded-react/qjsc-wasm.mts',
 ];
 
-// Function name → parameter count, from the header's prototypes.
+/** The Flow B simulator's host, which calls its functions as the module's own. */
+const FLOW_B_HOST = 'packages/embedded-react/aot-sim/worker.mts';
+
+// Function name → parameter count, from the headers' prototypes.
 const declared = new Map<string, number>();
-for (const [, name, parameters] of read('backends/web/web_backend.h').matchAll(
-  /^\s*(?:const\s+)?\w+\*?\s+(er_web_\w+)\(([^)]*)\);\s*$/gm,
-)) {
-  const list = parameters.trim();
-  declared.set(name, list === 'void' ? 0 : list.split(',').length);
+for (const header of [
+  'backends/web/web_backend.h',
+  'backends/web/aot_backend.h',
+]) {
+  for (const [, name, parameters] of read(header).matchAll(
+    /^\s*(?:const\s+)?\w+\*?\s+(er_web_\w+)\(([^)]*)\);\s*$/gm,
+  )) {
+    const list = parameters.trim();
+    declared.set(name, list === 'void' ? 0 : list.split(',').length);
+  }
 }
 
 const exported = new Set(
@@ -70,6 +78,18 @@ describe('browser simulator bindings', () => {
     }
     for (const [, name] of source.matchAll(/\b_(er_web_\w+)/g)) {
       expect(exported, name).toContain(name);
+    }
+  });
+
+  it('the Flow B host calls functions the simulator has', () => {
+    const calls = [
+      ...read(FLOW_B_HOST).matchAll(/simulator\._(er_web_\w+)\(([^)]*)\)/g),
+    ];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [, name, passed] of calls) {
+      expect(exported, name).toContain(name);
+      const argumentCount = passed.trim() ? passed.split(',').length : 0;
+      expect(argumentCount, name).toBe(declared.get(name));
     }
   });
 });

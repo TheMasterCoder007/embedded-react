@@ -47,6 +47,14 @@ extern "C"
 #define ERB_DEBUG_HOOK 0
 #endif
 
+/**
+ * @brief Set to 1 on a host that serves a debugger itself, such as the simulator: erb_debug_break() calls
+ *        erb_debug_host_break(), which the host defines and returns from when the app is to run on.
+ */
+#ifndef ERB_DEBUG_HOST
+#define ERB_DEBUG_HOST 0
+#endif
+
 /** @brief Places the hook can stop at, for breakpoints: 8 bytes each. */
 #ifndef ERB_DEBUG_STOPS
 #define ERB_DEBUG_STOPS 16u
@@ -149,6 +157,11 @@ extern "C"
 
     /** @brief Does nothing: a debugger's breakpoint on it is where the hook stops the app. */
     void erb_debug_break(void);
+
+#if ERB_DEBUG_HOST
+    /** @brief The host's own stop, called from erb_debug_break(). */
+    void erb_debug_host_break(void);
+#endif
 #endif
 
 #ifdef __cplusplus

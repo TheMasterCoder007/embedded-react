@@ -873,7 +873,9 @@ __attribute__((noinline, used))
 #endif
 void erb_debug_break(void)
 {
-#if defined(__GNUC__)
+#if ERB_DEBUG_HOST
+    erb_debug_host_break();
+#elif defined(__GNUC__)
     /* An empty function can still be dropped or merged; this keeps it as a place to stop. */
     __asm__ volatile("");
 #endif

@@ -12,9 +12,12 @@ component state across the reload, so a counter you had pressed five times still
 | Browser simulator | The engine as WebAssembly, in a tab          | `npx embedded-react dev`          | Node.js                                  |
 | SDL simulator     | The engine and QuickJS natively, in a window | `npm run sim` (in the repository) | CMake, SDL2, a C compiler                |
 | On the device     | Your board, over its native USB port         | `npx embedded-react dev --device` | A firmware built with `-DER_HOTRELOAD=1` |
+| Flow B simulator  | The Flow B runtime as WebAssembly, in Node   | `npx embedded-react dev --aot`    | Node.js                                  |
 
-Flow B has its own loop on the device, which [compiles a package and sends it](#on-the-device-with-flow-b). It starts
-the app over on each save, and the simulator is still where most of the UI work happens.
+Flow B has its own loops. The Flow B simulator compiles the app to a package on each save and runs it in the runtime
+a board runs, with a page that shows the panel, and an editor can
+[debug the app there](./debugging.md#in-the-simulator-with-no-board). On the device it
+[compiles a package and sends it](#on-the-device-with-flow-b). Both start the app over on each save.
 
 ## In the browser
 

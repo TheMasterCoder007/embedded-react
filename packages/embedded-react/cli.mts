@@ -80,6 +80,10 @@ function usage() {
 
 Usage:
   embedded-react dev [entry] [--port <n>]      Run the WASM simulator with hot reload
+  embedded-react dev --aot [App.jsx] [--port <n>] [--screen <WxH>]
+                                               Run the Flow B simulator: the app compiled to a package
+                                                 and reloaded on every save, with a debugger able to
+                                                 attach ("simulator": true in a launch configuration).
   embedded-react dev [entry] --device [port]   Hot-reload on a real board over USB (Flow A): re-pack
                                                  the app and stream it on every save. Omit <port> (or
                                                  pass 'auto') to auto-detect the ESP32 USB-Serial-JTAG.
@@ -313,11 +317,8 @@ async function dev(args: string[]): Promise<void> {
   const deviceOption = optFlagMaybeValue(args, '--device');
   const aot = args.includes('--aot');
   if (aot && !deviceOption) {
-    console.error(
-      '--aot only applies to --device: the simulator runs the app as Flow A.\n',
-    );
-    usage();
-    process.exit(1);
+    await devAot(cwd, args);
+    return;
   }
 
   // --device [port] → stream the app to a real board over USB on every save (on-device hot reload).
@@ -406,6 +407,66 @@ async function dev(args: string[]): Promise<void> {
     port,
     label: entry,
   });
+}
+
+/**
+ * `embedded-react dev --aot [App.jsx] [--port <n>] [--screen <WxH>]`: the Flow B simulator. It compiles a package on
+ * every save and runs it in the Flow B runtime, for a browser to show and a debugger to attach to.
+ */
+async function devAot(cwd: string, args: string[]): Promise<void> {
+  const portOption = optValue(args, '--port');
+  const screenOption = optValue(args, '--screen');
+  const [explicit] = bareArgs(
+    args.filter(arg => arg !== '--aot'),
+    ['--port', '--screen'],
+  );
+  let screen: Screen | null = null;
+  if (screenOption) {
+    const match = /^(\d+)x(\d+)$/.exec(screenOption.value);
+    if (!match) {
+      console.error('--screen takes one size here, as <width>x<height>.\n');
+      process.exit(1);
+    }
+    screen = {width: Number(match[1]), height: Number(match[2])};
+  }
+  const simDir = simDirOrExit();
+  if (!existsSync(resolve(simDir, 'embedded-react-aot.wasm'))) {
+    console.error(
+      'The prebuilt Flow B simulator (sim/embedded-react-aot.wasm) is missing from this install.',
+    );
+    process.exit(1);
+  }
+  const appPath = resolveAppComponent(cwd, explicit);
+  const {runAotDevServer} = await import('./aot-sim/server.mts');
+  const server = await runAotDevServer({
+    entry: appPath,
+    projectRoot: cwd,
+    simDir,
+    port: portOption ? parseInt(portOption.value, 10) : DEFAULT_PORT,
+    screen,
+    compile: async () => {
+      const {result, file} = await compileAppPackage(cwd, appPath);
+      const distDir = resolve(cwd, 'dist');
+      mkdirSync(distDir, {recursive: true});
+      writeFileSync(resolve(distDir, 'app.erdbg'), result.debugFile);
+      return {package: file.bytes, debugFile: result.debugFile};
+    },
+  });
+  console.log(
+    `embedded-react Flow B simulator → http://localhost:${server.port}/`,
+  );
+  console.log(
+    `watching ${relative(cwd, appPath)} — edit & save to reload. Ctrl-C to quit.`,
+  );
+  console.log(
+    'Debug it from an editor with a launch configuration that has "simulator": true.',
+  );
+  const shutdown = async () => {
+    await server.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 async function exportApp(args: string[]): Promise<void> {

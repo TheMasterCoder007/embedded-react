@@ -30,12 +30,16 @@
 //   - a data breakpoint on a state stops where the app changes it, as `erb watch` does
 //
 // The app's commands only work on a halted board, so one that arrives while it runs halts it and resumes it.
+//
+// With "simulator" in the configuration there is no board and no GDB: the Flow B simulator (`embedded-react dev
+// --aot`) answers the same requests about the app from its own memory, and the editor's side is unchanged.
 
 import {spawn} from 'node:child_process';
 import {connect} from 'node:net';
 import {posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {Readable, Writable} from 'node:stream';
+import {SimulatorLink} from './aot-sim/adapter-link.mts';
 
 /** A protocol message: a request, a response or an event. */
 export interface Message {
@@ -66,6 +70,8 @@ export interface AdapterOptions {
   startGdb?: StartGdb;
   /** gdb/erb.py, when it isn't beside this file. */
   script?: string;
+  /** The CLI a launch starts the simulator with, when it isn't beside this file. */
+  cli?: string;
 }
 
 /** What `erb dap status` says of a stop. */
@@ -134,6 +140,11 @@ const VM_FUNCTION = 'erb_vm_run';
 const PAUSE_TIMEOUT_MS = 5000;
 const SERVER_TIMEOUT_MS = 10000;
 const SERVER_POLL_MS = 200;
+const SIMULATOR_PORT = 3333;
+const SIMULATOR_START_MS = 30000;
+const SIMULATOR_ATTACH_MS = 2000;
+/** Tells the editor where the simulator's page is, for it to show beside the code. */
+const SIMULATOR_EVENT = 'embedded-react.simulator';
 const GDB_EXIT_MS = 1000;
 const ERRORS_KEPT = 2000;
 const ANSWER_MARK = '@erb ';
@@ -181,6 +192,10 @@ const OWN_FIELDS = [
   'postAttachCommands',
   'disconnectCommands',
   'stopOnAttach',
+  'simulator',
+  'entry',
+  'port',
+  'screen',
 ];
 
 /**
@@ -306,8 +321,11 @@ export class DebugAdapter {
   private readonly output: Writable;
   private readonly startGdb: StartGdb;
   private readonly script: string;
+  private readonly cli: string;
 
   private gdb: GdbProcess | null = null;
+  /** The simulator, which stands where GDB does when the configuration names it. */
+  private simulator: SimulatorLink | null = null;
   private server: ReturnType<typeof spawn> | null = null;
   private clientSeq = 1;
   private gdbSeq = 1;
@@ -364,6 +382,15 @@ export class DebugAdapter {
     this.startGdb = options.startGdb ?? startGdbProcess;
     this.script =
       options.script ?? fileURLToPath(new URL('./gdb/erb.py', import.meta.url));
+    // Beside this file: cli.mts in the repository, cli.mjs once published.
+    this.cli =
+      options.cli ??
+      fileURLToPath(
+        new URL(
+          import.meta.url.endsWith('.mts') ? './cli.mts' : './cli.mjs',
+          import.meta.url,
+        ),
+      );
     readMessages(options.input, message => {
       if (message.type === 'request') {
         this.onRequest(message).catch(error =>
@@ -439,7 +466,7 @@ export class DebugAdapter {
         return this.exceptionInfo(request);
       case 'configurationDone':
         return this.inLane(() => {
-          this.running = this.session === 'launch';
+          this.running = this.session === 'launch' || this.simulator !== null;
           return this.forward(request);
         });
       case 'stackTrace':
@@ -464,6 +491,11 @@ export class DebugAdapter {
         return this.resume(request, args);
       case 'disconnect':
         return this.disconnect(request);
+      case 'terminate':
+        if (this.simulator) {
+          return this.disconnect(request);
+        }
+        return this.forward(request);
       default:
         return this.forward(request);
     }
@@ -498,6 +530,11 @@ export class DebugAdapter {
     command: string,
     args?: Record<string, any>,
   ): Promise<Message> {
+    if (this.simulator) {
+      return this.simulator
+        .call(command, args)
+        .then(response => ({seq: 0, type: 'response', ...response}));
+    }
     const gdb = this.gdb;
     if (!gdb) {
       return Promise.reject(new Error('The debugger is not running.'));
@@ -590,6 +627,9 @@ export class DebugAdapter {
   private async erb(
     request: Record<string, any>,
   ): Promise<Record<string, any>> {
+    if (this.simulator) {
+      return this.simulator.ask(request);
+    }
     const encoded = Buffer.from(JSON.stringify(request)).toString('base64');
     const printed = await this.console(`erb dap ${encoded}`);
     const line = printed
@@ -746,7 +786,8 @@ export class DebugAdapter {
    * @returns The work's result.
    */
   private async whileHalted<T>(work: () => Promise<T>): Promise<T> {
-    if (!this.running) {
+    // The simulator answers between the app's events, so it needs no halt.
+    if (!this.running || this.simulator) {
       return work();
     }
     const stop = await this.pauseQuietly();
@@ -772,20 +813,29 @@ export class DebugAdapter {
     kind: 'launch' | 'attach',
   ): Promise<void> {
     const config: Record<string, any> = request.arguments ?? {};
-    if (!config.debugFile) {
+    const simulated = Boolean(config.simulator);
+    if (!simulated && !config.debugFile) {
       throw new Error(
-        'The configuration needs "debugFile": the app.erdbg the build writes beside the package.',
+        'The configuration needs "debugFile": the app.erdbg the build writes beside the package. To debug in the simulator with no board, give it "simulator": true instead.',
       );
     }
     this.config = config;
     this.session = kind;
     try {
-      await this.prepare(config);
+      await (simulated
+        ? this.prepareSimulator(config, kind)
+        : this.prepare(config));
     } catch (error) {
       this.end();
       throw error;
     }
     this.event('initialized');
+    if (simulated) {
+      // The app runs on while the editor sends its breakpoints.
+      this.running = true;
+      this.respond(request);
+      return;
+    }
 
     const forwarded = Object.fromEntries(
       Object.entries(config).filter(([field]) => !OWN_FIELDS.includes(field)),
@@ -915,6 +965,134 @@ export class DebugAdapter {
   }
 
   /**
+   * Connects to the Flow B simulator, starting one for a launch.
+   *
+   * @param config  The launch configuration.
+   * @param kind  A launch starts the simulator and ends it with the session; an attach takes one that runs.
+   */
+  private async prepareSimulator(
+    config: Record<string, any>,
+    kind: 'launch' | 'attach',
+  ): Promise<void> {
+    const port = Number(config.port ?? SIMULATOR_PORT);
+    const address =
+      typeof config.simulator === 'string'
+        ? config.simulator
+        : `localhost:${port}`;
+    const [host, addressPort] = address.split(':');
+    let started = false;
+    if (kind === 'launch' && !(await portOpen(host, Number(addressPort)))) {
+      this.startSimulator(config, Number(addressPort));
+      started = true;
+    }
+    const link = new SimulatorLink(
+      address,
+      (event, body) => this.onSimulatorEvent(event, body),
+      reason => this.simulatorEnded(reason),
+    );
+    await link.connect(
+      started
+        ? (config.serverTimeout ?? SIMULATOR_START_MS)
+        : SIMULATOR_ATTACH_MS,
+    );
+    this.simulator = link;
+    const info = await this.erb({do: 'info'});
+    this.appFiles = info.files ?? null;
+    this.appSource = config.source ?? (info.source || null);
+    this.hook = true;
+    const url = `http://${address}/`;
+    this.say(
+      `embedded-react: debugging the app in the simulator at ${url}${started ? '' : ', which was already running'}`,
+    );
+    this.event(SIMULATOR_EVENT, {url});
+  }
+
+  /**
+   * Starts `embedded-react dev --aot` for the session.
+   *
+   * @param config  The launch configuration.
+   * @param port  The port it serves.
+   */
+  private startSimulator(config: Record<string, any>, port: number): void {
+    const args = [
+      this.cli,
+      'dev',
+      '--aot',
+      ...(config.entry ? [String(config.entry)] : []),
+      '--port',
+      String(port),
+      ...(config.screen ? ['--screen', String(config.screen)] : []),
+    ];
+    const server = spawn(process.execPath, args, {
+      cwd: config.cwd,
+      env: this.environment(config),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    this.server = server;
+    const onOutput = (chunk: Buffer) =>
+      this.event('output', {
+        category: 'console',
+        output: chunk.toString('utf8'),
+      });
+    server.stdout?.on('data', onOutput);
+    server.stderr?.on('data', onOutput);
+    server.on('error', error =>
+      this.say(
+        `embedded-react: the simulator could not start: ${error.message}`,
+      ),
+    );
+    server.on('exit', () => {
+      this.server = null;
+    });
+  }
+
+  private onSimulatorEvent(event: string, body: Record<string, any>): void {
+    switch (event) {
+      case 'stopped':
+        this.onGdbMessage({
+          seq: 0,
+          type: 'event',
+          event,
+          body: {...body, threadId: this.thread, allThreadsStopped: true},
+        });
+        break;
+      case 'reloaded': {
+        // A save loaded a new build: its files, and the lines its code moved the breakpoints to.
+        this.appFiles = body.files ?? this.appFiles;
+        this.appSource = this.config.source ?? body.source ?? this.appSource;
+        for (const made of body.breakpoints ?? []) {
+          this.event('breakpoint', {
+            reason: 'changed',
+            breakpoint: {
+              id: APP_BREAKPOINT + made.id,
+              verified: made.verified,
+              message: made.message,
+              line:
+                made.line === undefined
+                  ? undefined
+                  : made.line - this.lineShift,
+            },
+          });
+        }
+        this.say(`embedded-react: build ${body.build} loaded`);
+        break;
+      }
+      default:
+        this.event(event, body);
+    }
+  }
+
+  private simulatorEnded(reason: string): void {
+    this.simulator = null;
+    if (!this.ended) {
+      this.ended = true;
+      this.say(`embedded-react: ${reason}`);
+      this.event('terminated');
+    }
+    this.end();
+  }
+
+  /**
    * The environment GDB and the GDB server run in: the adapter's, with the configuration's over it.
    *
    * @param config  The launch configuration.
@@ -999,6 +1177,16 @@ export class DebugAdapter {
   }
 
   private async disconnect(request: Message): Promise<void> {
+    if (this.simulator) {
+      // The simulator drops the breakpoints and runs the app on when the connection closes.
+      this.ended = true;
+      this.respond(request);
+      if (request.command === 'terminate') {
+        this.event('terminated');
+      }
+      this.end();
+      return;
+    }
     await this.leaveBoard();
     if (this.gdb) {
       await this.forward(request).catch(() => this.respond(request));
@@ -1014,6 +1202,8 @@ export class DebugAdapter {
    * @param now  True when the adapter itself is ending, so GDB can't be given time to end by itself.
    */
   end(now = false): void {
+    this.simulator?.close();
+    this.simulator = null;
     this.server?.kill();
     this.server = null;
     const gdb = this.gdb;
@@ -1357,16 +1547,19 @@ export class DebugAdapter {
           ]
         : [];
     if (status && (status.frames.length || writer.length)) {
-      const body = await this.gdbRequest('stackTrace', {
-        threadId,
-        startFrame: 0,
-        levels: 0,
-        format,
-      });
+      // The simulator has no C frames around the app's.
+      const body = this.simulator
+        ? {}
+        : await this.gdbRequest('stackTrace', {
+            threadId,
+            startFrame: 0,
+            levels: 0,
+            format,
+          });
       const frames: Record<string, any>[] = body.stackFrames ?? [];
-      const vmFrame = frames.findIndex(frame =>
-        String(frame.name).startsWith(VM_FUNCTION),
-      );
+      const vmFrame = this.simulator
+        ? 0
+        : frames.findIndex(frame => String(frame.name).startsWith(VM_FUNCTION));
       if (vmFrame >= 0) {
         const appFrames = status.frames.map((frame, index) => ({
           id: APP_FRAME + index,
@@ -1588,8 +1781,10 @@ export class DebugAdapter {
     const typed = String(args.expression).trim();
     // A command typed in the debug console is GDB's, but `erb print` reads the frame the editor has selected.
     const print = args.context === 'repl' ? PRINT_COMMAND.exec(typed) : null;
-    const inApp = frame >= 0 || args.frameId === WRITER_FRAME;
-    if (inApp && (print || args.context !== 'repl')) {
+    // In the simulator everything is the app's, the debug console too.
+    const inApp =
+      frame >= 0 || args.frameId === WRITER_FRAME || this.simulator !== null;
+    if (inApp && (print || args.context !== 'repl' || this.simulator)) {
       return this.respond(
         request,
         await this.appValue(print ? print[1] : typed, frame),

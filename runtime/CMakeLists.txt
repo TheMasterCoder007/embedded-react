@@ -92,6 +92,7 @@ set(ERB_MAX_TEMPLATE_DEPTH "32" CACHE STRING "Flow B: how deeply a template may 
 set(ERB_REPORT_PLACES "32" CACHE STRING "Flow B: places a limit is reported from before repeats stop being filtered")
 option(ERB_DEBUG_HOOK "Flow B: the VM's hook for breakpoints, stepping and a stop at a fault from GDB (debug builds)" OFF)
 set(ERB_DEBUG_STOPS "16" CACHE STRING "Flow B: breakpoint places the debug hook holds (8 B each)")
+option(ERB_DEBUG_HOST "Flow B: the debug hook calls the host's erb_debug_host_break(), for a host that serves a debugger itself" OFF)
 
 # PUBLIC: erb_internal.h sizes structs by these, so every file that includes it must agree.
 target_compile_definitions(erb-runtime PUBLIC
@@ -106,6 +107,7 @@ target_compile_definitions(erb-runtime PUBLIC
         ERB_REPORT_PLACES=${ERB_REPORT_PLACES}
         ERB_DEBUG_HOOK=$<BOOL:${ERB_DEBUG_HOOK}>
         ERB_DEBUG_STOPS=${ERB_DEBUG_STOPS}
+        ERB_DEBUG_HOST=$<BOOL:${ERB_DEBUG_HOST}>
 )
 
 target_link_libraries(erb-runtime
