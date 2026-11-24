@@ -43,7 +43,7 @@ while the code that breaks it is still one line.
   have a `styles`. A file can pass names on (`export {Card} from './Card'`, `export * from './Card'`) and a
   folder is imported by its `index`. An error names the file and line it is in. Not followed: components from
   npm packages, `import * as` of an app file, and files that import each other in a loop. A file that declares
-  [native modules](./native-modules.md) holds only those.
+  [native modules](./native-modules.md) holds only those, and is imported where a module is used, not passed on.
 - A component that receives state-driven or function props must destructure them:
   `function Card({title})`. `function Card(props)` works only when every prop is a constant. Rest
   props (`...rest`) are not supported. A spread onto a component (`{...x}`) must be a

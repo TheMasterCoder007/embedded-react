@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, expect, it} from 'vitest';
@@ -247,5 +249,84 @@ describe('an app split across files', () => {
         'Card.tsx': CARD,
       }),
     );
+  });
+
+  it("names an imported file's images and fonts from the entry's folder", () => {
+    const card =
+      HEAD.replace('Pressable,', 'Image, Pressable,') +
+      "import icon from './assets/icon.png';\n" +
+      "import logo from '../shared/logo.png';\n" +
+      "import Mono from './fonts/Mono.ttf';\n" +
+      'export function Card() {\n' +
+      '  return (\n' +
+      '    <View>\n' +
+      '      <Image source={icon} />\n' +
+      '      <Image source={logo} />\n' +
+      '      <Text style={{fontFamily: Mono, fontSize: 16}}>hi</Text>\n' +
+      '    </View>\n' +
+      '  );\n' +
+      '}\n';
+    const result = compile(
+      appOf("import {Card} from './parts/Card';", '<Card />'),
+      {'parts/Card.tsx': card},
+    );
+    expect(result.images).toEqual([
+      {name: 'icon', importPath: './parts/assets/icon.png'},
+      {name: 'logo', importPath: './shared/logo.png'},
+    ]);
+    expect(result.fonts.map(font => font.importPath)).toEqual([
+      './parts/fonts/Mono.ttf',
+    ]);
+  });
+
+  it('never merges a file that declares native modules, however it is reached', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'source-files-'));
+    const files: Record<string, string> = {
+      'App.tsx':
+        "import {Pressable, Text} from 'embedded-react';\n" +
+        "import {Can} from './device';\n" +
+        'export function App() {\n' +
+        '  return <Pressable onPress={() => { Can.send(1); }}><Text>send</Text></Pressable>;\n' +
+        '}\n',
+      'device/index.ts': "export {Can} from './can';\n",
+      'device/can.ts':
+        "import {nativeModule} from 'embedded-react';\n" +
+        'export interface Can { send(id: number): boolean; }\n' +
+        "export const Can = nativeModule<Can>('can', 1);\n",
+    };
+    const write = () => {
+      for (const [path, source] of Object.entries(files)) {
+        mkdirSync(dirname(join(directory, path)), {recursive: true});
+        writeFileSync(join(directory, path), source);
+      }
+    };
+    const failureOf = async () => {
+      const app = await readApp(join(directory, 'App.tsx'));
+      try {
+        compilePackage(app.source, 'app', {...app.options, ...OPTIONS});
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error('the compile passed');
+    };
+
+    write();
+    expect(await failureOf()).toMatch(
+      /device\/index\.ts passes Can on from \.\/can, which declares native modules, and a native module isn't followed further\n {2}at .*device\/index\.ts:1:9/,
+    );
+    files['device/index.ts'] = "export * from './can';\n";
+    write();
+    expect(await failureOf()).toMatch(
+      /device\/index\.ts passes everything on from \.\/can, which declares native modules/,
+    );
+    // Imported from the file that declares it, the module is read from there as before.
+    files['App.tsx'] = files['App.tsx'].replace('./device', './device/can');
+    write();
+    const app = await readApp(join(directory, 'App.tsx'));
+    expect(Object.keys(app.options.sourceFiles)).toEqual([]);
+    expect(
+      compilePackage(app.source, 'app', {...app.options, ...OPTIONS}).program
+        .length,
+    ).toBeGreaterThan(0);
   });
 });

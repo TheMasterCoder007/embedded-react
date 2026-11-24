@@ -161,6 +161,9 @@ export async function readApp(appPath: string): Promise<AppFiles> {
         : text;
       sourceFiles[key] = imported;
       paths.push(found);
+      // A file that declares native modules is never merged, however it is reached: the compiler only needs its
+      // source to say so.
+      if (/\bnativeModule\b/.test(imported)) continue;
       if (/\.svg['"]/i.test(imported)) {
         Object.assign(
           svgArtifacts,

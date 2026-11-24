@@ -353,31 +353,82 @@ class Linker {
   }
 
   /**
-   * The file a relative import names.
+   * The file a relative import names, and whether it declares native modules: by `nativeFiles`, or by its own source,
+   * so one reached through a file that passes it on is found too.
    *
    * @param fromPath  The importing file.
    * @param importPath  The path it imports.
    *
-   * @returns The file's path from the entry's folder, or null for one that isn't one of the app's source files.
+   * @returns The file's path from the entry's folder, null when it isn't one of the app's source files, and whether
+   *          it declares native modules.
    */
-  private resolve(fromPath: string, importPath: string): string | null {
-    if (!importPath.startsWith('.')) return null;
+  private locate(
+    fromPath: string,
+    importPath: string,
+  ): {path: string | null; native: boolean} {
+    if (!importPath.startsWith('.')) return {path: null, native: false};
     const base = normalizePath(`${folderOf(fromPath)}/${importPath}`);
-    // A file that declares native modules stays an import.
     if (
       this.nativePaths.has(importPath) ||
       this.nativePaths.has(base.startsWith('..') ? base : `./${base}`)
     ) {
-      return null;
+      return {path: null, native: true};
     }
     const entryPath = this.layout.files[0].path;
     for (const suffix of SOURCE_SUFFIXES) {
       const candidate = base + suffix;
-      if (candidate === entryPath || Object.hasOwn(this.sources, candidate)) {
-        return candidate;
+      if (candidate === entryPath) return {path: candidate, native: false};
+      if (Object.hasOwn(this.sources, candidate)) {
+        return {
+          path: candidate,
+          native: /\bnativeModule\b/.test(this.sources[candidate]),
+        };
       }
     }
-    return null;
+    return {path: null, native: false};
+  }
+
+  /**
+   * The file a relative import names, when it is one the app is linked with.
+   *
+   * @param fromPath  The importing file.
+   * @param importPath  The path it imports.
+   *
+   * @returns The file's path from the entry's folder, or null for one that isn't one of the app's source files, or
+   *          that declares native modules: it stays an import, which the compiler reads its modules from.
+   */
+  private resolve(fromPath: string, importPath: string): string | null {
+    const found = this.locate(fromPath, importPath);
+    return found.native ? null : found.path;
+  }
+
+  /**
+   * The error for a file that passes names on from one the app isn't linked with.
+   *
+   * @param path  The file that passes them on.
+   * @param source  The path it passes them on from.
+   * @param what  What it passes on: a name, or `everything`.
+   * @param at  The statement or the name.
+   *
+   * @returns The error, for the caller to throw.
+   */
+  private passedOnError(
+    path: string,
+    source: string,
+    what: string,
+    at: t.Node,
+  ): AotError {
+    return this.locate(path, source).native
+      ? errorAt(
+          at,
+          `AOT: ${path} passes ${what} on from ${source}, which declares native modules, and a native module isn't followed further`,
+          'import it from the file that declares it, where it is used.',
+        )
+      : errorAt(
+          at,
+          `AOT: ${path} passes ${what} on from ${source}, and only the app's own files are followed`,
+          'import it from there where it is used.',
+        );
   }
 
   /**
@@ -662,10 +713,11 @@ class Linker {
         const from = this.moduleOf(statement, path);
         if (!from) {
           if (statement.exportKind === 'type') continue;
-          throw errorAt(
+          throw this.passedOnError(
+            path,
+            statement.source.value,
+            'everything',
             statement.source,
-            `AOT: ${path} passes on everything ${statement.source.value} exports, and only the app's own files are followed`,
-            'import what is needed from it where it is used.',
           );
         }
         linked.passedOn.push(from);
@@ -732,10 +784,11 @@ class Linker {
           name: specifier.local.name,
         });
       } else if (statement.source) {
-        throw errorAt(
+        throw this.passedOnError(
+          path,
+          statement.source.value,
+          exported,
           specifier,
-          `AOT: ${path} passes ${exported} on from ${statement.source.value}, and only the app's own files are followed`,
-          'import it from there where it is used.',
         );
       } else {
         linked.exports.set(exported, {
