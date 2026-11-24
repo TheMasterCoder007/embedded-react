@@ -32,8 +32,8 @@ import {View, Text, Pressable, Dial, updateText} from 'embedded-react';
 // still holds refs.
 //
 // It is self-contained — geometry, palette and values all arrive as props — so it imports nothing from
-// the app. (The compact `solo` layout in App.jsx inlines its own <Dial>: the Flow B AOT compiler resolves
-// identifiers only inside the single App.jsx it parses, so it cannot reach across this module.)
+// the app. (The compact `solo` layout in App.jsx has a <Dial> of its own: this one holds refs and writes its
+// readout with updateText, which stay outside the Flow B subset.)
 
 // Angles. The design's sweep is SVG degrees (0° at 3 o'clock): 150° → 390°, a 240° arc with a 120° dead
 // zone centred on the bottom. <Dial> uses that same convention, so they carry straight over.

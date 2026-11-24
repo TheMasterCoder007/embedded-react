@@ -80,7 +80,7 @@ describe('debug file', () => {
     const debugFile = readDebugFile(result.debugFile);
     expect(debugFile.format).toBe(DEBUG_FILE_FORMAT);
     expect(debugFile.buildId).toBe(result.buildId);
-    expect(debugFile.file).toBe('App.jsx');
+    expect(debugFile.files).toEqual(['App.jsx']);
     expect(debugFile.panels.map(({width, height}) => [width, height])).toEqual([
       [240, 320],
     ]);
@@ -537,7 +537,7 @@ describe('placeOf', () => {
   ): DebugFile => ({
     format: DEBUG_FILE_FORMAT,
     buildId: 1,
-    file: 'App.jsx',
+    files: ['App.jsx'],
     nodeTypes: [],
     panels: panels.map((functions, index) => ({
       width: 240 + index,
@@ -566,7 +566,13 @@ describe('placeOf', () => {
   it('finds the last line at or before the offset, as the error screen does', () => {
     const debugFile = fileOf([ONE]);
     expect(placeOf(debugFile, 0, 0)).toEqual([
-      {panels: [0], function: 'handler', line: 10, column: 3},
+      {
+        panels: [0],
+        function: 'handler',
+        file: 'App.jsx',
+        line: 10,
+        column: 3,
+      },
     ]);
     expect(placeOf(debugFile, 0, 8)[0].line).toBe(11);
     expect(placeOf(debugFile, 0, 9)[0].line).toBe(12);
@@ -586,8 +592,20 @@ describe('placeOf', () => {
     };
     const debugFile = fileOf([ONE], [ONE], [OTHER]);
     expect(placeOf(debugFile, 0, 5)).toEqual([
-      {panels: [0, 1], function: 'handler', line: 11, column: 3},
-      {panels: [2], function: 'the boot values', line: 40, column: 3},
+      {
+        panels: [0, 1],
+        function: 'handler',
+        file: 'App.jsx',
+        line: 11,
+        column: 3,
+      },
+      {
+        panels: [2],
+        function: 'the boot values',
+        file: 'App.jsx',
+        line: 40,
+        column: 3,
+      },
     ]);
   });
 });

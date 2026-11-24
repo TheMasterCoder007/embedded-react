@@ -130,7 +130,7 @@ describe('object state', () => {
   });
 
   it('takes a field worked out from the panel as a number', () => {
-    beginBoot('');
+    beginBoot();
     try {
       const scope: Scope = {
         screen: screenBinding({width: 240, height: 320}),

@@ -77,7 +77,7 @@ class FakeGdb {
     this.erbRequests.push(request);
     switch (request.do) {
       case 'info':
-        return {file: 'App.tsx', source: '', hook: true};
+        return {files: ['App.tsx', 'parts/Card.tsx'], source: '', hook: true};
       case 'status':
         return this.status;
       case 'breakpoints':
@@ -415,6 +415,7 @@ describe('debug adapter', () => {
     });
     expect(editor.gdb.erbRequests.at(-1)).toEqual({
       do: 'breakpoints',
+      file: 'App.tsx',
       breakpoints: [{line: 30}, {line: 99}],
     });
     expect(app.body.breakpoints).toEqual([
@@ -448,6 +449,7 @@ describe('debug adapter', () => {
     });
     expect(editor.gdb.erbRequests.at(-1)).toEqual({
       do: 'breakpoints',
+      file: 'App.tsx',
       breakpoints: [
         {line: 40, condition: 'count === 5', hitCondition: '%2'},
         {line: 41, condition: 'count ='},
@@ -594,6 +596,49 @@ describe('debug adapter', () => {
       text: 'needs more than the firmware reserves',
       threadId: 1,
     });
+  });
+
+  it('sets a breakpoint in a file the entry imports, and shows a stop there', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    const cardPath = '/work/app/parts/Card.tsx';
+    const set = await editor.request('setBreakpoints', {
+      source: {path: cardPath},
+      breakpoints: [{line: 12}],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'breakpoints',
+      file: 'parts/Card.tsx',
+      breakpoints: [{line: 12}],
+    });
+    expect(set.body.breakpoints[0]).toMatchObject({verified: true, line: 12});
+
+    editor.gdb.status = {
+      loaded: true,
+      hookStop: true,
+      frames: [
+        {name: 'onPress', file: 1, line: 12},
+        {name: 'update', file: 0, line: 40},
+      ],
+      hit: [1],
+    };
+    editor.gdb.frames = [
+      {id: 1, name: 'erb_debug_break', line: 874},
+      {id: 2, name: 'erb_vm_run [parts/Card.tsx:12  onPress]', line: 914},
+      {id: 3, name: 'main', line: 10},
+    ];
+    const stopped = editor.nextEvent('stopped');
+    editor.gdb.event('stopped', {reason: 'breakpoint', threadId: 1});
+    await stopped;
+    const stack = await editor.request('stackTrace', {threadId: 1});
+    expect(
+      stack.body.stackFrames
+        .slice(0, 2)
+        .map((frame: Body) => [frame.name, frame.line, frame.source]),
+    ).toEqual([
+      ['onPress', 12, {name: 'Card.tsx', path: cardPath}],
+      ['update', 40, {name: 'App.tsx', path: APP_PATH}],
+    ]);
   });
 
   it('takes the fault checkbox itself and hands GDB its own filters', async () => {

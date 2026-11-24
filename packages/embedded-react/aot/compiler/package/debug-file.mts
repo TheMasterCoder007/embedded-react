@@ -32,6 +32,8 @@ import {
   TemplateKind,
   ValueType,
 } from './format.mts';
+import {placeOfLine} from '../link.mts';
+import type {SourceLayout} from '../link.mts';
 import type {Program, ProgramLocal} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -42,6 +44,8 @@ import type {Program, ProgramLocal} from './writer.mts';
 export interface DebugLine {
   /** The word the run starts at. */
   offset: number;
+  /** The file it is in, by its index in the debug file's `files`; the entry when left out. */
+  file?: number;
   line: number;
   /** 1-based. */
   column: number;
@@ -95,8 +99,8 @@ export interface DebugState {
   name: string;
   /** Its storage name: the name, prefixed for an inlined component's instance. */
   storage: string;
-  /** The component it belongs to, and the line of that instance's element, for one inlined from another. */
-  component?: {name: string; line: number};
+  /** The component it belongs to, and the file and line of that instance's element, for one inlined from another. */
+  component?: {name: string; file?: number; line: number};
   /** Worked out by the compiler, not written by the app: a filtered list, a memo's loop, an alert. */
   hidden: boolean;
   /** Its index in the slot table. */
@@ -121,6 +125,7 @@ export interface DebugNode {
   /** Its children, which follow it in the template, each after the one before and everything under that. */
   children: number;
   /** Where its element is, or null for one no element made: the root template's own node. */
+  file?: number;
   line: number | null;
   column: number | null;
   /** Where its handle is, for a node code reaches: one handle, or one per row for a row's node. */
@@ -166,8 +171,8 @@ export interface DebugFile {
   format: number;
   /** The program section's build_id, which the board's error screen shows. */
   buildId: number;
-  /** The source file the lines are in. */
-  file: string;
+  /** The app's source files, the entry first, each by its path from the entry's folder. */
+  files: string[];
   /** The engine's node types, by the number a node holds. */
   nodeTypes: string[];
   /** In the package's panel order. */
@@ -179,6 +184,8 @@ export interface DebugPlace {
   /** The panels it is for, by index. */
   panels: number[];
   function: string;
+  /** The file's path, as the debug file names it. */
+  file: string;
   line: number;
   column: number;
 }
@@ -188,7 +195,7 @@ export interface DebugPlace {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** The debug file's version, raised when a field changes its meaning. */
-export const DEBUG_FILE_FORMAT = 2;
+export const DEBUG_FILE_FORMAT = 3;
 
 const TYPE_NAMES = new Map<number, string>(
   Object.entries(ValueType).map(([name, type]) => [type, name]),
@@ -256,18 +263,29 @@ function debugLocal(program: Program, local: ProgramLocal): DebugLocal {
  * One panel's part of the debug file.
  *
  * @param program  The panel's program.
+ * @param files  The app's source files.
  *
  * @returns The panel.
  */
-function debugPanel(program: Program): DebugPanel {
+function debugPanel(program: Program, files: SourceLayout): DebugPanel {
   const {width, height, arenaBytes} = program.panels[0];
+  // A line as the debug file gives it: its file, when that isn't the entry, and its line there.
+  const placed = (line: number): {file?: number; line: number} => {
+    const place = placeOfLine(files, line);
+    return {...(place.file > 0 && {file: place.file}), line: place.line};
+  };
   const typeName = (type: number): string => TYPE_NAMES.get(type) ?? `${type}`;
   const states = (program.states ?? []).map(state => {
     const slot = program.slots[state.slot];
     const described: DebugState = {
       name: state.name,
       storage: state.storage,
-      ...(state.component && {component: state.component}),
+      ...(state.component && {
+        component: {
+          name: state.component.name,
+          ...placed(state.component.line),
+        },
+      }),
       hidden: state.hidden,
       slot: state.slot,
       type: typeName(slot.type),
@@ -309,7 +327,7 @@ function debugPanel(program: Program): DebugPanel {
       name: programFunction.debug?.name ?? '',
       lines: (programFunction.debug?.lines ?? []).map(line => ({
         offset: line.offset,
-        line: line.line,
+        ...placed(line.line),
         column: line.column + 1,
       })),
       locals: (programFunction.debug?.locals ?? []).map(local =>
@@ -322,7 +340,7 @@ function debugPanel(program: Program): DebugPanel {
       nodes: template.nodes.map(node => ({
         type: NODE_TYPES.get(node.type) ?? `${node.type}`,
         children: node.children,
-        line: node.debug?.line ?? null,
+        ...(node.debug ? placed(node.debug.line) : {line: null}),
         column: node.debug?.column ?? null,
         ...(node.handle !== NONE && {
           handle: {
@@ -341,24 +359,24 @@ function debugPanel(program: Program): DebugPanel {
  *
  * @param programs  Each panel's program, in the order the package lists them.
  * @param buildId  The program section's build_id.
- * @param file  The source file, as the error screen names it.
+ * @param files  The app's source files, the entry first.
  *
  * @returns app.erdbg's text.
  */
 export function writeDebugFile(
   programs: Program[],
   buildId: number,
-  file: string,
+  files: SourceLayout,
 ): string {
   const debugFile: DebugFile = {
     format: DEBUG_FILE_FORMAT,
     buildId,
-    file,
+    files: files.files.map(file => file.path),
     nodeTypes: Array.from(
       {length: Math.max(...NODE_TYPES.keys()) + 1},
       (_, type) => NODE_TYPES.get(type) ?? '',
     ),
-    panels: programs.map(debugPanel),
+    panels: programs.map(program => debugPanel(program, files)),
   };
   return `${JSON.stringify(debugFile)}\n`;
 }
@@ -379,7 +397,16 @@ function shapeFault(debugFile: DebugFile): string | null {
     typeof value === 'object' && value !== null && !Array.isArray(value);
 
   if (!isNumber(debugFile.buildId)) return 'no buildId';
-  if (!isString(debugFile.file)) return 'no file';
+  if (
+    !isList(debugFile.files) ||
+    !debugFile.files.length ||
+    !debugFile.files.every(isString)
+  ) {
+    return 'no files';
+  }
+  const isFile = (value: unknown): boolean =>
+    value === undefined ||
+    (isNumber(value) && debugFile.files[value as number] !== undefined);
   if (!isList(debugFile.nodeTypes)) return 'no nodeTypes';
   for (const [panelIndex, panel] of debugFile.panels.entries()) {
     const where = `panel ${panelIndex}`;
@@ -402,6 +429,7 @@ function shapeFault(debugFile: DebugFile): string | null {
           line =>
             isRecord(line) &&
             isNumber(line.offset) &&
+            isFile(line.file) &&
             isNumber(line.line) &&
             isNumber(line.column),
         ) ||
@@ -439,6 +467,7 @@ function shapeFault(debugFile: DebugFile): string | null {
             isRecord(node) &&
             isString(node.type) &&
             isNumber(node.children) &&
+            isFile(node.file) &&
             (node.line === null || isNumber(node.line)),
         )
       ) {
@@ -504,9 +533,11 @@ export function placeOf(
     if (!line) {
       return;
     }
+    const file = debugFile.files[line.file ?? 0];
     const same = places.find(
       place =>
         place.function === programFunction.name &&
+        place.file === file &&
         place.line === line.line &&
         place.column === line.column,
     );
@@ -516,6 +547,7 @@ export function placeOf(
       places.push({
         panels: [panelIndex],
         function: programFunction.name,
+        file,
         line: line.line,
         column: line.column,
       });

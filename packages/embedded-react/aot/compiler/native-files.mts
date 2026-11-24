@@ -28,6 +28,7 @@
 import {existsSync, readFileSync, realpathSync, statSync} from 'node:fs';
 import {dirname, isAbsolute, join, relative, resolve} from 'node:path';
 import {parse} from '@babel/parser';
+import {pluginsFor} from './link.mts';
 import type * as t from '@babel/types';
 import {
   declarationsOf,
@@ -434,14 +435,19 @@ function passesOnModules(
  *
  * @param source  The app's source.
  * @param appDirectory  The app's folder, which its imports are resolved from.
+ * @param sourcePath  The file the source is from, when its extension should decide how it is parsed.
  *
  * @returns Each file, by the path the app imports it by.
  */
 export function readNativeFiles(
   source: string,
   appDirectory: string,
+  sourcePath?: string,
 ): Record<string, NativeFile> {
-  const program = parseFile(source);
+  const program = sourcePath
+    ? parse(source, {sourceType: 'module', plugins: pluginsFor(sourcePath)})
+        .program
+    : parseFile(source);
   const files: Record<string, NativeFile> = {};
   for (const [importPath, file] of interfaceFilesOf(program, appDirectory)) {
     files[importPath] = readSourceFile(file, appDirectory);

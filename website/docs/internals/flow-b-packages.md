@@ -315,12 +315,14 @@ for every panel, or for one panel when the panels' tables differ. Each table has
 3. One name per program function, in the `functions` table's order (`u16` each), padded to a multiple
    of 4.
 4. The string table, laid out like the program's `strings` table. `file` and the function names are
-   0-based indices into it.
+   0-based indices into it. A file is named by its path from the entry's folder: `App.tsx`, or
+   `components/Card.tsx` for a file the entry imports.
 
 Before format minor 5, the section is one table for all panels, with a 16-byte header that has a
 `function_count u32` and no `panel` or `length`.
 
-The error screen uses the panel's table to turn a fault's function and offset into `App.jsx:41`. Without
+The error screen uses the panel's table to turn a fault's function and offset into `App.jsx:41`, or
+`components/Card.jsx:12` in a file the entry imports. Without
 one, the screen shows the function index, the offset, and the `build_id`. `--release` leaves the section out
 and clears the debug flag; the [debug file](#the-debug-file) still maps a fault back to the source.
 
@@ -334,15 +336,16 @@ not. It is for host tools, not the board: the package doesn't change, and nothin
 holds what the debug section holds, and what the package leaves out: each state's name, each node's source
 line, and each function's parameters and locals.
 
-It is JSON. The top level has `format` (2), `buildId`, the program's `build_id`, so a tool can refuse a file
-from another build, `file`, the source file, `nodeTypes`, the engine's node types by number, and `panels`, one
+It is JSON. The top level has `format` (3), `buildId`, the program's `build_id`, so a tool can refuse a file
+from another build, `files`, the app's source files by their paths from the entry's folder, the entry first,
+`nodeTypes`, the engine's node types by number, and `panels`, one
 per layout in the package's order. Each panel has:
 
 - `width` and `height`, the size the layout was compiled at, and `arenaBytes`.
 - `regions`, the arena's regions by name (`slots`, `dirty`, `strings`, `lists`, `handles`, `timers`,
   `animations`, `stack`, `tape`, `events`), each with its `offset`, `bytes` and `count`.
 - `functions`, in the `functions` table's order: each one's `name`, and `lines`, its debug entries as
-  `offset` (in words), `line` and `column` (1-based). A handler is named as the source writes it: a callback's
+  `offset` (in words), `line` and `column` (1-based), and `file`, an index into `files`, left out for the entry. A handler is named as the source writes it: a callback's
   own name, or the event prop an arrow is written in (`onPress`). `locals` names the values the app names in it,
   in the order the code names them. Each has its `name` (`point.x` for a field of an object the compiler took
   apart), `from` and `to`, the words it holds its value in (from `from` up to `to`), and `parameter` for one the
@@ -356,14 +359,15 @@ per layout in the package's order. Each panel has:
   package doesn't change: the compiler only notes where each value is as it assigns registers.
 - `states`, in the app's order. Each has its `name`, its `storage` name (the name, prefixed for an inlined
   component's instance), and for an instance's state, `component`: the component's `name` and the `line` of
-  the instance's element. `hidden` marks state the compiler made: a filtered or sorted list, a split, a
+  the instance's element, with its `file` when that isn't the entry. `hidden` marks state the compiler made: a filtered or sorted list, a split, a
   constant array, a memo's loop, an alert. `slot` is its index in the `slots` table, `type` its value type
   (`int`, `bool`, `float`, `int64`, `string`, `enum` or `list`), `offset` its byte offset in the arena, and
   `dirtyBit` its bit in the dirty words, for state a node or an effect reads. A string has its `cap`, an enum its `values` by number, and a list its `cap`, `rowBytes` and `fields`, each
   with its `name` (`key?` for an optional field's flag), `type`, `offset` in the row, and a string's `cap`.
 - `templates`, in the `templates` table's order: each one's `kind` (`root`, `branch` or `row`) and `nodes`,
   each with its `type` (an `ER_NODE_*` name), its `children` (which follow it, each after the one before and
-  everything under that), the `line` and `column` of its element (`null` for the root template's own node), and
+  everything under that), the `line` and `column` of its element (`null` for the root template's own node), its `file` when that isn't
+  the entry, and
   for a node code reaches, `handle`: its `slot`, and the `offset` in the arena of its `count` handles, one per
   row for a row's node, each the engine tag plus 1 and the serial (`u32` each). Rows of the same shape share a
   template, which keeps the first row's lines.
@@ -965,7 +969,7 @@ needed, and `target` to attach to a board, as GDB's `target remote` takes it. Th
 | `setupCommands`, `postAttachCommands`, `disconnectCommands` | GDB commands to run before the ELF loads, once connected, and before the session ends.                                                                  |
 | `environment`                                               | Environment variables for GDB and the GDB server, over the editor's own.                                                                                |
 | `stopOnAttach`                                              | Leaves the board halted once attached. It runs on when left out.                                                                                        |
-| `source`                                                    | The app's source file, when it isn't beside the debug file.                                                                                             |
+| `source`                                                    | The app's entry file, when it isn't beside the debug file. The files it imports are found from its folder.                                              |
 
 GDB leaves a board halted when it disconnects, so a configuration for OpenOCD ends with
 `"disconnectCommands": ["monitor resume"]`.

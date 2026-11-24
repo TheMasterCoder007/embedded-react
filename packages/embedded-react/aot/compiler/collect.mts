@@ -820,8 +820,8 @@ function reducerOf(
   if (!functionNode) {
     throw locatedAt(
       aotError(
-        `AOT: the reducer for "${stateName}" must be a function in this file`,
-        'pass a function declared in this file, or write it inline: useReducer((state, action) => …, initial).',
+        `AOT: the reducer for "${stateName}" must be a function of the app`,
+        'pass a function the app declares, or write it inline: useReducer((state, action) => …, initial).',
       ),
       node,
     );

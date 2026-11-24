@@ -270,12 +270,10 @@ export function nativeAvailableSlot(module: number, name: string): IrBootSlot {
 
 /**
  * Starts recording a compile's boot values.
- *
- * @param source  The source text.
  */
-export function beginBoot(source = ''): void {
+export function beginBoot(): void {
   context = {
-    source,
+    source: '',
     environment: null,
     lower: null,
     slots: [],
@@ -283,6 +281,17 @@ export function beginBoot(source = ''): void {
     lowering: new Set(),
     wholes: new Map(),
   };
+}
+
+/**
+ * Gives the compile's boot values the source their nodes' offsets are in.
+ *
+ * @param source  The source text, every file's.
+ */
+export function setBootSource(source: string): void {
+  if (context) {
+    context.source = source;
+  }
 }
 
 /**

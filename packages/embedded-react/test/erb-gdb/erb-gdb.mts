@@ -31,15 +31,11 @@
 // Needs CMake, a C compiler and GDB with Python, so it runs on Linux.
 
 import {spawnSync} from 'node:child_process';
-import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {mkdirSync, writeFileSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {
-  compilePackage,
-  packPackage,
-  readNativeFiles,
-} from '../../aot/compile.mts';
+import {compilePackage, packPackage, readApp} from '../../aot/compile.mts';
 
 /** A check on one command's output. */
 interface Check {
@@ -389,6 +385,35 @@ const LOOP_CHECKS: Check[] = [
   },
 ];
 
+// An app split across files: a breakpoint in a file the entry imports, named by the end of its path.
+const SPLIT_BEFORE: Check[] = [
+  {
+    command: 'erb break useCounter.ts:8',
+    expected:
+      /^erb breakpoint 1 at split\/useCounter\.ts:8 \(set when the app loads\)$/m,
+  },
+  {
+    command: 'erb break 8',
+    run: caught('erb break 8'),
+    expected:
+      /^split-files\.tsx:8 has no code; the nearest lines with code are 22$/m,
+  },
+  {
+    command: 'erb break Tile.tsx:8',
+    run: caught('erb break Tile.tsx:8'),
+    expected: /^Tile\.tsx isn't one of the app's files: split-files\.tsx, /m,
+  },
+];
+const SPLIT_STOP = /^erb breakpoint 1, split\/useCounter\.ts:8  onPress$/m;
+const SPLIT_CHECKS: Check[] = [
+  {command: 'erb where', expected: /^split\/useCounter\.ts:8  onPress$/m},
+  {command: 'erb print count', expected: /^count = 0$/m},
+  {
+    command: 'er nodes',
+    expected: /^ +pressable #\d+ +\d+,\d+ \d+x\d+  split\/Card\.tsx:18$/m,
+  },
+];
+
 const SESSIONS: Session[] = [
   {
     fixture: 'native-calls',
@@ -464,6 +489,16 @@ const SESSIONS: Session[] = [
     stop: LOOP_STOP,
     checks: LOOP_CHECKS,
   },
+  {
+    fixture: 'split-files',
+    // The card, whose press is the hook's callback.
+    taps: '30,20',
+    settle: 0,
+    before: SPLIT_BEFORE,
+    setup: [],
+    stop: SPLIT_STOP,
+    checks: SPLIT_CHECKS,
+  },
 ];
 
 /**
@@ -508,12 +543,10 @@ function marked(checks: Check[], first: number): string[] {
  *
  * @returns How many checks failed.
  */
-function runSession(session: Session, host: string): number {
-  const fixture = join(FIXTURES, `${session.fixture}.tsx`);
-  const source = readFileSync(fixture, 'utf8');
-  const result = compilePackage(source, session.fixture, {
-    filename: fixture,
-    nativeFiles: readNativeFiles(source, dirname(fixture)),
+async function runSession(session: Session, host: string): Promise<number> {
+  const app = await readApp(join(FIXTURES, `${session.fixture}.tsx`));
+  const result = compilePackage(app.source, session.fixture, {
+    ...app.options,
     screen: SCREEN,
   });
   const packagePath = join(BUILD_DIR, `${session.fixture}.erpkg`);
@@ -605,7 +638,7 @@ const host = join(BUILD_DIR, 'erb-frames');
 
 let failed = 0;
 for (const session of SESSIONS) {
-  failed += runSession(session, host);
+  failed += await runSession(session, host);
 }
 if (failed) {
   process.exit(1);

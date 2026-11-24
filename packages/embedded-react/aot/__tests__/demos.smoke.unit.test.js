@@ -20,11 +20,7 @@ import {resolve, dirname, join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {
-  compilePackage,
-  bakeSvgArtifacts,
-  readNativeFiles,
-} from '../compile.mts';
+import {compilePackage, readApp, readNativeFiles} from '../compile.mts';
 import {demoFile} from '../demo-file.mts';
 import {analyzeFontSizes, findSizeGaps} from '../../assets/font-sizes.mts';
 
@@ -53,14 +49,10 @@ describe('AOT demo compile smoke', () => {
   });
 
   it('compiles the thermostat demo with a layout for every panel', async () => {
-    const source = appSource('thermostat');
-    const result = compilePackage(source, 'thermostat', {
-      filename: 'demos/thermostat/App.jsx',
-      svgArtifacts: await bakeSvgArtifacts(
-        source,
-        resolve(demosDirectory, 'thermostat'),
-      ),
-    });
+    // The demo is split across files, which readApp follows.
+    const app = await readApp(appPath('thermostat'));
+    expect(Object.keys(app.options.sourceFiles)).toEqual(['layout.js']);
+    const result = compilePackage(app.source, 'thermostat', app.options);
     expect(result.program.length).toBeGreaterThan(0);
   });
 });

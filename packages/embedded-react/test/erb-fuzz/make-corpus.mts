@@ -14,23 +14,11 @@
  * limitations under the License.
  */
 
-import {
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import {mkdirSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {
-  bakeSvgArtifacts,
-  bakeSvgTextPaths,
-  compilePackage,
-  packPackage,
-  readNativeFiles,
-} from '../../aot/compile.mts';
+import {compilePackage, packPackage, readApp} from '../../aot/compile.mts';
 import {bakeAssetPackBytes} from '../../assets/index.mts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -79,15 +67,10 @@ const SEEDS: Seed[] = [
 /** Compiles one seed to its package's bytes. */
 async function compileSeed(seed: Seed): Promise<Uint8Array> {
   const sourceDirectory = dirname(seed.file);
-  const source = bakeSvgTextPaths(
-    readFileSync(seed.file, 'utf8'),
-    sourceDirectory,
-  );
-  const packaged = compilePackage(source, seed.name, {
-    filename: seed.file,
+  const app = await readApp(seed.file);
+  const packaged = compilePackage(app.source, seed.name, {
+    ...app.options,
     listCap: seed.listCap,
-    svgArtifacts: await bakeSvgArtifacts(source, sourceDirectory),
-    nativeFiles: readNativeFiles(source, sourceDirectory),
     release: seed.release,
   });
   const images = packaged.images.map(image => ({

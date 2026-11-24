@@ -1,0 +1,251 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {dirname, join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {describe, expect, it} from 'vitest';
+import {compilePackage, placeOf, readApp, readDebugFile} from '../compile.mts';
+
+const FIXTURES = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../test/erb-frames/fixtures',
+);
+
+const OPTIONS = {filename: 'App.tsx', screen: {width: 240, height: 320}};
+
+const HEAD =
+  "import React, {useState} from 'react';\n" +
+  "import {Pressable, StyleSheet, Text, View} from 'embedded-react';\n";
+
+/** A card that counts its presses, in a file of its own. */
+const CARD =
+  HEAD +
+  'const STEP = 2;\n' +
+  'export function Card() {\n' +
+  '  const [presses, setPresses] = useState(0);\n' +
+  '  return (\n' +
+  '    <Pressable onPress={() => setPresses(presses + STEP)}>\n' +
+  '      <Text>{presses}</Text>\n' +
+  '    </Pressable>\n' +
+  '  );\n' +
+  '}\n';
+
+/** An app that shows what it imports from `./Card`. */
+const appOf = (imports: string, body: string): string =>
+  `${HEAD}${imports}\nexport function App() {\n  return <View>${body}</View>;\n}\n`;
+
+const compile = (source: string, sourceFiles: Record<string, string>) =>
+  compilePackage(source, 'app', {...OPTIONS, sourceFiles});
+
+/** The program a split app compiles to, as bytes to compare. */
+const programOf = (source: string, sourceFiles: Record<string, string> = {}) =>
+  Buffer.from(compile(source, sourceFiles).program).toString('hex');
+
+/** The message a compile fails with. */
+const failure = (source: string, sourceFiles: Record<string, string>) => {
+  try {
+    compile(source, sourceFiles);
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error('the compile passed');
+};
+
+describe('an app split across files', () => {
+  it('compiles to the same program as the app in one file', async () => {
+    const split = await readApp(join(FIXTURES, 'split-files.tsx'));
+    const whole = await readApp(join(FIXTURES, 'split-files-one.tsx'));
+    expect(Object.keys(split.options.sourceFiles).sort()).toEqual([
+      'split/Badge.tsx',
+      'split/Card.tsx',
+      'split/index.ts',
+      'split/theme.ts',
+      'split/useCounter.ts',
+    ]);
+    expect(split.paths).toHaveLength(6);
+    const screen = OPTIONS.screen;
+    const splitResult = compilePackage(split.source, 'app', {
+      ...split.options,
+      screen,
+    });
+    const wholeResult = compilePackage(whole.source, 'app', {
+      ...whole.options,
+      screen,
+    });
+    expect(Buffer.from(splitResult.program)).toEqual(
+      Buffer.from(wholeResult.program),
+    );
+  });
+
+  it('keeps a name two files use apart', () => {
+    const entry =
+      HEAD +
+      "import {Card} from './Card';\n" +
+      'const STEP = 5;\n' +
+      'export function App() {\n' +
+      '  const [total, setTotal] = useState(0);\n' +
+      '  return (\n' +
+      '    <View>\n' +
+      '      <Card />\n' +
+      '      <Pressable onPress={() => setTotal(total + STEP)}>\n' +
+      '        <Text>{total}</Text>\n' +
+      '      </Pressable>\n' +
+      '    </View>\n' +
+      '  );\n' +
+      '}\n';
+    const whole = entry
+      .replace("import {Card} from './Card';\n", CARD.slice(HEAD.length))
+      .replace('export function Card', 'function Card')
+      .replace(/STEP(?= = 2|\)\}>\n {6}<Text>\{presses)/g, 'CARD_STEP');
+    expect(whole).toContain('CARD_STEP = 2');
+    expect(whole).toContain('presses + CARD_STEP');
+    expect(programOf(entry, {'Card.tsx': CARD})).toBe(programOf(whole));
+  });
+
+  it('reads an import under another name, and a default export', () => {
+    const named = programOf(appOf("import {Card} from './Card';", '<Card />'), {
+      'Card.tsx': CARD,
+    });
+    expect(
+      programOf(appOf("import {Card as Tile} from './Card';", '<Tile />'), {
+        'Card.tsx': CARD,
+      }),
+    ).toBe(named);
+    expect(
+      programOf(appOf("import Tile from './Card';", '<Tile />'), {
+        'Card.tsx': CARD.replace('export function', 'export default function'),
+      }),
+    ).toBe(named);
+    expect(
+      programOf(appOf("import Tile from './Card';", '<Tile />'), {
+        'Card.tsx': CARD.replace(
+          'export function Card() {',
+          'export default () => {',
+        ).replace(/\}\n$/, '};\n'),
+      }),
+    ).toBe(named);
+  });
+
+  it('follows a file that passes another on, and a folder by its index', () => {
+    const named = programOf(appOf("import {Card} from './Card';", '<Card />'), {
+      'Card.tsx': CARD,
+    });
+    expect(
+      programOf(appOf("import {Card} from './parts';", '<Card />'), {
+        'parts/index.ts': "export * from './Card';\n",
+        'parts/Card.tsx': CARD,
+      }),
+    ).toBe(named);
+    expect(
+      programOf(appOf("import {Tile} from './parts';", '<Tile />'), {
+        'parts/index.ts': "export {Card as Tile} from './Card';\n",
+        'parts/Card.tsx': CARD,
+      }),
+    ).toBe(named);
+  });
+
+  it('names the file and line of an error in an imported file', () => {
+    const message = failure(
+      appOf("import {Card} from './parts/Card';", '<Card />'),
+      {'parts/Card.tsx': CARD.replace('<Text>{presses}</Text>', '<Blob />')},
+    );
+    expect(message).toContain('unknown element <Blob>');
+    expect(message).toContain('at parts/Card.tsx:8:7');
+    expect(message).toContain('>  8 |       <Blob />');
+  });
+
+  it('names an imported file with a syntax error', () => {
+    expect(
+      failure(appOf("import {Card} from './Card';", '<Card />'), {
+        'Card.tsx': 'export function Card( {\n',
+      }),
+    ).toMatch(/^Card\.tsx: .*\(2:0\)/);
+  });
+
+  it("gives each line its file in the debug file and the package's debug section", () => {
+    const result = compile(
+      appOf("import {Card} from './parts/Card';", '<Card />'),
+      {'parts/Card.tsx': CARD},
+    );
+    const debugFile = readDebugFile(result.debugFile);
+    expect(debugFile.files).toEqual(['App.tsx', 'parts/Card.tsx']);
+    const [panel] = debugFile.panels;
+    const handler = panel.functions.findIndex(programFunction =>
+      programFunction.lines.some(line => line.file === 1),
+    );
+    expect(handler).toBeGreaterThanOrEqual(0);
+    expect(placeOf(debugFile, handler, 0)[0]).toMatchObject({
+      file: 'parts/Card.tsx',
+      line: 7,
+    });
+    // The card's nodes are in its file, and its state belongs to the element in the entry.
+    const nodes = panel.templates.flatMap(template => template.nodes);
+    expect(nodes.some(node => node.file === 1 && node.line === 7)).toBe(true);
+    expect(panel.states[0].component).toEqual({name: 'Card', line: 5});
+    expect(Buffer.from(result.debug).toString('latin1')).toContain(
+      'parts/Card.tsx',
+    );
+  });
+
+  it('refuses files that import each other', () => {
+    expect(
+      failure(appOf("import {Card} from './Card';", '<Card />'), {
+        'Card.tsx': "import {STEP} from './step';\n" + CARD,
+        'step.ts': "import {Card} from './Card';\nexport const STEP = 2;\n",
+      }),
+    ).toMatch(/import each other in a loop: Card\.tsx → step\.ts → Card\.tsx/);
+    expect(
+      failure(appOf("import {Card} from './Card';", '<Card />'), {
+        'Card.tsx': "import {App} from './App';\n" + CARD,
+      }),
+    ).toMatch(/Card\.tsx imports the app's entry, App\.tsx/);
+  });
+
+  it('refuses a name a file does not export, and a whole file under one name', () => {
+    expect(
+      failure(appOf("import {Tile} from './Card';", '<Tile />'), {
+        'Card.tsx': CARD,
+      }),
+    ).toMatch(/Card\.tsx doesn't export Tile\n {2}at App\.tsx:3:9/);
+    expect(
+      failure(appOf("import Tile from './Card';", '<Tile />'), {
+        'Card.tsx': CARD,
+      }),
+    ).toMatch(/Card\.tsx has no default export/);
+    expect(
+      failure(appOf("import * as parts from './Card';", '<parts.Card />'), {
+        'Card.tsx': CARD,
+      }),
+    ).toMatch(/`import \* as parts` of one of the app's files isn't supported/);
+  });
+
+  it('reads a type an import names without `type`', () => {
+    const typed = CARD.replace(
+      'const STEP = 2;\n',
+      "import {Step} from './types';\nconst STEP: Step = 2;\n",
+    );
+    expect(
+      programOf(appOf("import {Card} from './Card';", '<Card />'), {
+        'Card.tsx': typed,
+        'types.ts': 'export type Step = number;\n',
+      }),
+    ).toBe(
+      programOf(appOf("import {Card} from './Card';", '<Card />'), {
+        'Card.tsx': CARD,
+      }),
+    );
+  });
+});

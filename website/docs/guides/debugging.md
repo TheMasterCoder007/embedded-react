@@ -140,7 +140,7 @@ A halted core runs nothing: no frames, no touch, no timers.
 | `erb error`          | The last fault or refused load: the reason, the amounts, and the source line                |
 | `erb pools`          | What the app and the engine use of their pools                                              |
 | `er nodes`           | The node tree: each node's type, its rect on the screen, and the source line of its element |
-| `erb break [LINE]`   | Stops at a source line (`App.tsx:41`, or `41`). With no line, lists the breakpoints         |
+| `erb break [LINE]`   | Stops at a source line (`Card.tsx:12`, or `41` in `App.tsx`). With no line, lists them      |
 | `erb log LINE TEXT`  | Prints a message each time a source line is reached, without stopping                       |
 | `erb delete [N...]`  | Deletes breakpoints by number, or all of them                                               |
 | `erb step`           | Runs to the next statement, into a function the app calls                                   |

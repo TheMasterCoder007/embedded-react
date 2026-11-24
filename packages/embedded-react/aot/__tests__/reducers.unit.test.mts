@@ -151,7 +151,7 @@ describe('useReducer', () => {
           "dispatch({type: 'inc'});",
         ]),
       ),
-    ).toThrow(/the reducer for "n" must be a function in this file/);
+    ).toThrow(/the reducer for "n" must be a function of the app/);
   });
 
   it('drops the branches a constant type rules out inside a loop', () => {
@@ -250,7 +250,7 @@ describe('useReducer', () => {
       `  const [n, dispatch] = ${call};\n  const [step] = useState(1);`;
     expect(() =>
       compile(appOf('', hooks('useReducer(nowhere, 0)'), [])),
-    ).toThrow(/the reducer for "n" must be a function in this file/);
+    ).toThrow(/the reducer for "n" must be a function of the app/);
     expect(() =>
       compile(appOf(COUNTER, hooks('useReducer(counter, 0, x => x)'), [])),
     ).toThrow(/useReducer for "n" must take a reducer and an initial value/);

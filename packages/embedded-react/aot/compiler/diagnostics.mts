@@ -40,6 +40,8 @@ export interface SourcePosition {
 export interface AotError extends Error {
   aotLoc?: SourcePosition;
   aotHint?: string;
+  /** The file `aotLoc` is in, when it is one the entry imports: its path from the entry's folder. */
+  aotFile?: {path: string; source: string};
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -189,8 +191,8 @@ export function withLoc<
  * its layout at (from the resolved `options`), all folded into the message, for compilePackage to throw.
  *
  * @param error  The error compilePackage caught.
- * @param source  The app's source, for the code-frame.
- * @param filename  The source's path, as the message should show it.
+ * @param source  The entry's source, for the code-frame.
+ * @param filename  The entry's path, as the message should show it. An error in a file it imports names that file.
  * @param options  The compile's resolved options, for the screen footer.
  *
  * @returns The located error; `error` itself when it has no location.
@@ -205,6 +207,10 @@ export function formatAotError(
 
   // Render the code-frame around the error's location, and the hint when there is one.
   const {line, column} = error.aotLoc;
+  if (error.aotFile) {
+    source = error.aotFile.source;
+    filename = filename.replace(/[^\\/]*$/, '') + error.aotFile.path;
+  }
   const frameLocation = {start: {line, column: column + 1}}; // code-frame columns are 1-based
   let codeFrame = '';
   try {
@@ -227,6 +233,9 @@ export function formatAotError(
     `${error.message}\n  at ${filename}:${line}:${column + 1}\n\n${codeFrame}${hint}${screen}`,
   );
   located.aotLoc = error.aotLoc;
+  if (error.aotFile) {
+    located.aotFile = error.aotFile;
+  }
   if (error.aotHint) {
     located.aotHint = error.aotHint;
   }

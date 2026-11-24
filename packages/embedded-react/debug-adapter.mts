@@ -72,7 +72,8 @@ interface Status {
   loaded: boolean;
   note?: string;
   hookStop: boolean;
-  frames: {name: string; line: number | null}[];
+  /** Each frame's file, by its index in the debug file's files, and its line there; null for one with no line. */
+  frames: {name: string; file: number | null; line: number | null}[];
   hit: number[];
   description?: string;
   fault?: Fault | null;
@@ -88,7 +89,8 @@ interface Change {
   value: string;
   /** The place that wrote it, as `erb watch` prints it. */
   where: string;
-  /** The line that wrote it, or null when the runtime did. */
+  /** The file and line that wrote it, or null when the runtime did. */
+  file: number | null;
   line: number | null;
   name: string | null;
   /** Whether the app is still on the statement that wrote it. */
@@ -306,7 +308,9 @@ export class DebugAdapter {
   private ended = false;
 
   /** The app's source file: its name in the debug file, and its path once known. */
-  private appFile: string | null = null;
+  /** The app's source files as the debug file names them, the entry first. */
+  private appFiles: string[] | null = null;
+  /** The entry's path, once it is known. */
   private appSource: string | null = null;
 
   private running = false;
@@ -890,7 +894,7 @@ export class DebugAdapter {
     await this.console(`source ${this.script}`);
     await this.console(`erb file ${config.debugFile}`);
     const info = await this.erb({do: 'info'});
-    this.appFile = info.file;
+    this.appFiles = info.files ?? null;
     this.appSource = config.source ?? (info.source || null);
     this.hook = Boolean(info.hook);
     if (config.program && !info.hook) {
@@ -1015,12 +1019,57 @@ export class DebugAdapter {
   // Breakpoints and stepping
   // --------------------------------------------------------------------------------------------------------------
 
-  private isAppSource(path: unknown): path is string {
-    return (
-      typeof path === 'string' &&
-      this.appFile !== null &&
-      fileName(path) === this.appFile
-    );
+  /**
+   * Which of the app's files a path is: the one whose path from the entry's folder it ends with, or the entry by
+   * its name alone.
+   *
+   * @param path  A source path from the editor.
+   *
+   * @returns The file's index in the debug file's files, or -1 for a file that isn't the app's.
+   */
+  private appFileOf(path: unknown): number {
+    if (typeof path !== 'string' || this.appFiles === null) return -1;
+    const shown = path.replace(/\\/g, '/');
+    let found = -1;
+    this.appFiles.forEach((file, index) => {
+      const matches =
+        shown === file ||
+        shown.endsWith(`/${file}`) ||
+        (index === 0 && fileName(path) === fileName(file));
+      if (
+        matches &&
+        (found < 0 || file.length > this.appFiles![found].length)
+      ) {
+        found = index;
+      }
+    });
+    return found;
+  }
+
+  /**
+   * One of the app's files as the editor opens it.
+   *
+   * @param file  The file's index in the debug file's files.
+   *
+   * @returns Its name, and its path once the entry's is known.
+   */
+  private appSourceOf(file: number): {name: string; path?: string} {
+    const shown = this.appFiles?.[file] ?? '';
+    const entry = this.appFiles?.[0] ?? '';
+    const root =
+      this.appSource !== null &&
+      this.appSource.replace(/\\/g, '/').endsWith(entry)
+        ? this.appSource.slice(0, this.appSource.length - entry.length)
+        : null;
+    return {
+      name: fileName(shown),
+      path:
+        file === 0
+          ? (this.appSource ?? undefined)
+          : root === null
+            ? undefined
+            : root + shown,
+    };
   }
 
   /** 1 when the editor counts lines from 0, as the app's lines count from 1. */
@@ -1033,18 +1082,27 @@ export class DebugAdapter {
     args: Record<string, any>,
   ): Promise<void> {
     const path = args.source?.path;
-    if (!this.isAppSource(path)) {
+    const file = this.appFileOf(path);
+    if (file < 0) {
       await this.forward(request);
       return;
     }
     return this.inLane(async () => {
-      this.appSource = path;
+      // The editor's path for one file gives the entry's, which the others are beside.
+      const shown = this.appFiles![file];
+      if (file === 0) {
+        this.appSource = path;
+      } else if (path.replace(/\\/g, '/').endsWith(shown)) {
+        this.appSource =
+          path.slice(0, path.length - shown.length) + this.appFiles![0];
+      }
       const wanted: Record<string, any>[] =
         args.breakpoints ?? (args.lines ?? []).map((line: number) => ({line}));
       // The script tests a condition, counts the hits and logs a message at each stop of the hook's.
       const answer = await this.whileHalted(() =>
         this.erb({
           do: 'breakpoints',
+          file: shown,
           breakpoints: wanted.map(entry => ({
             line: entry.line + this.lineShift,
             condition: entry.condition,
@@ -1271,7 +1329,7 @@ export class DebugAdapter {
               name: `${change.name} (wrote ${change.label})`,
               line: change.line - this.lineShift,
               column: 0,
-              source: {name: this.appFile, path: this.appSource ?? undefined},
+              source: this.appSourceOf(change.file ?? 0),
             },
           ]
         : [];
@@ -1293,12 +1351,7 @@ export class DebugAdapter {
           line: frame.line === null ? 0 : frame.line - this.lineShift,
           column: 0,
           source:
-            frame.line === null
-              ? undefined
-              : {
-                  name: this.appFile,
-                  path: this.appSource ?? undefined,
-                },
+            frame.line === null ? undefined : this.appSourceOf(frame.file ?? 0),
           presentationHint: frame.line === null ? 'subtle' : 'normal',
         }));
         // What the app called sits above its frames. At a stop of the hook's that is only the hook, and at a

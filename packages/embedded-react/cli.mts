@@ -482,25 +482,16 @@ async function compileAppPackage(
     release = false,
   }: {screens?: Screen[] | null; release?: boolean} = {},
 ) {
-  const {
-    compilePackage,
-    bakeSvgArtifacts,
-    bakeSvgTextPaths,
-    packPackage,
-    readNativeFiles,
-  } = await import('./aot/compile.mts');
+  const {compilePackage, packPackage, readApp} =
+    await import('./aot/compile.mts');
   const {bakePackageAssets} = await import('./aot/package-assets.mts');
   const appDir = dirname(appPath);
-  const source = bakeSvgTextPaths(readFileSync(appPath, 'utf8'), appDir);
-  // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
-  const svgArtifacts = await bakeSvgArtifacts(source, appDir);
+  // The app's own files, its baked .svg imports and its native modules' files, read here so the compile stays pure.
+  const app = await readApp(appPath);
   // A package has every layout the app's breakpoints call for, and --screen <WxH>,<WxH> keeps only those the
   // sizes pick.
-  const result = compilePackage(source, basename(dirname(appPath)), {
-    filename: appPath,
-    svgArtifacts,
-    // Native modules and their interfaces in other files and packages, read here so the compile stays pure.
-    nativeFiles: readNativeFiles(source, appDir),
+  const result = compilePackage(app.source, basename(dirname(appPath)), {
+    ...app.options,
     screen: screens?.[0] ?? null, // null without --screen
     screens,
     release,
@@ -519,12 +510,12 @@ async function compileAppPackage(
       ).default || {};
   const {assetPack, imageJobs, fontJobs} = bakePackageAssets(
     result,
-    source,
+    app.text,
     appDir,
     assetsConfig,
   );
   const file = packPackage(result, assetPack);
-  return {result, file, imageJobs, fontJobs};
+  return {result, file, imageJobs, fontJobs, paths: app.paths};
 }
 
 /**
@@ -848,7 +839,7 @@ async function where(args: string[]): Promise<void> {
         ? `layout${sizes.length > 1 ? 's' : ''} ${sizes.join(', ')}: `
         : '';
     console.log(
-      `${layouts}${debugFile.file}:${place.line}:${place.column}  ${place.function}`,
+      `${layouts}${place.file}:${place.line}:${place.column}  ${place.function}`,
     );
   }
 }
@@ -979,7 +970,7 @@ async function decodeFault(args: string[]): Promise<void> {
             candidate => candidate.panels.includes(app.panel),
           );
           if (place) {
-            appLine = `${debugFile.file}:${place.line}:${place.column}  ${place.function}  (build ${build})`;
+            appLine = `${place.file}:${place.line}:${place.column}  ${place.function}  (build ${build})`;
           }
         }
       } catch (error: any) {
