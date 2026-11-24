@@ -420,14 +420,19 @@ async function devAot(cwd: string, args: string[]): Promise<void> {
     args.filter(arg => arg !== '--aot'),
     ['--port', '--screen'],
   );
+  const {LARGEST_SIDE, runAotDevServer} = await import('./aot-sim/server.mts');
   let screen: Screen | null = null;
   if (screenOption) {
-    const match = /^(\d+)x(\d+)$/.exec(screenOption.value);
-    if (!match) {
-      console.error('--screen takes one size here, as <width>x<height>.\n');
+    const match = /^([1-9]\d*)x([1-9]\d*)$/.exec(screenOption.value);
+    const width = Number(match?.[1]);
+    const height = Number(match?.[2]);
+    if (!match || width > LARGEST_SIDE || height > LARGEST_SIDE) {
+      console.error(
+        `--screen takes one size here, as <width>x<height>, each from 1 to ${LARGEST_SIDE}.\n`,
+      );
       process.exit(1);
     }
-    screen = {width: Number(match[1]), height: Number(match[2])};
+    screen = {width, height};
   }
   const simDir = simDirOrExit();
   if (!existsSync(resolve(simDir, 'embedded-react-aot.wasm'))) {
@@ -437,7 +442,6 @@ async function devAot(cwd: string, args: string[]): Promise<void> {
     process.exit(1);
   }
   const appPath = resolveAppComponent(cwd, explicit);
-  const {runAotDevServer} = await import('./aot-sim/server.mts');
   const server = await runAotDevServer({
     entry: appPath,
     projectRoot: cwd,

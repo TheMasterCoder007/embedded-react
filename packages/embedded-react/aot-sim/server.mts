@@ -39,7 +39,10 @@ const RGBA_BYTES = 4;
 /** A frame message's header: the panel's width and height, the first row and how many, each 16 bits. */
 const FRAME_HEADER_BYTES = 8;
 const TOUCH_PHASES = 3;
-const LARGEST_SIDE = 4096;
+/** Where the server listens: this machine alone, at the address every `localhost` reaches. */
+const LOOPBACK = '127.0.0.1';
+/** The longest side a panel may have. */
+export const LARGEST_SIDE = 4096;
 
 /** What a build gives the simulator. */
 export interface BuiltPackage {
@@ -425,7 +428,8 @@ export async function runAotDevServer(
   await build();
   await new Promise<void>((listening, failed) => {
     server.once('error', failed);
-    server.listen(options.port, () => listening());
+    // This machine alone: the debugger's connection reads and writes the app with no sign-in.
+    server.listen(options.port, LOOPBACK, () => listening());
   });
   const port = (server.address() as AddressInfo).port;
 
