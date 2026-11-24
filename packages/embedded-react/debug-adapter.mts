@@ -990,8 +990,9 @@ export class DebugAdapter {
       }
       this.startSimulator(config, Number(addressPort));
     }
+    // The simulator listens on the IPv4 loopback, which not every runtime tries for `localhost`.
     const link = new SimulatorLink(
-      address,
+      address.replace(/^localhost(?=:)/, '127.0.0.1'),
       (event, body) => this.onSimulatorEvent(event, body),
       reason => this.simulatorEnded(reason),
     );

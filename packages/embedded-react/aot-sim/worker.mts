@@ -262,10 +262,17 @@ function load(message: Extract<ToWorker, {kind: 'load'}>): void {
 }
 
 function resize(message: Extract<ToWorker, {kind: 'resize'}>): void {
-  if (
-    width === 0 ||
-    !simulator._er_web_aot_resize(message.width, message.height)
-  ) {
+  if (width === 0) {
+    return;
+  }
+  if (!simulator._er_web_aot_resize(message.width, message.height)) {
+    const why = simulator.UTF8ToString(simulator._er_web_aot_error());
+    post({
+      kind: 'log',
+      line: `the panel stays ${width}x${height}${why ? `: ${why}` : ''}`,
+    });
+    // The page shows the size the panel kept.
+    post({kind: 'state', stopped: false});
     return;
   }
   width = message.width;

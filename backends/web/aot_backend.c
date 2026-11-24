@@ -271,15 +271,27 @@ int er_web_aot_resize(int screen_width, int screen_height)
         free(rgba);
         return 0;
     }
-    free(s_rgba);
+    uint8_t* previous_rgba = s_rgba;
+    const int previous_width = s_width;
+    const int previous_height = s_height;
     s_rgba = rgba;
     s_width = screen_width;
     s_height = screen_height;
     /* A size that picks another layout starts the app again in it. */
-    if (s_package && !erb_set_screen_size(screen_width, screen_height))
+    if (s_package && !erb_set_screen_size(screen_width, screen_height) && !load(s_package, s_package_bytes)
+        && erb_running())
     {
-        load(s_package, s_package_bytes);
+        /* The package has no layout for the size, and the app runs on in the one it has: the panel stays its size. */
+        if (er_software_backend_resize(previous_width, previous_height))
+        {
+            free(rgba);
+            s_rgba = previous_rgba;
+            s_width = previous_width;
+            s_height = previous_height;
+            return 0;
+        }
     }
+    free(previous_rgba);
     return 1;
 }
 

@@ -35,6 +35,8 @@ const LENGTH_64 = 127;
 const MOST_16 = 0xffff;
 /** The longest message taken from a client. Its messages are small JSON. */
 const LONGEST_MESSAGE = 1 << 20;
+/** The most a client may leave unread. One that falls further behind is dropped, and connects again. */
+const MOST_UNREAD = 64 << 20;
 
 /** One accepted connection. */
 export interface WebSocketConnection {
@@ -101,6 +103,11 @@ export function acceptWebSocket(
   const connection: WebSocketConnection = {
     send(data) {
       if (!open) return;
+      if (socket.writableLength > MOST_UNREAD) {
+        socket.destroy();
+        ended();
+        return;
+      }
       socket.write(
         typeof data === 'string'
           ? frame(OPCODE_TEXT, Buffer.from(data, 'utf8'))
@@ -168,6 +175,15 @@ export function acceptWebSocket(
         fragments = [];
       }
       fragments.push(payload);
+      const received = fragments.reduce(
+        (total, fragment) => total + fragment.length,
+        0,
+      );
+      if (received > LONGEST_MESSAGE) {
+        socket.destroy();
+        ended();
+        return;
+      }
       if (final) {
         const whole = Buffer.concat(fragments);
         fragments = [];

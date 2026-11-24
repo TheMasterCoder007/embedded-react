@@ -58,7 +58,8 @@ extern "C"
     /**
      * @brief Gives the panel and the app a new size. An app whose layout is for another size starts again.
      *
-     * @return 1 when the panel has the size.
+     * @return 1 when the panel has the size; 0 when it keeps the one it had, with er_web_aot_error() saying why when
+     *         the package has no layout for the new one.
      */
     int er_web_aot_resize(int screen_width, int screen_height);
 
