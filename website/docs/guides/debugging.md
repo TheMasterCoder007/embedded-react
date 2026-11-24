@@ -453,6 +453,21 @@ next line that has some.
   [`erb break` and `erb log`](#conditions-hit-counts-and-logpoints) do: **Edit Breakpoint** in the gutter. A
   logpoint's message goes to the Debug Console. One the debugger can't read is shown as unverified, with why.
 
+### When a state changes
+
+**Break on Value Change** on a state in **App state** stops the board when the app changes it, as
+[`erb watch`](#example-a-state-that-changes-when-it-shouldnt) does. It needs no hook in the firmware.
+
+- **The stop** shows the old and the new value, `target: 21 → 18`, and the editor opens the line that wrote it.
+  When the app has moved on from that line by the stop, as it has for a string, the line has a frame of its own
+  on top of the call stack. When the firmware wrote it, the call stack is the C that did.
+- **The Breakpoints pane** lists each one, to turn off or remove.
+- **A list** stops when rows are added or removed, not when a row's field changes.
+- Each one uses a hardware watchpoint of the chip's: an ESP32-S3 has two. One past what the chip has is shown as
+  unverified, with why.
+
+They last for the session: set them again in the next one.
+
 ### At a fault
 
 When the app faults, the editor stops on the line that faulted and shows the reason as an exception. The call stack

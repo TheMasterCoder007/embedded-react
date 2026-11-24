@@ -1600,13 +1600,14 @@ def set_state(app, state, text):
     value = state_value(app, state)
     for watchpoint in watchpoints:
         if watchpoint.is_valid() and watchpoint.state["storage"] == state["storage"]:
-            watchpoint.previous = value
-            watchpoint.copying = None
+            watchpoint.settle(value)
     return value
 
 
 # The states being watched, so a value the debugger writes isn't taken for one the app wrote.
 watchpoints = []
+# The change the board is stopped at, when a watched state made the stop.
+watch_stop = [None]
 
 
 class StateWatchpoint(gdb.Breakpoint):
@@ -1617,20 +1618,29 @@ class StateWatchpoint(gdb.Breakpoint):
     when the watched word changes, though, and a string can change past its first 4 bytes, so a string is watched
     for any access and the whole value compared here. Its first change traps partway through the copy, so the
     watchpoint stops at the first access after the copy (a read, which leaves it as it is) and names the line that
-    wrote it. A list's first word is its row count: its rows are more than a probe can watch, so a change to a
-    row's field doesn't stop."""
+    wrote it. A string that keeps its first 4 bytes is the same at that trap and changes after it with no other, so
+    the first access that finds it changed names the place of the access before. A list's first word is its row count: its rows are more than a probe can watch, so a change to a
+    row's field doesn't stop. A watchpoint an editor set is internal, so GDB's adapter doesn't list it as its own."""
 
-    def __init__(self, app, state):
+    def __init__(self, app, state, editor=False):
         self.state = state
         self.label = app.label(state)
         self.whole = state["type"] == "string"
-        address = app.arena + state["offset"]
+        self.editor = editor
+        self.address = app.arena + state["offset"]
         kind = gdb.WP_ACCESS if self.whole else gdb.WP_WRITE
-        super().__init__("*(unsigned int *) 0x%x" % address, gdb.BP_WATCHPOINT, kind, internal=False)
-        self.previous = state_value(app, state)
+        super().__init__("*(unsigned int *) 0x%x" % self.address, gdb.BP_WATCHPOINT, kind, internal=editor)
         watchpoints.append(self)
+        self.settle(state_value(app, state))
+
+    def settle(self, value):
+        """Takes a value as the one a change is measured from."""
+        self.previous = value
+        self.first = read(self.address, 4)
         # A string's copy under way: the instruction writing it, what it holds so far, and the line that wrote it.
         self.copying = None
+        # Where the app was at a string's last access that left it as it was.
+        self.last = None
 
     def stop(self):
         try:
@@ -1643,26 +1653,51 @@ class StateWatchpoint(gdb.Breakpoint):
                     if pc == self.copying["pc"] or value != self.copying["value"]:
                         self.copying.update(pc=pc, value=value)
                         return False
-                    where = self.copying["where"]
+                    written = self.copying["written"]
                     self.copying = None
                 elif value == self.previous:
+                    self.last = self.writer(app)
                     return False
+                elif self.last and read(self.address, 4) == self.first:
+                    written = self.last
                 else:
-                    self.copying = {"pc": pc, "value": value, "where": self.writer(app)}
+                    self.copying = {"pc": pc, "value": value, "written": self.writer(app)}
                     return False
             else:
-                where = self.writer(app)
-            print("%s: %s → %s, written at %s" % (self.label, self.previous, value, where))
-            self.previous = value
+                written = self.writer(app)
+            print("%s: %s → %s, written at %s" % (self.label, self.previous, value, written["where"]))
+            change = {
+                "id": -self.number if self.editor else None,
+                "label": self.label,
+                "previous": self.previous,
+                "value": value,
+                "where": written["where"],
+                "line": written["line"],
+                "name": written["name"],
+                # Whether the app is still on the statement that wrote it.
+                "live": written["line"] is not None and self.writer(app) == written,
+            }
+            # A state watched from the console too stops as the editor's breakpoint.
+            if self.editor or watch_stop[0] is None:
+                watch_stop[0] = change
+            self.settle(value)
         except gdb.GdbError as error:
             print("erb watch: %s" % error)
         return True
 
     @staticmethod
     def writer(app):
-        if app.runtime.flag("in_vm"):
-            return app.place(*app.frames()[0])
-        return "the runtime (a host input, a load, or a reset)"
+        """Where the app is as it writes a state: the place as the commands show it, and its line and function."""
+        if not app.runtime.flag("in_vm"):
+            return {"where": "the runtime (a host input, a load, or a reset)", "line": None, "name": None}
+        function, offset, base = app.frame_chain()[0]
+        functions = app.panel["functions"]
+        return {
+            "where": app.place(function, offset),
+            "line": statement_line(app.panel, function, offset)[1],
+            "name": (function < len(functions) and functions[function]["name"]) or "function %d" % function,
+            "frame": (function, base),
+        }
 
 
 class ErbWatch(gdb.Command):
@@ -2453,6 +2488,7 @@ def on_stop(event):
 
 
 def on_resume(event):
+    watch_stop[0] = None
     hook_state["stopped"] = False
     hook_state["hit"] = []
     fault_stop[0] = None
@@ -2494,6 +2530,7 @@ def dap_status(request):
         named = function < len(functions) and functions[function]["name"]
         frames.append({"name": named or "function %d" % function, "line": statement_line(app.panel, function, offset)[1]})
     status = {"loaded": True, "hookStop": hook_state["stopped"] and bool(frames), "frames": frames, "hit": [], "fault": fault}
+    status["watch"] = watch_stop[0]
     if fault:
         return status
     if status["hookStop"] and returned[0]:
@@ -2607,6 +2644,71 @@ def dap_set(request):
     return {"value": set_state(app, app.state(request["state"]), request["value"])}
 
 
+WATCH_PACKETS = {gdb.WP_WRITE: "2", gdb.WP_ACCESS: "4"}
+
+
+def unplaced_watchpoints():
+    """The state watchpoints the chip has no hardware watchpoint for, oldest kept first. GDB places them only as
+    the board resumes, and one too many fails the resume, so the probe is asked to place each one here."""
+    connection = gdb.selected_inferior().connection
+    if not hasattr(connection, "send_packet") or gdb.parameter("breakpoint always-inserted"):
+        return []
+    placed = []
+    unplaced = []
+    for watchpoint in watchpoints:
+        if not watchpoint.enabled:
+            continue
+        packet = "%s,%x,4" % (WATCH_PACKETS[gdb.WP_ACCESS if watchpoint.whole else gdb.WP_WRITE], watchpoint.address)
+        reply = connection.send_packet("Z" + packet) or b""
+        if reply == b"OK":
+            placed.append(packet)
+        elif reply.startswith(b"E"):
+            unplaced.append(watchpoint)
+        else:
+            # A probe that doesn't answer the packet can't be asked.
+            break
+    for packet in placed:
+        connection.send_packet("z" + packet)
+    return unplaced
+
+
+def dap_watch(request):
+    """Replaces the editor's data breakpoints with the states it names, each by its storage name."""
+    watchpoints[:] = [watchpoint for watchpoint in watchpoints if watchpoint.is_valid()]
+    kept = {watchpoint.state["storage"]: watchpoint for watchpoint in watchpoints if watchpoint.editor}
+    wanted = request["states"]
+    app = App() if wanted else None
+    made = []
+    for name in wanted:
+        try:
+            state = app.state(name)
+            watchpoint = kept.get(state["storage"])
+            if watchpoint is None:
+                watchpoint = kept[state["storage"]] = StateWatchpoint(app, state, editor=True)
+            made.append(watchpoint)
+        except (gdb.GdbError, gdb.error) as error:
+            made.append(str(error))
+    for watchpoint in kept.values():
+        if watchpoint not in made:
+            watchpoint.delete()
+            watchpoints.remove(watchpoint)
+    unplaced = unplaced_watchpoints() if made else []
+    used = len(watchpoints) - len(unplaced)
+    answers = []
+    for entry in made:
+        if isinstance(entry, str):
+            answers.append({"verified": False, "message": entry})
+        elif entry in unplaced:
+            answers.append({"verified": False, "message": "the chip has no hardware watchpoint left: all %d are in use" % used})
+        else:
+            answers.append({"id": -entry.number, "verified": True})
+    for watchpoint in unplaced:
+        if watchpoint.editor:
+            watchpoint.delete()
+            watchpoints.remove(watchpoint)
+    return {"breakpoints": answers}
+
+
 def dap_evaluate(request):
     """An expression's value, over a frame's locals and the app's state."""
     app = App()
@@ -2646,6 +2748,7 @@ DAP_REQUESTS = {
     "step": dap_step,
     "variables": dap_variables,
     "set": dap_set,
+    "watch": dap_watch,
     "evaluate": dap_evaluate,
     "sync": dap_sync,
 }

@@ -947,6 +947,9 @@ on stdin and stdout, and runs GDB with GDB's own adapter (`gdb -i dap`, so GDB 1
   set there.
 - Hover and Watch in an app frame evaluate an expression over them, and `erb print` in the Debug Console reads the
   frame the editor has selected.
+- A data breakpoint on a state is a hardware watchpoint, as `erb watch` sets. GDB's adapter has no data
+  breakpoints, so these are the only ones. GDB places a watchpoint only as the board resumes, and one too many
+  fails the resume, so the script asks the probe to place each one as it is set and refuses those it can't.
 
 The script's commands need the board halted, so a breakpoint set while it runs halts it and resumes it.
 

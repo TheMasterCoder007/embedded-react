@@ -23,6 +23,7 @@
 // and in the app. A second session presses the counter fixture's button six times past a logpoint, a breakpoint with a
 // condition and one with a hit count. A third runs the list-fault fixture, whose handler reads a row its list doesn't
 // have, to the stop at the fault, and a fourth gives the host that package cut short, to the stop at the refused load.
+// A fifth sets data breakpoints on the counter's number and string states, and runs to each change.
 //
 // Needs CMake, a C compiler and GDB 14 or later with Python, so it runs on Linux.
 
@@ -538,6 +539,144 @@ async function conditionSession(
 }
 
 /**
+ * Plays a session with data breakpoints on a number state and a string state.
+ *
+ * @param editor  The editor's end.
+ * @param host  The host's program.
+ * @param packagePath  The fixture's package.
+ * @param debugPath  Its debug file.
+ */
+async function dataSession(
+  editor: Editor,
+  host: string,
+  packagePath: string,
+  debugPath: string,
+): Promise<void> {
+  const appSource = {name: 'counter.tsx', path: COUNTER_FIXTURE};
+  const initialized = await editor.request('initialize', {
+    clientID: 'erb-dap',
+    adapterID: 'embedded-react',
+    linesStartAt1: true,
+    columnsStartAt1: true,
+  });
+  check(
+    'the adapter offers data breakpoints',
+    initialized.body?.supportsDataBreakpoints === true,
+    initialized,
+  );
+  const launched = editor.request('launch', {
+    program: host,
+    args: [
+      join(BUILD_DIR, 'frame.raw'),
+      String(SCREEN.width),
+      String(SCREEN.height),
+      packagePath,
+      COUNTER_TAPS,
+      '0',
+    ],
+    debugFile: debugPath,
+    setupCommands: ['set debuginfod enabled off'],
+  });
+  await editor.event('initialized');
+  await editor.request('setBreakpoints', {
+    source: appSource,
+    breakpoints: [{line: 19}],
+  });
+  await editor.request('setDataBreakpoints', {breakpoints: []});
+  await editor.request('configurationDone');
+  check('the host launches', (await launched).success, await launched);
+
+  // The first press, before it sets anything.
+  let stopped = await editor.event('stopped');
+  let frames = await editor.stack(stopped.body.threadId);
+  const scopes = await editor.request('scopes', {frameId: frames[0].id});
+  const state = (scopes.body?.scopes ?? []).find(
+    (scope: Body) => scope.name === 'App state',
+  );
+  await editor.request('variables', {
+    variablesReference: state?.variablesReference,
+  });
+  const dataIds: string[] = [];
+  for (const name of ['count', 'label']) {
+    const info = await editor.request('dataBreakpointInfo', {
+      variablesReference: state?.variablesReference,
+      name,
+    });
+    check(
+      `a data breakpoint is offered on ${name}`,
+      typeof info.body?.dataId === 'string',
+      info,
+    );
+    dataIds.push(info.body?.dataId);
+  }
+  const local = await editor.request('dataBreakpointInfo', {
+    variablesReference: scopes.body?.scopes?.[0]?.variablesReference,
+    name: 'step',
+  });
+  check('none is offered on a local', local.body?.dataId === null, local);
+  const set = await editor.request('setDataBreakpoints', {
+    breakpoints: dataIds.map(dataId => ({dataId, accessType: 'write'})),
+  });
+  const made: Body[] = set.body?.breakpoints ?? [];
+  check(
+    'both data breakpoints are taken',
+    made.length === 2 && made.every(entry => entry.verified && entry.id),
+    set,
+  );
+  await editor.request('setBreakpoints', {source: appSource, breakpoints: []});
+
+  await editor.request('continue', {threadId: stopped.body.threadId});
+  stopped = await editor.event('stopped');
+  frames = await editor.stack(stopped.body.threadId);
+  check(
+    'a number state stops on the line that sets it, with the old and new value',
+    stopped.body.reason === 'data breakpoint' &&
+      stopped.body.description === 'count: 0 → 1' &&
+      stopped.body.hitBreakpointIds?.[0] === made[0].id &&
+      frames[0]?.line === 20 &&
+      frames[0].source?.path === COUNTER_FIXTURE,
+    [stopped.body, frames.slice(0, 2)],
+  );
+  await editor.request('next', {threadId: stopped.body.threadId});
+  stopped = await editor.event('stopped');
+  frames = await editor.stack(stopped.body.threadId);
+  check(
+    'the step button steps the app from there',
+    stopped.body.reason === 'step' && frames[0]?.line === 21,
+    [stopped.body, frames[0]],
+  );
+
+  await editor.request('continue', {threadId: stopped.body.threadId});
+  stopped = await editor.event('stopped');
+  frames = await editor.stack(stopped.body.threadId);
+  check(
+    'a string state stops on the line that sets it, with the old and new value',
+    stopped.body.reason === 'data breakpoint' &&
+      /^label: .*none yet.* → .*last up at 1/.test(
+        stopped.body.description ?? '',
+      ) &&
+      stopped.body.hitBreakpointIds?.[0] === made[1].id &&
+      frames[0]?.line === 21 &&
+      frames[0].source?.path === COUNTER_FIXTURE,
+    [stopped.body, frames.slice(0, 2)],
+  );
+  const variables = await editor.variables(frames[0].id);
+  check(
+    "the frame of the line that wrote it has the app's state",
+    variables['App state']?.includes('count = 1'),
+    variables,
+  );
+  const removed = await editor.request('setDataBreakpoints', {breakpoints: []});
+  check(
+    'the data breakpoints are removed',
+    removed.success && removed.body?.breakpoints?.length === 0,
+    removed,
+  );
+  const ended = await editor.request('disconnect', {terminateDebuggee: true});
+  check('the session ends', ended.success, ended);
+}
+
+/**
  * Plays a session that runs to a fault.
  *
  * @param editor  The editor's end.
@@ -732,6 +871,7 @@ const sessions: [typeof session, string, string][] = [
   [conditionSession, COUNTER_FIXTURE, 'counter'],
   [faultSession, FAULT_FIXTURE, 'list-fault'],
   [refusedSession, FAULT_FIXTURE, 'list-fault'],
+  [dataSession, COUNTER_FIXTURE, 'counter'],
 ];
 for (const [play, fixture, name] of sessions) {
   const [packagePath, debugPath] = compileFixture(fixture, name);
