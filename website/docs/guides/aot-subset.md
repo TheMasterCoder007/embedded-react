@@ -37,7 +37,13 @@ while the code that breaks it is still one line.
   often built, write `<El visible={cond}/>` instead. In a list row, every branch is built with the
   row and toggled. The state of a component in a branch is kept while the branch is gone.
   `updateVector` can't draw on a node in a branch, and `scrollTo` can't scroll one.
-- Components live in the same file as `App`: local `.jsx` imports are not resolved.
+- An app can be split across files. The compiler follows `App`'s relative imports of `.ts`, `.tsx`, `.js` and
+  `.jsx` files, and theirs: components, custom hooks, helpers and constants compile as if they were written in
+  the entry, and every rule here applies in each file. Each file keeps its own names, so two files can each
+  have a `styles`. A file can pass names on (`export {Card} from './Card'`, `export * from './Card'`) and a
+  folder is imported by its `index`. An error names the file and line it is in. Not followed: components from
+  npm packages, `import * as` of an app file, and files that import each other in a loop. A file that declares
+  [native modules](./native-modules.md) holds only those, and is imported where a module is used, not passed on.
 - A component that receives state-driven or function props must destructure them:
   `function Card({title})`. `function Card(props)` works only when every prop is a constant. Rest
   props (`...rest`) are not supported. A spread onto a component (`{...x}`) must be a
@@ -76,13 +82,13 @@ while the code that breaks it is still one line.
   `setN(v => { const next = v + 1; if (next > 9) return 0; return next; })`. It can use locals, branches, and loops,
   and each `return` gives the new value. It can't set other state, call a helper as a statement, start a timer, or
   write a local from outside it.
-- `useReducer(reducer, initial)` holds any state `useState` can. The reducer is a function in the same file or
+- `useReducer(reducer, initial)` holds any state `useState` can. The reducer is a function of the app or
   written inline, and each `dispatch(action)` runs it in place, as a block-bodied updater (above). An action's
   constant fields fold, so `switch (action.type)` keeps only the case a dispatch takes, and a `default: throw` for a
   type no dispatch sends is dropped. A type picked at run time, `{type: up ? 'inc' : 'dec'}`, dispatches each action
   in a branch of its own. A `throw` a dispatch can reach is refused, as is an init function (the third argument).
   `dispatch` can't be passed to a component yet; pass a callback that calls it.
-- A custom hook, a `use…` function in the same file, is inlined where it is called, so each call (and each instance
+- A custom hook, a `use…` function of the app, is inlined where it is called, so each call (and each instance
   of a component that calls it) has state of its own. Call it at the top of a component or another hook, as React
   requires. It returns once, at its end, and can't call itself. Its result can be destructured,
   `const {count, inc} = useCounter(0)` or `const [on, flip] = useToggle()`, or read by key, `counter.count`.

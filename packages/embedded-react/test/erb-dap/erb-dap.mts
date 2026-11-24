@@ -32,11 +32,7 @@ import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {
-  compilePackage,
-  packPackage,
-  readNativeFiles,
-} from '../../aot/compile.mts';
+import {compilePackage, packPackage, readApp} from '../../aot/compile.mts';
 import {
   readMessages,
   writeMessage,
@@ -54,6 +50,9 @@ const FIXTURES = join(PACKAGE_DIR, 'test/erb-frames/fixtures');
 const FIXTURE = join(FIXTURES, 'native-calls.tsx');
 const FAULT_FIXTURE = join(FIXTURES, 'list-fault.tsx');
 const COUNTER_FIXTURE = join(FIXTURES, 'counter.tsx');
+const SPLIT_FIXTURE = join(FIXTURES, 'split-files.tsx');
+/** The hook the split app's entry imports, whose callback a press on the card runs. */
+const SPLIT_HOOK = join(FIXTURES, 'split/useCounter.ts');
 
 const SCREEN = {width: 240, height: 320};
 /** The "next" button: its handler calls Probe.next() first. */
@@ -539,6 +538,77 @@ async function conditionSession(
 }
 
 /**
+ * Plays a session with a breakpoint in a file the app's entry imports.
+ *
+ * @param editor  The editor's end.
+ * @param host  The host's program.
+ * @param packagePath  The fixture's package.
+ * @param debugPath  Its debug file.
+ */
+async function splitSession(
+  editor: Editor,
+  host: string,
+  packagePath: string,
+  debugPath: string,
+): Promise<void> {
+  await editor.request('initialize', {
+    clientID: 'erb-dap',
+    adapterID: 'embedded-react',
+    linesStartAt1: true,
+    columnsStartAt1: true,
+  });
+  const launched = editor.request('launch', {
+    program: host,
+    args: [
+      join(BUILD_DIR, 'frame.raw'),
+      String(SCREEN.width),
+      String(SCREEN.height),
+      packagePath,
+      // The card.
+      '30,20',
+      '0',
+    ],
+    debugFile: debugPath,
+    setupCommands: ['set debuginfod enabled off'],
+  });
+  await editor.event('initialized');
+  const set = await editor.request('setBreakpoints', {
+    source: {name: 'useCounter.ts', path: SPLIT_HOOK},
+    breakpoints: [{line: 7}],
+  });
+  const made: Body[] = set.body?.breakpoints ?? [];
+  check(
+    'a breakpoint in an imported file is taken, and moves on to a line with code',
+    made.length === 1 && made[0].verified && made[0].line === 8,
+    set,
+  );
+  const entrySet = await editor.request('setBreakpoints', {
+    source: {name: 'split-files.tsx', path: SPLIT_FIXTURE},
+    breakpoints: [],
+  });
+  check(
+    "clearing the entry's breakpoints leaves the other file's",
+    entrySet.success,
+    entrySet,
+  );
+  await editor.request('configurationDone');
+  check('the host launches', (await launched).success, await launched);
+
+  const stopped = await editor.event('stopped');
+  const frames = await editor.stack(stopped.body.threadId);
+  check(
+    'the stop is in the imported file',
+    stopped.body.hitBreakpointIds?.[0] === made[0].id &&
+      frames[0]?.line === 8 &&
+      frames[0]?.source?.name === 'useCounter.ts' &&
+      frames[0]?.source?.path === SPLIT_HOOK,
+    [stopped.body, frames[0]],
+  );
+  const ended = await editor.request('disconnect', {terminateDebuggee: true});
+  check('the session ends', ended.success, ended);
+}
+
+/**
  * Plays a session with data breakpoints on a number state and a string state.
  *
  * @param editor  The editor's end.
@@ -881,11 +951,13 @@ async function refusedSession(
  *
  * @returns The package's path and its debug file's.
  */
-function compileFixture(fixture: string, name: string): [string, string] {
-  const source = readFileSync(fixture, 'utf8');
-  const result = compilePackage(source, name, {
-    filename: fixture,
-    nativeFiles: readNativeFiles(source, dirname(fixture)),
+async function compileFixture(
+  fixture: string,
+  name: string,
+): Promise<[string, string]> {
+  const app = await readApp(fixture);
+  const result = compilePackage(app.source, name, {
+    ...app.options,
     screen: SCREEN,
   });
   const packagePath = join(BUILD_DIR, `${name}.erpkg`);
@@ -920,9 +992,10 @@ const sessions: [typeof session, string, string][] = [
   [faultSession, FAULT_FIXTURE, 'list-fault'],
   [refusedSession, FAULT_FIXTURE, 'list-fault'],
   [dataSession, COUNTER_FIXTURE, 'counter'],
+  [splitSession, SPLIT_FIXTURE, 'split-files'],
 ];
 for (const [play, fixture, name] of sessions) {
-  const [packagePath, debugPath] = compileFixture(fixture, name);
+  const [packagePath, debugPath] = await compileFixture(fixture, name);
   const editor = new Editor();
   try {
     await play(editor, host, packagePath, debugPath);

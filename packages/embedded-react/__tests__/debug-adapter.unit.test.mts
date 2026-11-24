@@ -77,7 +77,16 @@ class FakeGdb {
     this.erbRequests.push(request);
     switch (request.do) {
       case 'info':
-        return {file: 'App.tsx', source: '', hook: true};
+        return {
+          files: [
+            'App.tsx',
+            'parts/Card.tsx',
+            '../shared/Row.tsx',
+            'parts/App.tsx',
+          ],
+          source: '',
+          hook: true,
+        };
       case 'status':
         return this.status;
       case 'breakpoints':
@@ -415,6 +424,7 @@ describe('debug adapter', () => {
     });
     expect(editor.gdb.erbRequests.at(-1)).toEqual({
       do: 'breakpoints',
+      file: 'App.tsx',
       breakpoints: [{line: 30}, {line: 99}],
     });
     expect(app.body.breakpoints).toEqual([
@@ -448,6 +458,7 @@ describe('debug adapter', () => {
     });
     expect(editor.gdb.erbRequests.at(-1)).toEqual({
       do: 'breakpoints',
+      file: 'App.tsx',
       breakpoints: [
         {line: 40, condition: 'count === 5', hitCondition: '%2'},
         {line: 41, condition: 'count ='},
@@ -594,6 +605,104 @@ describe('debug adapter', () => {
       text: 'needs more than the firmware reserves',
       threadId: 1,
     });
+  });
+
+  it('sets a breakpoint in a file the entry imports, and shows a stop there', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    const cardPath = '/work/app/parts/Card.tsx';
+    const set = await editor.request('setBreakpoints', {
+      source: {path: cardPath},
+      breakpoints: [{line: 12}],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'breakpoints',
+      file: 'parts/Card.tsx',
+      breakpoints: [{line: 12}],
+    });
+    expect(set.body.breakpoints[0]).toMatchObject({verified: true, line: 12});
+
+    editor.gdb.status = {
+      loaded: true,
+      hookStop: true,
+      frames: [
+        {name: 'onPress', file: 1, line: 12},
+        {name: 'update', file: 0, line: 40},
+      ],
+      hit: [1],
+    };
+    editor.gdb.frames = [
+      {id: 1, name: 'erb_debug_break', line: 874},
+      {id: 2, name: 'erb_vm_run [parts/Card.tsx:12  onPress]', line: 914},
+      {id: 3, name: 'main', line: 10},
+    ];
+    const stopped = editor.nextEvent('stopped');
+    editor.gdb.event('stopped', {reason: 'breakpoint', threadId: 1});
+    await stopped;
+    const stack = await editor.request('stackTrace', {threadId: 1});
+    expect(
+      stack.body.stackFrames
+        .slice(0, 2)
+        .map((frame: Body) => [frame.name, frame.line, frame.source]),
+    ).toEqual([
+      ['onPress', 12, {name: 'Card.tsx', path: cardPath}],
+      ['update', 40, {name: 'App.tsx', path: APP_PATH}],
+    ]);
+  });
+
+  it("maps a file outside the entry's folder by its path from the entry", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    const rowPath = '/work/shared/Row.tsx';
+    const set = await editor.request('setBreakpoints', {
+      source: {path: rowPath},
+      breakpoints: [{line: 7}],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'breakpoints',
+      file: '../shared/Row.tsx',
+      breakpoints: [{line: 7}],
+    });
+    expect(set.body.breakpoints[0]).toMatchObject({verified: true, line: 7});
+
+    editor.gdb.status = {
+      loaded: true,
+      hookStop: true,
+      frames: [{name: 'onPress', file: 2, line: 7}],
+      hit: [1],
+    };
+    editor.gdb.frames = [
+      {id: 1, name: 'erb_debug_break', line: 874},
+      {id: 2, name: 'erb_vm_run [../shared/Row.tsx:7  onPress]', line: 914},
+      {id: 3, name: 'main', line: 10},
+    ];
+    const stopped = editor.nextEvent('stopped');
+    editor.gdb.event('stopped', {reason: 'breakpoint', threadId: 1});
+    await stopped;
+    const stack = await editor.request('stackTrace', {threadId: 1});
+    expect(stack.body.stackFrames[0].source).toEqual({
+      name: 'Row.tsx',
+      path: rowPath,
+    });
+    // A file named as the entry is, in a folder of its own, is that file and not the entry.
+    await editor.request('setBreakpoints', {
+      source: {path: '/work/app/parts/App.tsx'},
+      breakpoints: [{line: 3}],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toMatchObject({
+      file: 'parts/App.tsx',
+    });
+    await editor.request('setBreakpoints', {
+      source: {path: APP_PATH},
+      breakpoints: [{line: 30}],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toMatchObject({file: 'App.tsx'});
+    // Another file of the same name elsewhere isn't the app's.
+    await editor.request('setBreakpoints', {
+      source: {path: '/work/other/Row.tsx'},
+      breakpoints: [{line: 7}],
+    });
+    expect(editor.gdb.asked.at(-1)).toBe('setBreakpoints');
   });
 
   it('takes the fault checkbox itself and hands GDB its own filters', async () => {

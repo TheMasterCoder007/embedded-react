@@ -820,8 +820,8 @@ function reducerOf(
   if (!functionNode) {
     throw locatedAt(
       aotError(
-        `AOT: the reducer for "${stateName}" must be a function in this file`,
-        'pass a function declared in this file, or write it inline: useReducer((state, action) => …, initial).',
+        `AOT: the reducer for "${stateName}" must be a function of the app`,
+        'pass a function the app declares, or write it inline: useReducer((state, action) => …, initial).',
       ),
       node,
     );
@@ -1496,6 +1496,9 @@ export function collectSvgImports(
 ): Map<string, AssetImport> {
   // Map each default import of a .svg file to the file's basename.
   const byLocal = new Map<string, AssetImport>();
+  const pathOf = new Map<string, string>(); // name → the file it names
+  const normalized = (path: string): string =>
+    posix.normalize(path.replace(/\\/g, '/'));
   for (const statement of program.body) {
     if (
       statement.type !== 'ImportDeclaration' ||
@@ -1511,6 +1514,17 @@ export function collectSvgImports(
       .split(/[\\/]/)
       .pop()!
       .replace(/\.svg$/i, '');
+    // An artifact is kept by its name, so two files of one name would draw as one.
+    const first = pathOf.get(name);
+    if (first !== undefined && normalized(first) !== normalized(importPath)) {
+      const error = aotError(
+        `AOT: two .svg files are named "${name}" (${first} and ${importPath})`,
+        'an .svg file is named by its file name, so rename one of the files.',
+      );
+      locateError(error, statement.loc?.start);
+      throw error;
+    }
+    pathOf.set(name, importPath);
     for (const specifier of statement.specifiers) {
       if (specifier.type === 'ImportDefaultSpecifier') {
         byLocal.set(specifier.local.name, {name, importPath});

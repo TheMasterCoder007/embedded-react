@@ -911,6 +911,23 @@ function exportedConstOf(
 }
 
 /**
+ * Whether a file exports a function or a class under a name.
+ *
+ * @param program  The file.
+ * @param exported  The name it is imported by.
+ *
+ * @returns True when it does.
+ */
+const exportsFunction = (program: t.Program, exported: string): boolean =>
+  program.body.some(
+    statement =>
+      statement.type === 'ExportNamedDeclaration' &&
+      (statement.declaration?.type === 'FunctionDeclaration' ||
+        statement.declaration?.type === 'ClassDeclaration') &&
+      statement.declaration.id?.name === exported,
+  );
+
+/**
  * Pins an error from another file's module to the app's import of it, and says where in that file it is.
  *
  * @param error  The thrown value.
@@ -993,7 +1010,17 @@ function importedIn(
         );
       }
       const entry = local === null ? undefined : declared.get(local);
-      if (!entry) continue;
+      if (!entry) {
+        // The file stays an import, so anything else it exports can't be read from it.
+        if (local !== null || exportsFunction(fileProgram, imported)) {
+          throw errorAt(
+            specifier,
+            `AOT: ${importPath} declares native modules, so ${imported} can't be imported from it`,
+            'move it to a file of its own: a file that declares native modules holds only those.',
+          );
+        }
+        continue;
+      }
       found.push({
         binding: specifier.local.name,
         module: entry.module,

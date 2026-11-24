@@ -670,10 +670,10 @@ function emitNodeImpl(
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
     throw aotError(
-      `AOT: unknown element <${tag}> (not a built-in or a component in this file)`,
+      `AOT: unknown element <${tag}> (not a built-in or a component of the app)`,
       `<${tag}> must be a built-in (View / Text / Pressable / TouchableOpacity / Image / ` +
-        `ScrollView / Svg + shapes / Animated.*) or a function component defined in THIS ` +
-        `file. Check the import / spelling or define the component here.`,
+        `ScrollView / Svg + shapes / Animated.*) or a function component in this file or ` +
+        `one of the app's own files it imports. Check the import and the spelling.`,
     );
   }
 

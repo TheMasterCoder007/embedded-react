@@ -403,7 +403,7 @@ export function bindContextUses(
           : undefined;
       if (!context || call.arguments.length !== 1) {
         throw refusal(
-          'AOT: useContext takes a context made in this file',
+          'AOT: useContext takes a context the app makes',
           'make it at module level and pass it: const Theme = createContext(…); … useContext(Theme).',
           call,
         );

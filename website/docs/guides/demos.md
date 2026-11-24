@@ -38,7 +38,8 @@ from a 1280×800 tablet down to the 240×320 panel on a no-PSRAM ESP32:
 
 **How it is put together:**
 
-- `App.jsx` picks the layout and owns the model, and is the whole app in Flow B. COOL and HEAT each keep their
+- `App.jsx` owns the model, and with `layout.js` is the whole app in Flow B. `layout.js` picks the layout and
+  works out its sizes, and both apps import it. COOL and HEAT each keep their
   own setpoint; AUTO's pair is held 4 °F apart by pushing the far end along.
 - `RichApp.jsx` (Flow A only) is the `split` and `stack` layouts with the imperative drag dial, the 14-day
   weather panel, and the theme switch. `index.jsx` picks it on those panels.
@@ -90,8 +91,8 @@ the first render's state, hence the `pageRef` mirror.
 
 **The AOT house rules** the demo is written to:
 
-- Components live in `App.tsx`: the compiler inlines same-file components and does not resolve
-  local `.tsx` imports. It does read the native modules it imports from the device package.
+- The compiler inlines the app's components, from `App.tsx` or a file it imports, and reads the native
+  modules it imports from the device package.
 - Pure `View` and `Text`, no `<Svg>`, so the RP2040 build trims the vector pools to the floor.
 - `left` and `top` cannot be state-driven, while margins can, which is why the level dot and the
   swipe track move with `marginLeft`/`marginTop`.

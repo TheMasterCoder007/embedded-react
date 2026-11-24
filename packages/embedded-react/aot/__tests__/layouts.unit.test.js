@@ -14,15 +14,10 @@
  * limitations under the License.
  */
 
-import {readFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, expect, it, vi} from 'vitest';
-import {
-  bakeSvgArtifacts,
-  compilePackage,
-  readNativeFiles,
-} from '../compile.mts';
+import {compilePackage, readApp} from '../compile.mts';
 import {demoFile} from '../demo-file.mts';
 import {
   MAX_LAYOUTS,
@@ -300,12 +295,8 @@ export function App() {
   ])('compiles the %s at every layout', async (demo, layouts) => {
     const demoDirectory = resolve(demosDirectory, demo);
     const appPath = demoFile(demoDirectory, 'App');
-    const source = readFileSync(appPath, 'utf8');
-    const result = compilePackage(source, demo, {
-      filename: appPath,
-      svgArtifacts: await bakeSvgArtifacts(source, demoDirectory),
-      nativeFiles: readNativeFiles(source, demoDirectory),
-    });
+    const app = await readApp(appPath);
+    const result = compilePackage(app.source, demo, app.options);
     expect(sizesOf(result)).toEqual(layouts);
     // The S3, the CYD, the RP2040 and a size nothing names each have a layout.
     for (const [width, height] of [

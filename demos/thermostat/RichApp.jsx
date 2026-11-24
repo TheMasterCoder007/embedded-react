@@ -51,7 +51,7 @@ import {
   WEATHER_OUTER_HEIGHT,
   WEATHER_OUTER_WIDTH,
   WEATHER_WIDTH,
-} from './App.jsx';
+} from './layout.js';
 
 // The thermostat's split and stack layouts in Flow A, on the real JS engine: the imperative drag dial, the
 // <Image>-backed weather panel, and the theme + units sheet. Flow B doesn't compile this file: App.jsx is its

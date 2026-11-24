@@ -24,6 +24,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {crc32} from '../../../assets/emit-container.mts';
+import {placeOfLine} from '../link.mts';
 import {checksTable} from './checks.mts';
 import {
   DEBUG_ENTRY_SIZE,
@@ -42,6 +43,7 @@ import {
   TAPE_HEADER_SIZE,
   TAPE_SIZE,
 } from './format.mts';
+import type {SourceLayout} from '../link.mts';
 import type {LayoutCheck} from './checks.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -996,7 +998,7 @@ export function writeProgram(programs: Program[]): WrittenProgram {
  *
  * @param functions  The panel's functions.
  * @param buildId  The program section's build_id.
- * @param file  The source file, as the error screen names it.
+ * @param files  The app's source files, the entry first, as the error screen names them.
  * @param panel  The panel it is for, or NONE for every panel.
  *
  * @returns The table's bytes.
@@ -1004,10 +1006,10 @@ export function writeProgram(programs: Program[]): WrittenProgram {
 function debugTable(
   functions: ProgramFunction[],
   buildId: number,
-  file: string,
+  files: SourceLayout,
   panel: number,
 ): Uint8Array {
-  const strings = [file];
+  const strings = [files.files[0].path];
   const string = (text: string): number => {
     const at = strings.indexOf(text);
     return at >= 0 ? at : strings.push(text) - 1;
@@ -1016,10 +1018,15 @@ function debugTable(
     string(programFunction.debug?.name ?? ''),
   );
   const entries = functions.flatMap((programFunction, index) =>
-    (programFunction.debug?.lines ?? []).map(line => ({
-      ...line,
-      function: index,
-    })),
+    (programFunction.debug?.lines ?? []).map(line => {
+      const place = placeOfLine(files, line.line);
+      return {
+        ...line,
+        line: place.line,
+        file: string(files.files[place.file].path),
+        function: index,
+      };
+    }),
   );
   const stringBytes = stringsTable(strings);
   const stringsAt =
@@ -1038,7 +1045,7 @@ function debugTable(
     writer.u16(entry.function);
     writer.u16(0);
     writer.u32(entry.offset);
-    writer.u16(0);
+    writer.u16(entry.file);
     // 1-based, as the compiler's errors show it.
     writer.u16(Math.min(entry.column + 1, NONE));
     writer.u32(entry.line);
@@ -1054,24 +1061,24 @@ function debugTable(
  *
  * @param programs  Each panel's program, in the order the panel table lists them.
  * @param buildId  The program section's build_id.
- * @param file  The source file, as the error screen names it.
+ * @param files  The app's source files, the entry first, as the error screen names them.
  *
  * @returns The section's bytes.
  */
 export function writeDebug(
   programs: Program[],
   buildId: number,
-  file: string,
+  files: SourceLayout,
 ): Uint8Array {
   const shared = programs.map(program =>
-    debugTable(program.functions, buildId, file, NONE),
+    debugTable(program.functions, buildId, files, NONE),
   );
   if (shared.every(table => sameBytes(table, shared[0]))) {
     return shared[0];
   }
   const writer = new ByteWriter();
   programs.forEach((program, panel) =>
-    writer.bytes(debugTable(program.functions, buildId, file, panel)),
+    writer.bytes(debugTable(program.functions, buildId, files, panel)),
   );
   return writer.done();
 }

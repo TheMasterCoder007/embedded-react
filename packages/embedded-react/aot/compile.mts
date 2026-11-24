@@ -50,6 +50,7 @@
  *   compiler/expressions.mts     lowerExprWide — lower a JS expression (state/props/refs) to the IR
  *   compiler/ir/*.mts            the IR the stages lower to (ir/app.mts: the whole lowered app)
  *   compiler/parse.mts           parseApp — JSX/TSX source → AST (types stripped, `undefined` normalized)
+ *   compiler/link.mts            linkApp — merge the app's own files the entry imports into its program
  *   compiler/collect.mts         moduleScope + collect{State, Components, Callbacks, Memos, Effects}
  *   compiler/animations.mts      collect{Anims,Refs}, Easing, interpolate, Animated.start() chains
  *   compiler/style-text.mts      attrExpr, collectStyleAssigns, buildText / text spans
@@ -74,15 +75,10 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  existsSync,
-  readdirSync,
-} from 'node:fs';
-import {basename, resolve, dirname} from 'node:path';
+import {writeFileSync, mkdirSync, existsSync, readdirSync} from 'node:fs';
+import {resolve, dirname} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
+import {readApp} from './app-files.mts';
 import {bakePackageAssets} from './package-assets.mts';
 import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
@@ -135,6 +131,7 @@ export {
   nativeHeaders,
   packPackage,
   placeOf,
+  readApp,
   readDebugFile,
   readModuleFile,
   readNativeFiles,
@@ -238,7 +235,7 @@ function tooManyLayouts(panels: PanelProgram[], named: boolean): Error {
  *
  * @param source  The App.jsx/App.tsx source text.
  * @param demo  Demo name, for the file an error names when opts has none.
- * @param compileOptions  filename, svgArtifacts, ts, screens, release, and the screen and caps resolveOptions documents.
+ * @param compileOptions  filename, sourceFiles, svgArtifacts, ts, screens, release, and the screen and caps resolveOptions documents.
  *
  * @returns The program and debug sections, and what the package holds.
  */
@@ -301,11 +298,7 @@ export function compilePackage(
     }
   }
 
-  return assemblePackage(
-    panels,
-    basename(compileOptions.filename || 'App.jsx'),
-    compileOptions.release,
-  );
+  return assemblePackage(panels, compileOptions.release);
 }
 
 // CLI entry (`node aot/compile.mts [demo]`), only when run directly: compile a demo into dist/app.erpkg.
@@ -349,21 +342,14 @@ if (
     process.exit(1);
   }
 
-  // Compile the app, baking <Svg source> .svg imports first so the compile itself stays pure (no I/O).
-  let source: string;
+  // Compile the app, reading its files and baking its .svg imports first so the compile itself stays pure (no I/O).
+  let text: string;
   let result: PackageResult;
   try {
-    source = bakeSvgTextPaths(
-      readFileSync(appPath, 'utf8'),
-      resolve(demosDirectory, demo),
-    );
-    result = compilePackage(source, demo, {
-      filename: appPath,
-      svgArtifacts: await bakeSvgArtifacts(
-        source,
-        resolve(demosDirectory, demo),
-      ),
-      nativeFiles: readNativeFiles(source, resolve(demosDirectory, demo)),
+    const app = await readApp(appPath);
+    text = app.text;
+    result = compilePackage(app.source, demo, {
+      ...app.options,
       screen: screens?.[0],
       screens,
     });
@@ -384,7 +370,7 @@ if (
   try {
     ({assetPack} = bakePackageAssets(
       result,
-      source,
+      text,
       resolve(demosDirectory, demo),
       assetsConfig,
     ));

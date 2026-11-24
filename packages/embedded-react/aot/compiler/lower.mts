@@ -25,7 +25,13 @@ import {
   setBinding,
   withUndefined,
 } from './static-eval.mts';
-import {abandonBoot, beginBoot, endBoot, setBootLowering} from './boot.mts';
+import {
+  abandonBoot,
+  beginBoot,
+  endBoot,
+  setBootLowering,
+  setBootSource,
+} from './boot.mts';
 import {
   bindBuiltValues,
   findShadowedClockCalls,
@@ -272,7 +278,7 @@ function widenSlots(wide: SlotWidths, stores: IrSlotStore[]): void {
  * @returns The lowered app.
  */
 export function lowerApp(source: string, options: ResolvedOptions): IrApp {
-  beginBoot(source);
+  beginBoot();
   try {
     const wide: SlotWidths = new Map();
     const stores: IrSlotStore[] = [];
@@ -307,9 +313,11 @@ function lowerProgram(
 ): Omit<IrApp, 'boot' | 'checks'> {
   // Parse the app and prepare the AST for the passes below.
   let nativeModules = new Map<string, NativeModule>();
-  const ast = parseApp(source, options, typed => {
+  const {ast, layout} = parseApp(source, options, typed => {
     nativeModules = collectNativeModules(typed.program, options.nativeFiles);
   });
+  // A node's offsets count through every file, the entry first.
+  setBootSource(layout.files.map(file => file.source).join(''));
   normalizeUndefined(ast);
   rewriteWindowDimensions(ast);
   const raisesAlerts = rewriteAlerts(ast);

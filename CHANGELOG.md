@@ -72,9 +72,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `<Svg>`, in both flows, with `fill="url(#id)"` and `stroke="url(#id)"`.
 - `fillOpacity`, `strokeOpacity` and `opacity` on `<Svg>`, `<G>` and every shape.
 - The Svg docs list each element and attribute for a file and inline.
+- Flow B: an app can be split across files. The compiler follows the entry's relative imports, and errors,
+  the error screen and the debugger name the file (`erb break Card.tsx:12`).
 
 ### Changed
 
+- `app.erdbg` is format 3: it lists the app's files, and a line names its file.
+- The thermostat demo keeps its layout and model in `layout.js`.
 - In an `.svg` file, an `opacity` multiplies into the one around it, `fill-opacity` and `stroke-opacity` fade a
   gradient, and a gradient with one stop paints its colour.
 - A gradient fill or stroke carries its middle colour, so a board built without radial gradients draws a

@@ -35,7 +35,7 @@ import sys
 
 import gdb
 
-DEBUG_FILE_FORMAT = 2
+DEBUG_FILE_FORMAT = 3
 ERB_DEBUG_MAGIC = 0x44425245
 ERB_DEBUG_VERSION = 3
 ER_DEBUG_MAGIC = 0x45445245
@@ -374,9 +374,11 @@ def load_debug_file(path):
 def shape_fault(loaded):
     """The first field a debug file lacks that the commands read, or None."""
     is_number = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool)
-    for key, check in (("buildId", is_number), ("file", lambda value: isinstance(value, str)), ("nodeTypes", lambda value: isinstance(value, list)), ("panels", lambda value: isinstance(value, list))):
+    for key, check in (("buildId", is_number), ("files", lambda value: isinstance(value, list) and bool(value) and all(isinstance(name, str) for name in value)), ("nodeTypes", lambda value: isinstance(value, list)), ("panels", lambda value: isinstance(value, list))):
         if not check(loaded.get(key)):
             return key
+    # A file is named by its index in `files`, and the entry when left out.
+    is_file = lambda entry: "file" not in entry or (type(entry["file"]) is int and 0 <= entry["file"] < len(loaded["files"]))
     for index, panel in enumerate(loaded["panels"]):
         where = "panel %d's " % index
         if not isinstance(panel, dict):
@@ -392,15 +394,20 @@ def shape_fault(loaded):
         for function in panel["functions"]:
             if not isinstance(function, dict) or not isinstance(function.get("name"), str) or not isinstance(function.get("lines"), list):
                 return where + "function names and lines"
+            if not all(isinstance(line, dict) and is_number(line.get("offset")) and is_number(line.get("line")) and is_file(line) for line in function["lines"]):
+                return where + "function lines"
             locals_ = function.get("locals")
             if not isinstance(locals_, list) or not all(isinstance(local, dict) and all(key in local for key in ("name", "from", "to")) for local in locals_):
                 return where + "function locals"
         for state in panel["states"]:
             if not isinstance(state, dict) or not all(key in state for key in ("name", "storage", "type", "slot", "offset", "hidden")):
                 return where + "state fields"
+            component = state.get("component")
+            if component is not None and not (isinstance(component, dict) and isinstance(component.get("name"), str) and is_number(component.get("line")) and is_file(component)):
+                return where + "state components"
         for template in panel["templates"]:
             nodes = template.get("nodes") if isinstance(template, dict) else None
-            if not isinstance(nodes, list) or not all(isinstance(node, dict) and "type" in node and "children" in node and "line" in node for node in nodes):
+            if not isinstance(nodes, list) or not all(isinstance(node, dict) and "type" in node and "children" in node and "line" in node and is_file(node) for node in nodes):
                 return where + "template nodes"
     return None
 
@@ -445,7 +452,7 @@ class App:
         name = entry["name"] or "function %d" % function
         if line is None:
             return "%s (function %d at %d)" % (name, function, offset)
-        return "%s:%d  %s" % (debug_file["file"], line["line"], name)
+        return "%s  %s" % (shown(place_of(line)), name)
 
     def frames(self):
         """The app's call chain, innermost first: each function and the offset it is at."""
@@ -950,7 +957,7 @@ def state_labels(panel):
         component = state.get("component")
         if component and instance(state) is not None:
             by_component.setdefault(component["name"], set()).add(instance(state))
-            by_line.setdefault((component["name"], component["line"]), set()).add(instance(state))
+            by_line.setdefault((component["name"], place_of(component)), set()).add(instance(state))
 
     def label(state):
         component = state.get("component")
@@ -958,7 +965,7 @@ def state_labels(panel):
             return state["name"]
         if len(by_component.get(component["name"], ())) <= 1:
             return "%s.%s" % (component["name"], state["name"])
-        on_line = sorted(by_line.get((component["name"], component["line"]), ()))
+        on_line = sorted(by_line.get((component["name"], place_of(component)), ()))
         number = "[%d]" % (on_line.index(instance(state)) + 1) if len(on_line) > 1 and instance(state) in on_line else ""
         return "%s:%d%s.%s" % (component["name"], component["line"], number, state["name"])
 
@@ -1572,7 +1579,7 @@ erb error            The last fault or refused load.
 erb state [NAME]     Every state, or one.
 erb set NAME VALUE   Set a state, a row's field (rows[2].done) or a local.
 erb watch NAME       Stop when a state changes, on the line that wrote it.
-erb break [LINE]     Stop at a source line (App.jsx:41, or 41); with no line, list the breakpoints.
+erb break [LINE]     Stop at a source line (Card.tsx:12, or 41 in the entry); with no line, list the breakpoints.
                      LINE hits N stops from the Nth pass on; LINE if EXPR stops when the expression is true.
 erb log LINE TEXT    Print a message at a source line without stopping, with each {expression} in it worked out.
 erb delete [N...]    Delete breakpoints, or all of them.
@@ -1928,7 +1935,8 @@ class StateWatchpoint(gdb.Breakpoint):
                 "previous": self.previous,
                 "value": value,
                 "where": written["where"],
-                "line": written["line"],
+                "file": written["line"] and written["line"][0],
+                "line": written["line"] and written["line"][1],
                 "name": written["name"],
                 # Whether the app is still on the statement that wrote it.
                 "live": written["line"] is not None and self.writer(app) == written,
@@ -2110,7 +2118,7 @@ class ErNodes(gdb.Command):
             if place:
                 node = templates[place[0]]["nodes"][place[1]]
                 if node["line"] is not None:
-                    source = "  %s:%d" % (debug_file["file"], node["line"])
+                    source = "  %s" % shown(place_of(node))
             print("%s%s #%d  %d,%d %dx%d%s" % ("  " * depth, type_name(record), tag, left, top, width, height, source))
             scroll_x = unpack("f", record, fields["scroll_x_at"])
             scroll_y = unpack("f", record, fields["scroll_y_at"])
@@ -2220,15 +2228,15 @@ class Hook:
 
 
 def statements(panel, function):
-    """A function's statements, in order: the offset each starts at and its line. Entries that carry on the line
-    before them are part of its statement."""
+    """A function's statements, in order: the offset each starts at and its line, a (file, line) pair. Entries that
+    carry on the line before them are part of its statement."""
     functions = panel["functions"]
     if function >= len(functions):
         return []
     found = []
     for entry in functions[function]["lines"]:
-        if not found or found[-1][1] != entry["line"]:
-            found.append((entry["offset"], entry["line"]))
+        if not found or found[-1][1] != place_of(entry):
+            found.append((entry["offset"], place_of(entry)))
     return found
 
 
@@ -2254,29 +2262,63 @@ def line_places(panel, line):
     ]
 
 
+def place_of(entry):
+    """The (file, line) a debug file's entry names: the file by its index in the debug file's `files`."""
+    return (entry.get("file", 0), entry["line"])
+
+
+def shown(place):
+    """A (file, line) as the commands print it: Card.tsx:12."""
+    return "%s:%d" % (debug_file["files"][place[0]], place[1])
+
+
+def file_index(name):
+    """The app's file a name means: its path as the debug file has it, the end of that path, or its file name."""
+    files = debug_file["files"]
+    wanted = name.replace("\\", "/")
+    found = [index for index, path in enumerate(files) if path == wanted or wanted.endswith("/" + path)]
+    if not found:
+        found = [index for index, path in enumerate(files) if path.endswith("/" + wanted) or os.path.basename(path) == os.path.basename(wanted)]
+    if not found:
+        raise ErbError("%s isn't one of the app's files: %s" % (name, ", ".join(files)))
+    if len(found) > 1:
+        raise ErbError("%s is more than one of the app's files: name %s" % (name, " or ".join(files[index] for index in found)))
+    return found[0]
+
+
+def coded_lines(file):
+    """The lines of one of the app's files that have code, in order."""
+    return sorted(
+        {
+            entry["line"]
+            for panel in debug_file["panels"]
+            for function in panel["functions"]
+            for entry in function["lines"]
+            if entry.get("file", 0) == file
+        }
+    )
+
+
 def parse_line(text):
-    """A source line from `App.jsx:41` or `41`."""
+    """A source line, as a (file, line) pair, from `Card.tsx:41`, or `41` for a line of the app's entry."""
     name, _, number = text.strip().rpartition(":")
-    if name and os.path.basename(name) != debug_file["file"]:
-        raise ErbError("the app's source is %s, not %s" % (debug_file["file"], name))
+    file = file_index(name) if name else 0
     try:
         line = int(number)
     except ValueError:
-        raise ErbError("name a source line: erb break %s:41" % debug_file["file"])
-    if not any(line_places(panel, line) for panel in debug_file["panels"]):
-        lines = sorted(
-            {entry["line"] for panel in debug_file["panels"] for function in panel["functions"] for entry in function["lines"]}
-        )
+        raise ErbError("name a source line: erb break %s:41" % debug_file["files"][file])
+    if not any(line_places(panel, (file, line)) for panel in debug_file["panels"]):
+        lines = coded_lines(file)
         before = [candidate for candidate in lines if candidate < line]
         after = [candidate for candidate in lines if candidate > line]
         nearest = " and ".join(str(candidate) for candidate in (before[-1:] + after[:1]))
         raise ErbError(
-            "%s:%d has no code%s" % (debug_file["file"], line, "; the nearest lines with code are " + nearest if nearest else "")
+            "%s has no code%s" % (shown((file, line)), "; the nearest lines with code are " + nearest if nearest else "")
         )
-    return line
+    return (file, line)
 
 
-# The app's breakpoints, each {"number", "line"} and its terms; the hook holds their places for the layout the board
+# The app's breakpoints, each {"number", "line"}, the line a (file, line) pair, and its terms; the hook holds their places for the layout the board
 # runs.
 breakpoints = []
 breakpoint_numbers = [0]
@@ -2290,8 +2332,9 @@ fault_stop = [None]
 source_lines = {}
 
 
-def source_path():
-    """The app's source file, when it can be found beside the debug file or here, else an empty string."""
+def source_path(file=0):
+    """One of the app's source files, when it can be found: the entry beside the debug file or here, and the others
+    from the entry's folder. Else an empty string."""
     path = source_lines.get("path")
     if path is None:
         path = ""
@@ -2299,31 +2342,35 @@ def source_path():
             folder = os.path.dirname(os.path.abspath(debug_path))
             for candidate in (os.getcwd(), folder, os.path.dirname(folder)):
                 for sub in ("", "src"):
-                    full = os.path.join(candidate, sub, debug_file["file"])
+                    full = os.path.join(candidate, sub, debug_file["files"][0])
                     if not path and os.path.isfile(full):
                         path = os.path.abspath(full)
         source_lines["path"] = path
-    return path
+    if file == 0 or not path:
+        return path
+    return os.path.normpath(os.path.join(os.path.dirname(path), debug_file["files"][file]))
 
 
-def source_text(line):
-    """A source line's text, when the source file can be found."""
-    if "lines" not in source_lines:
+def source_text(place):
+    """A source line's text, when its file can be found."""
+    file, line = place
+    texts = source_lines.setdefault("lines", {})
+    if file not in texts:
         try:
-            with open(source_path(), encoding="utf-8") as handle:
-                source_lines["lines"] = handle.read().splitlines()
+            with open(source_path(file), encoding="utf-8") as handle:
+                texts[file] = handle.read().splitlines()
         except OSError:
-            source_lines["lines"] = []
-    lines = source_lines["lines"]
+            texts[file] = []
+    lines = texts[file]
     return lines[line - 1].rstrip() if 0 < line <= len(lines) else None
 
 
 def stop_line(app, function, offset):
     """The place a stop shows, and its source text under it when the source is at hand."""
     text = app.place(function, offset)
-    _, line = statement_line(app.panel, function, offset)
-    source = source_text(line) if line else None
-    return text + ("\n%d\t%s" % (line, source) if source is not None else "")
+    _, place = statement_line(app.panel, function, offset)
+    source = source_text(place) if place else None
+    return text + ("\n%d\t%s" % (place[1], source) if source is not None else "")
 
 
 def statement_line(panel, function, offset):
@@ -2512,7 +2559,7 @@ class HookBreakpoint(gdb.Breakpoint):
         lines = ["%s: %s" % ("Load refused" if refused else "App fault", error["reason"])] + error["lines"][1:]
         source = source_text(error["line"]) if error["line"] else None
         if source is not None:
-            lines.append("%d\t%s" % (error["line"], source))
+            lines.append("%d\t%s" % (error["line"][1], source))
         fault_stop[0] = {"reason": error["reason"], "text": "\n".join(error["lines"]), "refused": refused}
         self.report("\n".join(lines))
         return True
@@ -2587,11 +2634,12 @@ def add_breakpoint(line, condition=None, hits=None, log=None):
             breakpoints.remove(entry)
             raise
         pending = " (set when the app loads)"
-    print("erb breakpoint %d at %s:%d%s%s" % (entry["number"], debug_file["file"], entry["line"], terms_text(entry), pending))
+    print("erb breakpoint %d at %s%s%s" % (entry["number"], shown(entry["line"]), terms_text(entry), pending))
 
 
 class ErbBreak(gdb.Command):
-    """Stop at a source line: erb break App.jsx:41, or erb break 41. With no line, list the breakpoints.
+    """Stop at a source line: erb break Card.tsx:12, or erb break 41 for a line of the app's entry. With no line, list
+the breakpoints.
 erb break 41 if count === 5 stops when the expression is true, as `erb print` works it out at each pass.
 erb break 41 hits 3 stops from the third pass on; hits ==3, >3, <3 and %3 (every third) pick others.
 Needs firmware built with ERB_DEBUG_HOOK=1. A breakpoint set before the app loads is written when it does.
@@ -2607,7 +2655,7 @@ The debugger tests a condition, not the board, so each pass halts the board for 
             if not breakpoints:
                 print("No erb breakpoints.")
             for entry in breakpoints:
-                print("%d  %s:%d%s" % (entry["number"], debug_file["file"], entry["line"], terms_text(entry)))
+                print("%d  %s%s" % (entry["number"], shown(entry["line"]), terms_text(entry)))
             return
         match = re.match(r"^(\S+)(?:\s+hits\s+(\S+))?(?:\s+if\s+(.+))?$", argument.strip())
         if not match:
@@ -2769,7 +2817,7 @@ STEP_KINDS = {"into": STEP_INTO, "over": STEP_OVER, "out": STEP_OUT}
 
 
 def dap_info(request):
-    return {"file": debug_file["file"] if debug_file else None, "source": source_path(), "hook": has_hook()}
+    return {"files": debug_file["files"] if debug_file else None, "source": source_path(), "hook": has_hook()}
 
 
 def dap_status(request):
@@ -2784,7 +2832,8 @@ def dap_status(request):
     frames = []
     for function, offset, _ in chain:
         named = function < len(functions) and functions[function]["name"]
-        frames.append({"name": named or "function %d" % function, "line": statement_line(app.panel, function, offset)[1]})
+        place = statement_line(app.panel, function, offset)[1]
+        frames.append({"name": named or "function %d" % function, "file": place and place[0], "line": place and place[1]})
     status = {"loaded": True, "hookStop": hook_state["stopped"] and bool(frames), "frames": frames, "hit": [], "fault": fault}
     status["watch"] = watch_stop[0]
     if fault:
@@ -2797,28 +2846,29 @@ def dap_status(request):
 
 
 def dap_breakpoints(request):
-    """Replaces the app's breakpoints with the editor's, each a line and its condition, hit count and log message. A
-    line with no code moves to the next line that has some."""
+    """Replaces the breakpoints in one of the app's files with the editor's, each a line and its condition, hit count
+    and log message. A line with no code moves to the next line that has some."""
     if debug_file is None:
         raise ErbError("no debug file")
+    # The editor sends one file's breakpoints at a time: the other files keep theirs.
+    file = file_index(request["file"]) if request.get("file") else 0
     # A line that stays keeps its number, so the editor's breakpoint keeps its id.
-    kept = {entry["line"]: entry for entry in breakpoints}
-    del breakpoints[:]
+    kept = {entry["line"]: entry for entry in breakpoints if entry["line"][0] == file}
+    breakpoints[:] = [entry for entry in breakpoints if entry["line"][0] != file]
     if not has_hook():
         return {"breakpoints": [{"verified": False, "message": NO_HOOK} for _ in request["breakpoints"]]}
     hook_breakpoint()
-    coded = sorted(
-        {entry["line"] for panel in debug_file["panels"] for function in panel["functions"] for entry in function["lines"]}
-    )
+    coded = coded_lines(file)
     answers = []
     for wanted in request["breakpoints"]:
         line = next((candidate for candidate in coded if candidate >= wanted["line"]), None)
         if line is None:
-            answers.append({"verified": False, "message": "%s:%d has no code" % (debug_file["file"], wanted["line"])})
+            answers.append({"verified": False, "message": "%s has no code" % shown((file, wanted["line"]))})
             continue
-        entry = next((entry for entry in breakpoints if entry["line"] == line), None)
+        place = (file, line)
+        entry = next((entry for entry in breakpoints if entry["line"] == place), None)
         if entry is None:
-            entry = kept.get(line) or {"number": breakpoint_numbers[0] + 1, "line": line}
+            entry = kept.get(place) or {"number": breakpoint_numbers[0] + 1, "line": place}
             try:
                 set_terms(entry, wanted.get("condition"), wanted.get("hitCondition"), wanted.get("logMessage"))
             except ErbError as error:

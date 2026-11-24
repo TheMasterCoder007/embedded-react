@@ -39,6 +39,11 @@ export interface CompileOptions {
   svgArtifacts?: Record<string, SvgArtifact>;
   /** The files the app imports native modules or their interfaces from, by import path, read by readNativeFiles. */
   nativeFiles?: Record<string, NativeFile>;
+  /**
+   * The app's other source files, by path from the entry's folder (`components/Card.tsx`), read by readSourceFiles.
+   * The entry's relative imports of them are followed.
+   */
+  sourceFiles?: Record<string, string>;
   /** Parse the source as TypeScript. By default, the filename's extension decides. */
   ts?: boolean;
   /** A panel to keep a layout for. The fallbacks for this and the caps below are listed on resolveOptions. */

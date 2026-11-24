@@ -48,11 +48,9 @@ import {PNG} from 'pngjs';
 import {loadAppFile, loadDependencyFile} from '../../aot/app-file-loader.mts';
 
 import {
-  bakeSvgArtifacts,
-  bakeSvgTextPaths,
   compilePackage,
   packPackage,
-  readNativeFiles,
+  readApp,
   resourceReport,
 } from '../../aot/compile.mts';
 import {bakeAssetPackBytes} from '../../assets/index.mts';
@@ -575,6 +573,15 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     listCap: 6,
     taps: '136,76 32,76 32,76 188,76 188,76',
+  },
+  // An app split across files: a card and a badge from files of their own, on a hook from a third.
+  {name: 'split-files', file: fixture('split-files'), screen: PORTRAIT},
+  // The card, twice: the hook's count goes to 2, and the badge shows it times the hook file's step.
+  {
+    name: 'split-files-pressed',
+    file: fixture('split-files'),
+    screen: PORTRAIT,
+    taps: '30,20 30,20',
   },
   // Buttons: row 1 a, b, reset a, flip; row 2 left, right, and two instances of a component with a counter each.
   {name: 'custom-hooks', file: fixture('custom-hooks'), screen: PORTRAIT},
@@ -1638,16 +1645,11 @@ async function compileScenario(
   scenario: Scenario,
 ): Promise<{packagePath: string; report: string[]}> {
   const sourceDirectory = dirname(scenario.file);
-  const source = bakeSvgTextPaths(
-    readFileSync(scenario.file, 'utf8'),
-    sourceDirectory,
-  );
+  const app = await readApp(scenario.file);
   const size = ([width, height]: Size): Screen => ({width, height});
-  const packaged = compilePackage(source, scenario.name, {
-    filename: scenario.file,
+  const packaged = compilePackage(app.source, scenario.name, {
+    ...app.options,
     listCap: scenario.listCap,
-    svgArtifacts: await bakeSvgArtifacts(source, sourceDirectory),
-    nativeFiles: readNativeFiles(source, sourceDirectory),
     screens: scenario.everySize
       ? undefined
       : (scenario.panels ?? [scenario.screen]).map(size),

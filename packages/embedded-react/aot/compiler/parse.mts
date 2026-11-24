@@ -21,8 +21,10 @@
 import {parse} from '@babel/parser';
 import {aotError} from './diagnostics.mts';
 import {isUndeclaredAttribute} from './elements/props.mts';
+import {linkApp} from './link.mts';
 import type {ParserPlugin} from '@babel/parser';
 import type * as t from '@babel/types';
+import type {SourceLayout} from './link.mts';
 import type {CompileOptions} from './options.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -319,27 +321,33 @@ export function normalizeUndefined(ast: t.File): void {
 /**
  * Parses an app entry to a JS+JSX AST, transparently stripping TypeScript when the entry is .tsx (JSX is not
  * allowed in a .ts file). The strip is faithful: an App.tsx compiles to the same package as its untyped App.jsx twin.
+ * The files the entry imports are merged into it (see linkApp), each parsed by its own extension.
  *
  * @param source  The entry's source.
  * @param options  compilePackage's options: its filename (or `ts`) decides whether it is TypeScript.
  * @param readTypes  Reads what the compile needs of the types, before they are stripped.
  *
- * @returns The parsed file.
+ * @returns The parsed app, and where each of its files' lines are.
  */
 export function parseApp(
   source: string,
-  options: Pick<CompileOptions, 'ts' | 'filename'> = {},
+  options: Pick<
+    CompileOptions,
+    'ts' | 'filename' | 'sourceFiles' | 'nativeFiles'
+  > = {},
   readTypes?: (ast: t.File) => void,
-): t.File {
+): {ast: t.File; layout: SourceLayout} {
   const isTypeScript = isTsEntry(options);
   const ast = parse(source, {
     sourceType: 'module',
     plugins: parserPlugins(isTypeScript),
   });
+  const entryPath = (options.filename || 'App.jsx').split(/[\\/]/).pop()!;
+  const layout = linkApp(ast, source, entryPath, options);
   readTypes?.(ast);
-  if (isTypeScript) {
+  if (isTypeScript || layout.files.length > 1) {
     stripTypeScript(ast);
   }
 
-  return ast;
+  return {ast, layout};
 }

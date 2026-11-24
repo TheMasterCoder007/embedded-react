@@ -30,10 +30,12 @@ import {
   emitPackageContainer,
 } from '../../../assets/emit-container.mts';
 import {lowerApp} from '../lower.mts';
+import {forgetLayout, linkedLayout, relocateError} from '../link.mts';
 import {FLAG_DEBUG, Resource, Table} from './format.mts';
 import {lowerPackage} from './lower.mts';
 import {writeDebugFile} from './debug-file.mts';
 import {writeDebug, writeProgram} from './writer.mts';
+import type {SourceLayout} from '../link.mts';
 import type {ResolvedOptions} from '../options.mts';
 import type {IrBootAssumption} from '../ir/boot.mts';
 import type {AssetImport, FontUse} from '../types.mts';
@@ -50,6 +52,8 @@ export interface PanelProgram {
   fonts: FontUse[];
   /** What the compile assumed of its panel, which is the layout's check. */
   assumptions: IrBootAssumption[];
+  /** The app's files, and where each one's lines are among the program's. */
+  files: SourceLayout;
 }
 
 /** What one package compile produces before the assets are baked. */
@@ -113,13 +117,21 @@ export function compilePanel(
   source: string,
   options: ResolvedOptions,
 ): PanelProgram {
-  const app = lowerApp(source, options);
-  return {
-    program: lowerPackage(app, options),
-    images: app.images,
-    fonts: app.fonts,
-    assumptions: app.boot.assumptions,
-  };
+  forgetLayout();
+  try {
+    const app = lowerApp(source, options);
+    return {
+      program: lowerPackage(app, options),
+      images: app.images,
+      fonts: app.fonts,
+      assumptions: app.boot.assumptions,
+      files: linkedLayout()!,
+    };
+  } catch (error) {
+    // An error in a file the entry imports names that file, and its line there.
+    relocateError(error, linkedLayout());
+    throw error;
+  }
 }
 
 /**
@@ -127,14 +139,12 @@ export function compilePanel(
  * panel shows, so each panel needs room to register all of them.
  *
  * @param panels  Each panel's program, in the order the package lists them.
- * @param file  The source file, as the debug table names it.
  * @param release  Build for release: the debug flag clear.
  *
  * @returns The program section, and what the package holds.
  */
 export function assemblePackage(
   panels: PanelProgram[],
-  file: string,
   release = false,
 ): PackageResult {
   const images = [
@@ -167,8 +177,8 @@ export function assemblePackage(
   return {
     program: written.bytes,
     buildId: written.buildId,
-    debug: writeDebug(programs, written.buildId, file),
-    debugFile: writeDebugFile(programs, written.buildId, file),
+    debug: writeDebug(programs, written.buildId, panels[0].files),
+    debugFile: writeDebugFile(programs, written.buildId, panels[0].files),
     release,
     panels: programs.map(program => program.panels[0]),
     tables: written.tables,
