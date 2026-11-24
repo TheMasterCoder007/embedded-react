@@ -1540,8 +1540,9 @@ def evaluate(tree, scope):
 def find_text(app, text, frame=0):
     """What an expression names over a frame's locals and the app's state: a place, or a value kept nowhere."""
     scope = Scope(app, frame)
-    # A state's label needn't read as an expression: `Counter:16.taps`.
-    found = None if text in scope.locals else scope.labelled(text)
+    # A state's label needn't read as an expression: `Counter:16.taps`. A local of the name comes first, an object too.
+    local = text in scope.locals or re.split(r"[.\[]", text)[0] in scope.frame.members
+    found = None if local else scope.labelled(text)
     if found is not None:
         return found
     try:
