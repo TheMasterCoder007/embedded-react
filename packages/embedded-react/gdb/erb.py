@@ -377,6 +377,8 @@ def shape_fault(loaded):
     for key, check in (("buildId", is_number), ("files", lambda value: isinstance(value, list) and bool(value) and all(isinstance(name, str) for name in value)), ("nodeTypes", lambda value: isinstance(value, list)), ("panels", lambda value: isinstance(value, list))):
         if not check(loaded.get(key)):
             return key
+    # A file is named by its index in `files`, and the entry when left out.
+    is_file = lambda entry: "file" not in entry or (type(entry["file"]) is int and 0 <= entry["file"] < len(loaded["files"]))
     for index, panel in enumerate(loaded["panels"]):
         where = "panel %d's " % index
         if not isinstance(panel, dict):
@@ -392,15 +394,20 @@ def shape_fault(loaded):
         for function in panel["functions"]:
             if not isinstance(function, dict) or not isinstance(function.get("name"), str) or not isinstance(function.get("lines"), list):
                 return where + "function names and lines"
+            if not all(isinstance(line, dict) and is_number(line.get("offset")) and is_number(line.get("line")) and is_file(line) for line in function["lines"]):
+                return where + "function lines"
             locals_ = function.get("locals")
             if not isinstance(locals_, list) or not all(isinstance(local, dict) and all(key in local for key in ("name", "from", "to")) for local in locals_):
                 return where + "function locals"
         for state in panel["states"]:
             if not isinstance(state, dict) or not all(key in state for key in ("name", "storage", "type", "slot", "offset", "hidden")):
                 return where + "state fields"
+            component = state.get("component")
+            if component is not None and not (isinstance(component, dict) and isinstance(component.get("name"), str) and is_number(component.get("line")) and is_file(component)):
+                return where + "state components"
         for template in panel["templates"]:
             nodes = template.get("nodes") if isinstance(template, dict) else None
-            if not isinstance(nodes, list) or not all(isinstance(node, dict) and "type" in node and "children" in node and "line" in node for node in nodes):
+            if not isinstance(nodes, list) or not all(isinstance(node, dict) and "type" in node and "children" in node and "line" in node and is_file(node) for node in nodes):
                 return where + "template nodes"
     return None
 

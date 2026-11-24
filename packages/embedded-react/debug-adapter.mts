@@ -33,6 +33,7 @@
 
 import {spawn} from 'node:child_process';
 import {connect} from 'node:net';
+import {posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {Readable, Writable} from 'node:stream';
 
@@ -240,6 +241,15 @@ export function writeMessage(output: Writable, message: Message): void {
 function escapeFilename(name: string): string {
   return name.replace(/[ \t\n\r\f\v\\'"]/g, '\\$&');
 }
+
+/**
+ * A path with forward slashes.
+ *
+ * @param path  The path.
+ *
+ * @returns The path, as the debug file writes one.
+ */
+const slashed = (path: string): string => path.replace(/\\/g, '/');
 
 /**
  * A path's last part, whichever slash it uses.
@@ -1029,12 +1039,16 @@ export class DebugAdapter {
    */
   private appFileOf(path: unknown): number {
     if (typeof path !== 'string' || this.appFiles === null) return -1;
-    const shown = path.replace(/\\/g, '/');
+    const shown = slashed(path);
     let found = -1;
     this.appFiles.forEach((file, index) => {
+      // A file outside the entry's folder (`../shared/Card.tsx`) matches by its path from the entry's, once that
+      // is known, and until then by what follows its `../`.
+      const full = this.appPathOf(index);
       const matches =
+        (full !== undefined && shown === slashed(full)) ||
         shown === file ||
-        shown.endsWith(`/${file}`) ||
+        shown.endsWith(`/${file.replace(/^(\.\.\/)+/, '')}`) ||
         (index === 0 && fileName(path) === fileName(file));
       if (
         matches &&
@@ -1047,6 +1061,24 @@ export class DebugAdapter {
   }
 
   /**
+   * One of the app's files' paths, from the entry's.
+   *
+   * @param file  The file's index in the debug file's files.
+   *
+   * @returns The path, or undefined until the entry's is known.
+   */
+  private appPathOf(file: number): string | undefined {
+    if (this.appSource === null || this.appFiles === null) return undefined;
+    if (file === 0) return this.appSource;
+    const entry = this.appFiles[0];
+    const source = slashed(this.appSource);
+    if (!source.endsWith(entry)) return undefined;
+    return posix.normalize(
+      source.slice(0, source.length - entry.length) + this.appFiles[file],
+    );
+  }
+
+  /**
    * One of the app's files as the editor opens it.
    *
    * @param file  The file's index in the debug file's files.
@@ -1054,21 +1086,9 @@ export class DebugAdapter {
    * @returns Its name, and its path once the entry's is known.
    */
   private appSourceOf(file: number): {name: string; path?: string} {
-    const shown = this.appFiles?.[file] ?? '';
-    const entry = this.appFiles?.[0] ?? '';
-    const root =
-      this.appSource !== null &&
-      this.appSource.replace(/\\/g, '/').endsWith(entry)
-        ? this.appSource.slice(0, this.appSource.length - entry.length)
-        : null;
     return {
-      name: fileName(shown),
-      path:
-        file === 0
-          ? (this.appSource ?? undefined)
-          : root === null
-            ? undefined
-            : root + shown,
+      name: fileName(this.appFiles?.[file] ?? ''),
+      path: this.appPathOf(file),
     };
   }
 
@@ -1092,7 +1112,7 @@ export class DebugAdapter {
       const shown = this.appFiles![file];
       if (file === 0) {
         this.appSource = path;
-      } else if (path.replace(/\\/g, '/').endsWith(shown)) {
+      } else if (this.appSource === null && slashed(path).endsWith(shown)) {
         this.appSource =
           path.slice(0, path.length - shown.length) + this.appFiles![0];
       }

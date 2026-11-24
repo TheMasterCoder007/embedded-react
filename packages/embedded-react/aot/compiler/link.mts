@@ -28,7 +28,7 @@
 
 import {parse} from '@babel/parser';
 import {traverse, types} from '@babel/core';
-import {aotError} from './diagnostics.mts';
+import {aotError, locateError} from './diagnostics.mts';
 import type {NodePath} from '@babel/core';
 import type {ParserPlugin} from '@babel/parser';
 import type * as t from '@babel/types';
@@ -806,7 +806,8 @@ class Linker {
    * @param name  The exported name.
    * @param seen  The files already asked, so files that pass each other on end.
    *
-   * @returns The name, 'type' for a type, or null when the file exports no such name.
+   * @returns The name, 'type' for a type, or null when the file exports no such name. Throws for a name two of the
+   *          files it passes on export, which JavaScript leaves unbound.
    */
   private exportedName(
     linked: LinkedModule,
@@ -821,17 +822,23 @@ class Linker {
       return this.exportedName(exported.from, exported.name, seen);
     }
     let isType = linked.typeNames.has(name);
+    let found: {name: string; from: LinkedModule} | null = null;
     if (name !== 'default') {
       for (const from of linked.passedOn) {
         const passed = this.exportedName(from, name, seen);
         if (passed === 'type') {
           isType = true;
-        } else if (passed !== null) {
-          return passed;
+        } else if (passed !== null && found === null) {
+          found = {name: passed, from};
+        } else if (passed !== null && passed !== found!.name) {
+          throw aotError(
+            `AOT: ${linked.file.path} passes ${name} on from both ${found!.from.file.path} and ${from.file.path}`,
+            `say which one it exports: export {${name}} from '…'.`,
+          );
         }
       }
     }
-    return isType ? 'type' : null;
+    return found?.name ?? (isType ? 'type' : null);
   }
 
   /**
@@ -869,7 +876,13 @@ class Linker {
           specifier.type === 'ImportSpecifier'
             ? specifierName(specifier.imported)
             : 'default';
-        const target = this.exportedName(from, imported);
+        let target: string | null;
+        try {
+          target = this.exportedName(from, imported);
+        } catch (error) {
+          locateError(error, specifier.loc?.start);
+          throw error;
+        }
         if (target === null) {
           throw errorAt(
             specifier,

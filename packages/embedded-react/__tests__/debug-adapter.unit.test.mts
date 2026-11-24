@@ -77,7 +77,11 @@ class FakeGdb {
     this.erbRequests.push(request);
     switch (request.do) {
       case 'info':
-        return {files: ['App.tsx', 'parts/Card.tsx'], source: '', hook: true};
+        return {
+          files: ['App.tsx', 'parts/Card.tsx', '../shared/Row.tsx'],
+          source: '',
+          hook: true,
+        };
       case 'status':
         return this.status;
       case 'breakpoints':
@@ -639,6 +643,48 @@ describe('debug adapter', () => {
       ['onPress', 12, {name: 'Card.tsx', path: cardPath}],
       ['update', 40, {name: 'App.tsx', path: APP_PATH}],
     ]);
+  });
+
+  it("maps a file outside the entry's folder by its path from the entry", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    const rowPath = '/work/shared/Row.tsx';
+    const set = await editor.request('setBreakpoints', {
+      source: {path: rowPath},
+      breakpoints: [{line: 7}],
+    });
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'breakpoints',
+      file: '../shared/Row.tsx',
+      breakpoints: [{line: 7}],
+    });
+    expect(set.body.breakpoints[0]).toMatchObject({verified: true, line: 7});
+
+    editor.gdb.status = {
+      loaded: true,
+      hookStop: true,
+      frames: [{name: 'onPress', file: 2, line: 7}],
+      hit: [1],
+    };
+    editor.gdb.frames = [
+      {id: 1, name: 'erb_debug_break', line: 874},
+      {id: 2, name: 'erb_vm_run [../shared/Row.tsx:7  onPress]', line: 914},
+      {id: 3, name: 'main', line: 10},
+    ];
+    const stopped = editor.nextEvent('stopped');
+    editor.gdb.event('stopped', {reason: 'breakpoint', threadId: 1});
+    await stopped;
+    const stack = await editor.request('stackTrace', {threadId: 1});
+    expect(stack.body.stackFrames[0].source).toEqual({
+      name: 'Row.tsx',
+      path: rowPath,
+    });
+    // Another file of the same name elsewhere isn't the app's.
+    await editor.request('setBreakpoints', {
+      source: {path: '/work/other/Row.tsx'},
+      breakpoints: [{line: 7}],
+    });
+    expect(editor.gdb.asked.at(-1)).toBe('setBreakpoints');
   });
 
   it('takes the fault checkbox itself and hands GDB its own filters', async () => {

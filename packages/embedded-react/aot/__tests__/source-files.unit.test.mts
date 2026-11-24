@@ -279,6 +279,55 @@ describe('an app split across files', () => {
     ]);
   });
 
+  it('refuses a name two passed-on files export, and takes one both pass on from the same file', () => {
+    const other = CARD.replace('const STEP = 2;', 'const STEP = 4;');
+    expect(
+      failure(appOf("import {Card} from './parts';", '<Card />'), {
+        'parts/index.ts': "export * from './Card';\nexport * from './Other';\n",
+        'parts/Card.tsx': CARD,
+        'parts/Other.tsx': other,
+      }),
+    ).toMatch(
+      /parts\/index\.ts passes Card on from both parts\/Card\.tsx and parts\/Other\.tsx\n {2}at App\.tsx:3:9/,
+    );
+    expect(
+      programOf(appOf("import {Card} from './parts';", '<Card />'), {
+        'parts/index.ts': "export * from './a';\nexport * from './b';\n",
+        'parts/a.ts': "export * from './Card';\n",
+        'parts/b.ts': "export {Card} from './Card';\n",
+        'parts/Card.tsx': CARD,
+      }),
+    ).toBe(
+      programOf(appOf("import {Card} from './Card';", '<Card />'), {
+        'Card.tsx': CARD,
+      }),
+    );
+  });
+
+  it('refuses two .svg files of one name', () => {
+    const svgHead = HEAD.replace('Pressable,', 'Pressable, Svg,');
+    expect(
+      failure(
+        svgHead +
+          "import icon from './icon.svg';\n" +
+          "import {Card} from './parts/Card';\n" +
+          'export function App() {\n' +
+          '  return <View><Svg source={icon} /><Card /></View>;\n' +
+          '}\n',
+        {
+          'parts/Card.tsx':
+            svgHead +
+            "import icon from './icon.svg';\n" +
+            'export function Card() {\n' +
+            '  return <Svg source={icon} />;\n' +
+            '}\n',
+        },
+      ),
+    ).toMatch(
+      /two \.svg files are named "icon" \(\.\/parts\/icon\.svg and \.\/icon\.svg\)/,
+    );
+  });
+
   it('never merges a file that declares native modules, however it is reached', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'source-files-'));
     const files: Record<string, string> = {
