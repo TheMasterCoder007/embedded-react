@@ -39,7 +39,8 @@ extern "C"
     int er_web_aot_init(int screen_width, int screen_height);
 
     /**
-     * @brief Loads a package in place of the running app. One that is refused leaves the running app as it was.
+     * @brief Loads a package in place of the running app. One that is refused leaves the running app as it was. One
+     *        that passes its checks and then stops as it starts has taken its place: er_web_aot_running() says which.
      *
      * @param[in] package        The package's bytes; copied.
      * @param[in] length         How many.

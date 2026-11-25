@@ -64,6 +64,13 @@
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/** @brief A package kept in memory after a load that failed. */
+typedef struct KeptPackage
+{
+    struct KeptPackage* next;
+    uint32_t* package;
+} KeptPackage;
+
 static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
 static BitmapFont s_fonts[FONT_COUNT];
 static ErAssetsStorage s_font_storage = {.fonts = s_fonts, .font_count = FONT_COUNT};
@@ -74,9 +81,10 @@ static int s_height;     /**< The app's height in pixels. */
 static int s_dirty_top;  /**< The first row the last pump changed, or -1 for none. */
 static int s_dirty_rows; /**< How many rows from there. */
 
-static uint32_t* s_package;               /**< The running package, which the runtime reads in place. */
-static size_t s_package_bytes;            /**< Its size. */
-static char s_error[ERROR_MESSAGE_BYTES]; /**< Why the last load was refused. */
+static uint32_t* s_package;                 /**< The running package, which the runtime reads in place. */
+static struct KeptPackage* s_kept_packages; /**< Packages the runtime may still read, after loads that failed. */
+static size_t s_package_bytes;              /**< Its size. */
+static char s_error[ERROR_MESSAGE_BYTES];   /**< Why the last load was refused. */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -160,6 +168,30 @@ static void present(void)
     }
 }
 
+/** @brief Keeps a package the runtime may still read. */
+static void keep_package(uint32_t* package)
+{
+    KeptPackage* kept = package ? malloc(sizeof(*kept)) : NULL;
+    if (kept)
+    {
+        kept->package = package;
+        kept->next = s_kept_packages;
+        s_kept_packages = kept;
+    }
+}
+
+/** @brief Frees the kept packages, once the runtime reads none of them. */
+static void free_kept_packages(void)
+{
+    while (s_kept_packages)
+    {
+        KeptPackage* kept = s_kept_packages;
+        s_kept_packages = kept->next;
+        free(kept->package);
+        free(kept);
+    }
+}
+
 /** @brief The config every load uses, at the simulator's size. */
 static ErbConfig runtime_config(void)
 {
@@ -230,16 +262,28 @@ int er_web_aot_load(const uint8_t* package, int length, double wall_clock_ms)
     }
     memcpy(copy, package, package_bytes);
     erb_set_wall_clock((int64_t)wall_clock_ms);
-    if (!load(copy, package_bytes))
+    const bool loaded = load(copy, package_bytes);
+    if (!loaded && erb_running())
     {
-        /* The app that was running still reads its own package. */
+        /* The package was refused, and the app that was running still reads its own. */
         free(copy);
         return 0;
     }
-    free(s_package);
+    if (loaded)
+    {
+        /* The runtime reads the new package alone now. */
+        free_kept_packages();
+        free(s_package);
+    }
+    else
+    {
+        /* Nothing runs. A package that passed its checks and stopped as it started took the old app's place, and one
+           that was refused didn't, so the runtime may read either: both are kept until a package loads. */
+        keep_package(s_package);
+    }
     s_package = copy;
     s_package_bytes = package_bytes;
-    return 1;
+    return loaded ? 1 : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE

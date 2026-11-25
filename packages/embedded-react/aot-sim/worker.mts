@@ -94,6 +94,7 @@ interface SimulatorModule {
   _er_web_aot_init(width: number, height: number): number;
   _er_web_aot_load(address: number, length: number, clockMs: number): number;
   _er_web_aot_error(): number;
+  _er_web_aot_running(): number;
   _er_web_aot_resize(width: number, height: number): number;
   _er_web_aot_pump(deltaMs: number): number;
   _er_web_aot_touch(phase: number, x: number, y: number): void;
@@ -223,6 +224,7 @@ function load(message: Extract<ToWorker, {kind: 'load'}>): void {
     width = message.width;
     height = message.height;
   }
+  const ranBefore = width > 0 && simulator._er_web_aot_running() !== 0;
   const previous = appDebugger.file;
   const previousSource = previous ? sourcePath : '';
   // The hook writes the breakpoints for the new build as it loads, so the debugger has its debug file first.
@@ -236,16 +238,23 @@ function load(message: Extract<ToWorker, {kind: 'load'}>): void {
   );
   simulator._free(address);
   if (!ok) {
-    // The app that was running still runs.
-    if (previous) {
-      appDebugger.setDebugFile(previous, previousSource);
-      appDebugger.layoutChanged();
+    const why = simulator.UTF8ToString(simulator._er_web_aot_error());
+    if (simulator._er_web_aot_running()) {
+      // A refused package leaves the app that was running as it was.
+      if (previous) {
+        appDebugger.setDebugFile(previous, previousSource);
+        appDebugger.layoutChanged();
+      }
+      post({kind: 'loaded', ok: false, error: why});
+    } else {
+      // The new build took the old app's place and stopped as it started, so nothing runs.
+      sourcePath = message.sourcePath;
+      post({
+        kind: 'loaded',
+        ok: false,
+        error: ranBefore ? `${why} (the app that was running has ended)` : why,
+      });
     }
-    post({
-      kind: 'loaded',
-      ok: false,
-      error: simulator.UTF8ToString(simulator._er_web_aot_error()),
-    });
   } else {
     sourcePath = message.sourcePath;
     post({
