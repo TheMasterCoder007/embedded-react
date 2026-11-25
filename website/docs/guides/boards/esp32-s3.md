@@ -203,7 +203,7 @@ The thermostat demo picks its wide layout at 800×480.
 The `flow-b-debug` preset is the Flow B firmware with the [debugger's hook](../debugging.md#what-it-needs). In
 VS Code, open `examples/esp32/esp32-s3` and press F5: it builds that firmware and the thermostat demo, flashes
 what changed, and attaches over the chip's built-in JTAG. A breakpoint in `demos/thermostat/App.jsx` then stops
-the board. [The board examples](../debugging.md#the-board-examples) says what it needs.
+the board. See [The board examples](../debugging.md#the-board-examples) for what it needs.
 
 ## WiFi
 

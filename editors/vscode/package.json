@@ -127,7 +127,7 @@
               },
               "cli": {
                 "type": "string",
-                "description": "The embedded-react CLI to run the debug adapter from, over the \"embedded-react.cli\" setting. Without either, the package in the project's node_modules."
+                "description": "The embedded-react CLI that runs the debug adapter. It is used before the \"embedded-react.cli\" setting, and when neither is set the adapter runs from the package in the project's node_modules."
               },
               "server": {
                 "type": "array",
@@ -226,7 +226,7 @@
               },
               "cli": {
                 "type": "string",
-                "description": "The embedded-react CLI to run the debug adapter from, over the \"embedded-react.cli\" setting. Without either, the package in the project's node_modules."
+                "description": "The embedded-react CLI that runs the debug adapter. It is used before the \"embedded-react.cli\" setting, and when neither is set the adapter runs from the package in the project's node_modules."
               },
               "setupCommands": {
                 "type": "array",

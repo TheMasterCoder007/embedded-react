@@ -169,7 +169,8 @@ function stLink(name, target) {
  * and attaches through the board's probe.
  *
  * @param {string} boardName
- * @param {string | null} firmware  The firmware's ELF, or null for where the board example leaves it.
+ * @param {string | null} firmware  The firmware's ELF from the project's folder, or null for where the board
+ *   example leaves it.
  */
 function editorFiles(boardName, firmware) {
   const board = BOARDS[boardName];
@@ -219,11 +220,10 @@ function editorFiles(boardName, firmware) {
       request: 'attach',
       name: `Debug the app on the ${name}`,
       preLaunchTask: board.flash ? 'Build and flash' : 'App: build',
-      program: firmware
-        ? isAbsolute(firmware)
+      program:
+        firmware && isAbsolute(firmware)
           ? firmware
-          : `\${workspaceFolder}/${firmware.replaceAll('\\', '/')}`
-        : `\${workspaceFolder}/${elf}`,
+          : `\${workspaceFolder}/${firmware ?? elf}`,
       debugFile: '${workspaceFolder}/dist/app.erdbg',
       gdb,
       ...(gdbOnMac ? {osx: {gdb: gdbOnMac}} : {}),
@@ -539,7 +539,16 @@ if (boardArg) {
   const editorDirectory = join(destinationDir, '.vscode');
   mkdirSync(editorDirectory, {recursive: true});
   for (const [name, contents] of Object.entries(
-    editorFiles(boardArg, firmwareArg),
+    // A relative --firmware is a path as the shell takes it, so it is kept from the new project's folder.
+    editorFiles(
+      boardArg,
+      firmwareArg && !isAbsolute(firmwareArg)
+        ? relative(
+            destinationDir,
+            resolve(process.cwd(), firmwareArg),
+          ).replaceAll('\\', '/')
+        : firmwareArg,
+    ),
   )) {
     writeFileSync(
       join(editorDirectory, name),

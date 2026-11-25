@@ -435,8 +435,8 @@ npm create embedded-react@latest my-app -- --board esp32-s3 --firmware ../firmwa
 ```
 
 `--board` takes `esp32-s3`, `rp2040-touch-lcd-1.69`, `stm32f7`, `stm32h7` or `stm32h7-dual-bank` (and
-`esp32-2432s028r`, for its build and flash tasks alone). `--firmware` is the firmware's ELF, from the project's
-folder. F5 then builds the app, flashes it when it changed, and attaches. The firmware is yours to build and
+`esp32-2432s028r`, for its build and flash tasks alone). `--firmware` is the firmware's ELF, as a path
+from where you run the command. F5 then builds the app, flashes it when it changed, and attaches. The firmware is yours to build and
 flash: the project only reads its ELF. An STM32 gets no flash task, since how a package reaches it is the
 firmware's own.
 
