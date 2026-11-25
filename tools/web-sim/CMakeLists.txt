@@ -60,6 +60,11 @@ set(ERUI_MAX_VECTOR_NODES     "64"   CACHE STRING "" FORCE)  # concurrent vector
 
 set(ER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
+# The Flow B simulator's runtime has the debug hook, and its host serves the debugger.
+set(ERB_DEBUG_HOOK  ON    CACHE BOOL   "" FORCE)
+set(ERB_DEBUG_HOST  ON    CACHE BOOL   "" FORCE)
+set(ERB_DEBUG_STOPS "256" CACHE STRING "" FORCE)
+
 # The QuickJS bridge brings in the engine + QuickJS-ng + er_runtime. We don't need its aux executables.
 set(ER_BRIDGE_QUICKJS_SMOKE   OFF CACHE BOOL "" FORCE)
 set(ER_BRIDGE_QUICKJS_RUNTEST OFF CACHE BOOL "" FORCE)
@@ -106,4 +111,29 @@ target_link_options(websim PRIVATE
         # web: the simulator host page. node: the consumer `embedded-react build` loads this same module to
         # compile the app bundle to QuickJS bytecode (er_web_compile_bytecode) with no native toolchain.
         "-sENVIRONMENT=web,node"
+)
+
+# The Flow B simulator: the Flow B runtime with no QuickJS, which loads a package. Its host runs it in Node
+# (packages/embedded-react/aot-sim).
+add_executable(websim-aot
+        ${ER_ROOT}/backends/software/renderer_backend.c
+        ${ER_ROOT}/backends/web/aot_backend.c
+)
+set_target_properties(websim-aot PROPERTIES OUTPUT_NAME embedded-react-aot)
+target_include_directories(websim-aot PRIVATE
+        ${ER_ROOT}/backends/software
+        ${ER_ROOT}/backends/web
+)
+target_link_libraries(websim-aot PRIVATE erb-runtime)
+
+set(ER_WEB_AOT_EXPORTS
+        "_er_web_aot_init,_er_web_aot_load,_er_web_aot_error,_er_web_aot_running,_er_web_aot_resize,_er_web_aot_pump,_er_web_aot_touch,_er_web_aot_framebuffer,_er_web_aot_dirty_top,_er_web_aot_debug,_malloc,_free")
+
+target_link_options(websim-aot PRIVATE
+        "-sMODULARIZE=1"
+        "-sEXPORT_NAME=createEmbeddedReactAot"
+        "-sALLOW_MEMORY_GROWTH=1"
+        "-sEXPORTED_RUNTIME_METHODS=HEAPU8,UTF8ToString"
+        "-sEXPORTED_FUNCTIONS=${ER_WEB_AOT_EXPORTS}"
+        "-sENVIRONMENT=web,worker,node"
 )

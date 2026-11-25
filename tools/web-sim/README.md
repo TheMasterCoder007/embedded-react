@@ -30,6 +30,7 @@ stale after engine changes; rebuild it.
 | File | Role |
 |---|---|
 | `CMakeLists.txt` | Emscripten build: engine + QuickJS bridge + `backends/software` + `backends/web` → the wasm module |
+| | It also builds the Flow B simulator (`embedded-react-aot`): the Flow B runtime with the debug hook and no QuickJS, which `embedded-react dev --aot` runs in Node |
 | `build.mts` | drives `cmake` with the Emscripten toolchain → `public/`, and stages the package's `sim/` |
 | `dev.mts` | the repo dev loop over `demos/`: a thin wrapper over the shared `packages/embedded-react/sim-server.mts` |
 | `bundle-app.mts`, `serve.mts` | one-shot bundle and a static server, for previewing a prebuilt bundle |

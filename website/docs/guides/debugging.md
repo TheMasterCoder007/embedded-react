@@ -11,6 +11,9 @@ lines, and C breakpoints work beside them in the same session.
 Nothing here needs a serial port or a build of the app made for debugging. The commands that read run no code on
 the board, so they work on a board that has stopped answering.
 
+With no board at hand, the same editor session runs against the simulator:
+[In the simulator, with no board](#in-the-simulator-with-no-board).
+
 ## What it needs
 
 - **A probe and a GDB server for it.** An ST-Link on an STM32, the built-in JTAG on an ESP32-S3, a CMSIS-DAP debug
@@ -493,6 +496,56 @@ A breakpoint in a C file works as in any C debug session, and so does **Pause**.
 - **The Variables pane** has the C frame's own variables, and **App state** on every frame.
 - **The step buttons** step C.
 
+## In the simulator, with no board
+
+The Flow B simulator runs the app as a package, in the same runtime a board runs, and an editor debugs it there
+with nothing else installed: no probe, no GDB and no firmware.
+
+```bash
+npx embedded-react dev --aot
+```
+
+That compiles the app, serves the simulator's page, and reloads the app on every save. `--port` picks the port
+(3333 when left out), and `--screen 800x480` the panel's size. Without `--screen` the panel is the size the app's
+first layout was built for, and the page's size menu changes it.
+
+With the [extension](#install-the-extension) installed, this configuration starts the simulator on F5, shows it
+in a split to the right of the code, and ends it with the session:
+
+```json
+{
+  "type": "embedded-react",
+  "request": "launch",
+  "name": "Debug the app in the simulator",
+  "simulator": true,
+  "cwd": "${workspaceFolder}"
+}
+```
+
+To debug a simulator you started yourself, attach to it:
+
+```json
+{
+  "type": "embedded-react",
+  "request": "attach",
+  "name": "Attach to the simulator",
+  "simulator": "localhost:3333"
+}
+```
+
+The editor's side is what it is on a board: breakpoints with conditions, hit counts and log messages, the step
+buttons, the app's frames, its locals and state in the Variables pane, hover and Watch, Break on Value Change on a
+state, and the stop at a fault. What differs:
+
+- **A stop freezes the panel.** The page dims it and says so. The app counts no time while it is stopped, so
+  timers and animations carry on from where they were.
+- **A save reloads the app during a session**, and the breakpoints move to the new build. The app starts over, as
+  it does on a board. A save made while the app is stopped loads once it runs on.
+- **There is no C.** The call stack has the app's frames alone, and the Debug Console evaluates the app's
+  expressions directly.
+- **Pause stops the app between its events**, where it has state but no locals.
+- **A package that needs native modules doesn't load.** The simulator has none, and says which module is missing.
+
 ## When it doesn't work
 
 | Symptom                                                                         | Cause and fix                                                                                                                                                              |
@@ -509,6 +562,9 @@ A breakpoint in a C file works as in any C debug session, and so does **Pause**.
 | The board resets during a halt                                                  | The watchdog ran on: [While the board is halted](#while-the-board-is-halted)                                                                                               |
 | The board stays frozen after GDB quits                                          | GDB left it halted. `monitor resume` before `disconnect`, or `disconnectCommands` in the editor                                                                            |
 | `continue` says `Could not insert hardware watchpoint`                          | More states are watched than the chip has hardware watchpoints: an ESP32-S3 has two. Delete one                                                                            |
+| `No simulator at localhost:3333`                                                | An attach found no Flow B simulator there. Start one with `embedded-react dev --aot`, or use the launch configuration                                                      |
+| A simulator launch says `Port 3333 is already in use`                           | A launch starts its own simulator. End the one that runs there, give the configuration another `"port"`, or attach to it instead                                           |
+| The simulator says the prebuilt Flow B simulator is missing                     | The package was installed from source. Build it with `node tools/web-sim/build.mts`, which needs the Emscripten SDK                                                        |
 
 A board with no probe attached when it faulted has a different tool: the firmware records the fault, and
 `embedded-react decode-fault` traces it on the host.

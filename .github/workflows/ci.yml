@@ -304,5 +304,10 @@ jobs:
       - name: Install the package's dependencies
         working-directory: packages/embedded-react
         run: npm ci
+      # Plays an editor's debug session against the Flow B simulator, which this job has just built: breakpoints,
+      # stepping, state, a save's reload and a fault, with no board and no GDB.
+      - name: Debug an app in the Flow B simulator
+        working-directory: packages/embedded-react
+        run: npm run erb:sim
       - name: Pack → install → build (Flow A + AOT)
         run: node tools/consumer-smoke.mts

@@ -1,7 +1,7 @@
 {
   "name": "embedded-react-debug",
   "displayName": "Embedded React",
-  "description": "Debug an embedded-react app on a board: breakpoints, stepping and state in the app's own source, through a debug probe.",
+  "description": "Debug an embedded-react app in its own source: breakpoints, stepping and state, on a board through a debug probe or in the simulator with no board.",
   "version": "0.25.0",
   "publisher": "embedded-react",
   "license": "Apache-2.0",
@@ -46,6 +46,21 @@
           "type": "string",
           "default": "node",
           "description": "The Node.js that runs the debug adapter."
+        },
+        "embedded-react.openSimulator": {
+          "type": "string",
+          "enum": [
+            "beside",
+            "browser",
+            "never"
+          ],
+          "enumDescriptions": [
+            "Show the simulator in a split to the right of the code.",
+            "Open the simulator in the default browser.",
+            "Leave it closed: its address is printed in the debug console."
+          ],
+          "default": "beside",
+          "description": "Where the simulator shows when a debug session starts it."
         }
       }
     },
@@ -81,11 +96,7 @@
         ],
         "configurationAttributes": {
           "attach": {
-            "required": [
-              "program",
-              "debugFile",
-              "target"
-            ],
+            "required": [],
             "properties": {
               "program": {
                 "type": "string",
@@ -162,18 +173,27 @@
                   "type": "string"
                 },
                 "description": "Environment variables for GDB and the GDB server, over the editor's own. A GDB that picks its Python from PATH needs a PATH with one it was built for."
+              },
+              "simulator": {
+                "type": [
+                  "boolean",
+                  "string"
+                ],
+                "description": "Attach to a Flow B simulator that is running (embedded-react dev --aot), with no board: true, or where it listens, such as localhost:3333."
+              },
+              "port": {
+                "type": "number",
+                "description": "The port the simulator serves.",
+                "default": 3333
               }
             }
           },
           "launch": {
-            "required": [
-              "program",
-              "debugFile"
-            ],
+            "required": [],
             "properties": {
               "program": {
                 "type": "string",
-                "description": "A Flow B host program to run under GDB."
+                "description": "A Flow B host program to run under GDB. Not for the simulator."
               },
               "args": {
                 "type": "array",
@@ -198,7 +218,7 @@
               },
               "cwd": {
                 "type": "string",
-                "description": "The folder the program runs in."
+                "description": "The folder the program runs in, or the app's project for the simulator."
               },
               "setupCommands": {
                 "type": "array",
@@ -213,11 +233,38 @@
                   "type": "string"
                 },
                 "description": "Environment variables for GDB and the GDB server, over the editor's own. A GDB that picks its Python from PATH needs a PATH with one it was built for."
+              },
+              "simulator": {
+                "type": [
+                  "boolean",
+                  "string"
+                ],
+                "description": "Debug the app in the Flow B simulator, with no board: true, or where one listens, such as localhost:3333."
+              },
+              "entry": {
+                "type": "string",
+                "description": "The app's component file, when it isn't ./App.jsx or ./src/App.jsx. For the simulator."
+              },
+              "port": {
+                "type": "number",
+                "description": "The port the simulator serves.",
+                "default": 3333
+              },
+              "screen": {
+                "type": "string",
+                "description": "The simulator's panel size, as <width>x<height>. Without it, the size the app's first layout was built for."
               }
             }
           }
         },
         "initialConfigurations": [
+          {
+            "type": "embedded-react",
+            "request": "launch",
+            "name": "Debug the app in the simulator",
+            "simulator": true,
+            "cwd": "${workspaceFolder}"
+          },
           {
             "type": "embedded-react",
             "request": "attach",
@@ -240,6 +287,27 @@
           }
         ],
         "configurationSnippets": [
+          {
+            "label": "Embedded React: simulator",
+            "description": "Debug a Flow B app in the simulator, with no board or probe.",
+            "body": {
+              "type": "embedded-react",
+              "request": "launch",
+              "name": "Debug the app in the simulator",
+              "simulator": true,
+              "cwd": "^\"\\${workspaceFolder}\""
+            }
+          },
+          {
+            "label": "Embedded React: attach to the simulator",
+            "description": "Debug a Flow B app in a simulator that `embedded-react dev --aot` already runs.",
+            "body": {
+              "type": "embedded-react",
+              "request": "attach",
+              "name": "Attach to the simulator",
+              "simulator": "localhost:${1:3333}"
+            }
+          },
           {
             "label": "Embedded React: board through OpenOCD",
             "description": "Debug a Flow B app on a board with a probe OpenOCD drives, such as an ST-Link.",

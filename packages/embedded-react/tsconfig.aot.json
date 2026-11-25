@@ -33,6 +33,8 @@
     "test/erb-fuzz/*.mts",
     "assets/**/*.mts",
     "hotreload/**/*.mts",
+    "aot-sim/**/*.mts",
+    "test/erb-sim/*.mts",
     "*.mts",
     "src/**/*.mts",
     "../../tools/**/*.mts",

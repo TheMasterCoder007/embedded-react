@@ -12,6 +12,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Added
 
+- `embedded-react dev --aot` runs a Flow B app in a simulator, with a reload on every save.
+- Flow B: an editor debugs an app in the simulator with no board, probe or GDB (`"simulator": true` in a launch
+  configuration).
+
 - Flow B: every `build --aot` and `dev --aot` writes `app.erdbg` beside the package, with each state's name
   and each node's source line, for host tools.
 - `embedded-react where <function> <offset>` prints the source line of a Flow B fault.

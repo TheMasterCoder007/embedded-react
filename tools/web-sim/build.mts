@@ -229,6 +229,15 @@ const stage = (dir: string) => {
     resolve(BUILD_DIR, 'embedded-react.wasm'),
     resolve(dir, 'embedded-react.wasm'),
   );
+  // The Flow B simulator runs in Node only, so it has no .js copy.
+  copyFileSync(
+    resolve(BUILD_DIR, 'embedded-react-aot.js'),
+    resolve(dir, 'embedded-react-aot.cjs'),
+  );
+  copyFileSync(
+    resolve(BUILD_DIR, 'embedded-react-aot.wasm'),
+    resolve(dir, 'embedded-react-aot.wasm'),
+  );
 };
 stage(OUT_DIR);
 
@@ -243,7 +252,7 @@ copyFileSync(
 );
 
 console.log(
-  '✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + packages/embedded-react/sim/',
+  '✓ built embedded-react.{js,wasm} and embedded-react-aot.{cjs,wasm} → tools/web-sim/public/ + packages/embedded-react/sim/',
 );
 console.log(
   '  repo preview: node tools/web-sim/dev.mts [demo]   ·   consumer CLI: npx embedded-react dev',
