@@ -28,6 +28,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -43,7 +44,13 @@ import {
 } from './hotreload/pack-split.mts';
 import {runDeviceDevServer} from './hotreload/dev-device.mts';
 import {detectDevicePorts, preferCalloutPath} from './hotreload/uploader.mts';
-import {boardByName, flashSlot, packSlot} from './flash.mts';
+import {
+  boardByName,
+  flashSlot,
+  flashStamp,
+  flashStampPath,
+  packSlot,
+} from './flash.mts';
 import {
   ELF_MACHINE_ARM,
   ELF_MACHINE_RISCV,
@@ -105,10 +112,12 @@ Usage:
                                                            node lines, for host tools
                                                  --aot --bake  → app.erpkg.c (the package as a const
                                                            array, for a board with no spare partition)
-  embedded-react flash [package] --board <name> [--port <p>]
+  embedded-react flash [package] --board <name> [--port <p>] [--changed]
                                                Write a package to the board's staging slot. The firmware
                                                  runs it at the next boot if it passes verification, and
                                                  keeps the last good package until then.
+                                                 --changed  → write nothing when the last flash from
+                                                           here wrote this package to this board
   embedded-react pack [package] --board <name> [--slot a|b] [--sequence <n>] [--out <dir>]
                                                Write a slot's image to a file, for a factory line or a
                                                  drag-and-drop UF2, without a board attached.
@@ -808,19 +817,38 @@ function pack(args: string[]): void {
   }
 }
 
-/** `embedded-react flash [package] --board <name> [--port p]` */
+/** `embedded-react flash [package] --board <name> [--port p] [--changed]` */
 function flash(args: string[]): void {
   const cwd = process.cwd();
   const boardName = optValue(args, '--board')?.value;
   try {
     const board = boardByName(boardName);
     const [explicit] = bareArgs(args, ['--board', '--port']);
+    const packageBytes = readPackageOrExit(cwd, explicit);
+    // What the last flash from here wrote, kept beside the package.
+    const stampPath = flashStampPath(
+      resolve(cwd, explicit ?? 'dist/app.erpkg'),
+    );
+    const port = optValue(args, '--port')?.value;
+    const stamp = flashStamp(boardName!, packageBytes, port);
+    if (
+      args.includes('--changed') &&
+      existsSync(stampPath) &&
+      readFileSync(stampPath, 'utf8') === stamp
+    ) {
+      console.log(
+        '✓ The last flash wrote this package to the board: nothing to write.',
+      );
+      return;
+    }
+    rmSync(stampPath, {force: true});
     const written = flashSlot({
-      packageBytes: readPackageOrExit(cwd, explicit),
+      packageBytes,
       board,
-      port: optValue(args, '--port')?.value,
+      port,
       log: line => console.log(line),
     });
+    writeFileSync(stampPath, stamp);
     console.log(
       `✓ Package written to slot ${written.slot}, sequence ${written.sequence}. The board runs it at its next boot if it passes verification` +
         (written.lastGood

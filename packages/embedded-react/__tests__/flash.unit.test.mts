@@ -29,6 +29,7 @@ import {
   boardByName,
   checkPackage,
   flashSlot,
+  flashStamp,
   packSlot,
   pickSlot,
   readSlotSequence,
@@ -547,8 +548,26 @@ describe('flashing', () => {
         packageBytes: packageBytes(),
         board: BOARDS['esp32-s3'],
         run: failing,
+        sleep: () => {},
       }),
     ).toThrow(/no serial port/);
+  });
+
+  it('tries again when the board is still coming back from a reset', () => {
+    const board = fakeBoard({0x8000: partitionTable(espSlots)});
+    let calls = 0;
+    const waits = [];
+    const written = flashSlot({
+      packageBytes: packageBytes(),
+      board: BOARDS['esp32-2432s028r'],
+      run: (...args) =>
+        ++calls === 1
+          ? {status: 2, stderr: 'no serial port', stdout: ''}
+          : board.run(...args),
+      sleep: ms => waits.push(ms),
+    });
+    expect(written.slot).toBe('a');
+    expect(waits).toHaveLength(1);
   });
 });
 
@@ -681,5 +700,31 @@ describe('boards', () => {
         bytes: value('ER_PACKAGE_SLOT_BYTES'),
       },
     ]);
+  });
+});
+
+describe('the stamp of a flash', () => {
+  it('is the same for the same package on the same board', () => {
+    expect(flashStamp('esp32-s3', packageBytes())).toBe(
+      flashStamp('esp32-s3', packageBytes()),
+    );
+  });
+
+  it('differs for another board, port or package', () => {
+    const other = Buffer.from(
+      emitPackageContainer({program: Buffer.alloc(32, 0x5b)}).bytes,
+    );
+    const stamp = flashStamp('esp32-s3', packageBytes());
+    expect(flashStamp('esp32-2432s028r', packageBytes())).not.toBe(stamp);
+    expect(flashStamp('esp32-s3', other)).not.toBe(stamp);
+    expect(flashStamp('esp32-s3', packageBytes(), '/dev/cu.test')).not.toBe(
+      stamp,
+    );
+  });
+
+  it('refuses bytes that are not a package', () => {
+    expect(() => flashStamp('esp32-s3', Buffer.from('nothing'))).toThrow(
+      'Not a package',
+    );
   });
 });

@@ -347,7 +347,7 @@ debug_path = None
 
 def load_debug_file(path):
     global debug_file, debug_path
-    path = os.path.expanduser(path)
+    path = os.path.normpath(os.path.expanduser(path))
     try:
         with open(path, encoding="utf-8") as handle:
             loaded = json.load(handle)
@@ -416,6 +416,31 @@ def build_hex(build_id):
     return "%08x" % (build_id & 0xFFFFFFFF)
 
 
+def build_mismatch(runtime):
+    """Why the debug file isn't the one of the app the board runs, or None when it is, or when no app is loaded."""
+    if debug_file is None or not runtime.flag("loaded"):
+        return None
+    build_id = runtime.u32("build_id")
+    if build_id == debug_file["buildId"]:
+        return None
+    return (
+        "the board runs build %s, but %s is build %s: build the app and flash it again, or load the debug file of the "
+        "build the board runs" % (build_hex(build_id), debug_path, build_hex(debug_file["buildId"]))
+    )
+
+
+def reread_debug_file(runtime):
+    """After a load: a debug file that was built again since it was read is read again, so a package flashed during
+    a session keeps its breakpoints. Returns why the file still isn't the loaded app's, or None when it is."""
+    if build_mismatch(runtime) is None:
+        return None
+    try:
+        load_debug_file(debug_path)
+    except gdb.GdbError:
+        pass
+    return build_mismatch(runtime)
+
+
 class App:
     """The running app: the descriptors, and the debug file's panel for the layout the board runs."""
 
@@ -427,11 +452,9 @@ class App:
         self.build_id = self.runtime.u32("build_id")
         if need_running and not self.loaded:
             raise ErbError("no app is running: `erb error` says why")
-        if self.loaded and self.build_id != debug_file["buildId"]:
-            raise ErbError(
-                "the board runs build %s, but %s is build %s: load the debug file of the build the board runs"
-                % (build_hex(self.build_id), debug_path, build_hex(debug_file["buildId"]))
-            )
+        mismatch = build_mismatch(self.runtime)
+        if mismatch:
+            raise ErbError(mismatch)
         panel = self.runtime.u16("panel") if self.loaded else 0
         if panel >= len(debug_file["panels"]):
             raise ErbError("the board runs layout %d, but the debug file has %d" % (panel, len(debug_file["panels"])))
@@ -2508,6 +2531,11 @@ class HookBreakpoint(gdb.Breakpoint):
             hook.set_step(STEP_NONE)
             for entry in breakpoints:
                 entry["passes"] = 0
+            mismatch = reread_debug_file(runtime)
+            if mismatch:
+                # Stops here, before a breakpoint that could never fire is waited for.
+                self.report("erb: %s" % mismatch)
+                return True
             if breakpoints:
                 try:
                     write_stops()
@@ -2826,7 +2854,7 @@ def dap_status(request):
     try:
         app = App()
     except gdb.GdbError as error:
-        return {"loaded": False, "note": str(error), "fault": fault}
+        return {"loaded": False, "note": str(error), "fault": fault, "mismatch": dap_mismatch()}
     functions = app.panel["functions"]
     chain = app.frame_chain() if app.runtime.flag("in_vm") else []
     frames = []
@@ -3082,10 +3110,22 @@ def settle_threads():
         events.inferior_running = False
 
 
+def dap_mismatch():
+    """Why the debug file isn't the loaded app's, for the adapter to refuse, or None."""
+    try:
+        return build_mismatch(Runtime())
+    except (gdb.GdbError, gdb.error, gdb.MemoryError):
+        return None
+
+
 def dap_sync(request):
-    """After attaching: the app doesn't count the halt, and the hook holds the breakpoints set before."""
+    """After attaching: the app doesn't count the halt, and the hook holds the breakpoints set before. A debug file
+    of another build than the app's is said instead, for the adapter to refuse."""
     settle_threads()
     mark_halted()
+    mismatch = dap_mismatch()
+    if mismatch:
+        return {"mismatch": mismatch}
     if fault_stops[0] and has_hook():
         hook_breakpoint()
     if breakpoints:

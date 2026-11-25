@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "embedded-react",
+      "request": "attach",
+      "name": "Debug the thermostat on the ESP32-S3",
+      "preLaunchTask": "Build and flash",
+      "cli": "${workspaceFolder}/../../../packages/embedded-react/cli.mts",
+      "program": "${workspaceFolder}/build-flow-b-debug/embedded-react-esp32.elf",
+      "debugFile": "${workspaceFolder}/../../../demos/thermostat/dist/app.erdbg",
+      "gdb": "xtensa-esp32s3-elf-gdb",
+      "server": [
+        "openocd",
+        "-f",
+        "board/esp32s3-builtin.cfg",
+        "-c",
+        "init; reset halt"
+      ],
+      "serverReady": "Listening on port 3333 for gdb connections",
+      "target": "localhost:3333",
+      "disconnectCommands": ["monitor resume"]
+    }
+  ]
+}

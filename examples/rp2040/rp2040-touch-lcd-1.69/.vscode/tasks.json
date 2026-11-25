@@ -1,0 +1,64 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Firmware: configure",
+      "detail": "The firmware with the debugger's hook, in build-debug. Needs PICO_SDK_PATH.",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--preset", "debug"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Firmware: build and flash",
+      "detail": "Written through the debug probe, when it changed.",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "--preset", "debug", "--target", "flash-probe"],
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "App: build",
+      "detail": "The watch-face demo, as a Flow B package with its debug file.",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/../../../packages/embedded-react/cli.mts",
+        "build",
+        "--aot"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/../../../demos/watch-face"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "App: flash",
+      "detail": "Writes the package over USB when it isn't the one the last flash wrote.",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/../../../packages/embedded-react/cli.mts",
+        "flash",
+        "--board",
+        "rp2040-touch-lcd-1.69",
+        "--changed"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/../../../demos/watch-face"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build and flash",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Firmware: configure",
+        "Firmware: build and flash",
+        "App: build",
+        "App: flash"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

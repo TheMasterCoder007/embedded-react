@@ -246,3 +246,17 @@ pico_enable_stdio_usb(embedded-react-watch 1)
 pico_enable_stdio_uart(embedded-react-watch 0)
 
 pico_add_extra_outputs(embedded-react-watch)  # → .uf2 for BOOTSEL drag-and-drop / picotool
+
+# `cmake --build <dir> --target flash-probe` writes the firmware through a CMSIS-DAP debug probe, when it changed
+# since the last write from this build folder. Delete flash-probe.stamp there to write it again.
+set(ER_FLASH_STAMP "${CMAKE_BINARY_DIR}/flash-probe.stamp")
+add_custom_command(
+    OUTPUT "${ER_FLASH_STAMP}"
+    COMMAND openocd -f interface/cmsis-dap.cfg -f target/rp2040.cfg -c "adapter speed 5000"
+            -c "program {$<TARGET_FILE:embedded-react-watch>} verify reset exit"
+    COMMAND ${CMAKE_COMMAND} -E touch "${ER_FLASH_STAMP}"
+    DEPENDS embedded-react-watch
+    USES_TERMINAL
+    VERBATIM
+)
+add_custom_target(flash-probe DEPENDS "${ER_FLASH_STAMP}")

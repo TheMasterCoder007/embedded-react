@@ -37,6 +37,27 @@ npx embedded-react pack --board rp2040-touch-lcd-1.69
 To send a package on every save instead, build the firmware with `-DER_HOTRELOAD=1` and run
 `npx embedded-react dev --device PORT --aot`.
 
+## Debug the app
+
+`cmake --preset debug` configures the firmware with the hook for breakpoints, stepping and the stop at a fault
+(`ERB_DEBUG_HOOK=1`) in `build-debug/`, and `cmake --build --preset debug --target flash-probe` builds it and
+writes it through a CMSIS-DAP debug probe when it changed.
+
+In VS Code, open this folder and press F5. It builds that firmware and the watch-face demo, flashes what changed,
+and attaches through the probe, so a breakpoint in `demos/watch-face/App.tsx` stops the board. It needs:
+
+- a CMSIS-DAP probe, such as the Raspberry Pi Debug Probe, on the board's SWCLK, SWDIO and ground, and the board's
+  own USB port connected too: the app is written through it
+- `PICO_SDK_PATH` set where VS Code starts, and OpenOCD, a GDB with Python and a `picotool` with USB support on
+  `PATH`
+- `npm install` run once in `packages/embedded-react` and in the repository's root
+- the [extension](https://embedded-react.dev/guides/debugging#install-the-extension)
+
+`.vscode/launch.json` and `.vscode/tasks.json` name the demo and this checkout's CLI by path. Copied out of the
+repository, point them at your app's project and its `embedded-react`.
+
+## How it is put together
+
 `main.c` runs the frame loop and hands the pedometer and tilt to `native_modules.c`, which registers the
 device package's native modules (`../../device`) and posts their events; `board.c` owns the panel, touch, and IMU; `pedometer.c` turns
 accelerometer peaks into steps. `-DER_BOARD_DEBUG=1` prints a 1 Hz

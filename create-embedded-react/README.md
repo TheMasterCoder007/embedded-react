@@ -28,6 +28,17 @@ npm create embedded-react@latest -- --list
 | `thermostat` | A thermostat with a native dial and a 14-day weather panel |
 | `watch-face` | A digital watch face and a bubble level on native modules, sized for a 240×280 panel |
 
+## Debug on a board from VS Code
+
+```bash
+npm create embedded-react@latest my-app -- --board esp32-s3 --firmware ../firmware/build-flow-b-debug/embedded-react-esp32.elf
+```
+
+`--board` adds a `.vscode` folder: F5 builds the app, flashes it when it changed, and attaches through the
+board's probe, or runs it in the simulator. It takes `esp32-s3`, `rp2040-touch-lcd-1.69`, `stm32f7`, `stm32h7`,
+`stm32h7-dual-bank` and `esp32-2432s028r` (tasks only: it has no probe). `--firmware` is the firmware's ELF. See
+[Debugging on a board](https://embedded-react.dev/guides/debugging#a-new-project).
+
 Every template scaffolds the same way: `npm run dev` for the simulator, `npm run dev:device` for hot
 reload on a board, `npm run build` for the device artifact, `npm run export` for a shareable static
 copy of the simulator.

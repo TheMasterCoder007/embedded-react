@@ -27,15 +27,31 @@ With no board at hand, the same editor session runs against the simulator:
 - **For breakpoints, stepping and the stop at a fault, firmware built with `ERB_DEBUG_HOOK=1`.** Reading the app
   needs no option.
 
-`ERB_DEBUG_HOOK` is a CMake option of `runtime/`, off by default. The ESP32-S3 example takes it as
-`idf.py -D ERB_DEBUG_HOOK=1`, and the RP2040 example as `-DERB_DEBUG_HOOK=1` when it is configured. A firmware that
-compiles the runtime's sources itself adds `ERB_DEBUG_HOOK=1` to their compile definitions. With it the VM tests
-one flag before each instruction, so leave it out of a release build.
+`ERB_DEBUG_HOOK` is a CMake option of `runtime/`, off by default. Each board example has a preset that builds its
+firmware with it: `idf.py --preset flow-b-debug` on the ESP32-S3, and `cmake --preset debug` on the RP2040. A
+firmware that compiles the runtime's sources itself adds `ERB_DEBUG_HOOK=1` to their compile definitions. With it
+the VM tests one flag before each instruction, so leave it out of a release build:
+[What the hook costs](#what-the-hook-costs).
 
 The hook holds 16 places, which `ERB_DEBUG_STOPS` changes, at 8 bytes each. A place is one spot in the app's code.
 A breakpoint takes one for each statement that starts on its line, so a line can take more than one, and
 `erb break` says when the breakpoints need more places than the hook has. The RP2040 example has too little RAM
 left beside its framebuffer for 16, and holds 8.
+
+### What the hook costs
+
+Measured in November 2026 on the board examples, against the same firmware without the hook:
+
+| Board    | Flash   | RAM   | A handler, no breakpoint set | A handler, a breakpoint set |
+| -------- | ------- | ----- | ---------------------------- | --------------------------- |
+| ESP32-S3 | 320 B   | 144 B | 8% longer                    | 70% longer                  |
+| RP2040   | 1,144 B | 84 B  | not measured                 | not measured                |
+
+The handler was a loop of 8,000 passes on a timer, 36.5 ms without the hook, 39.3 ms with it and 62.2 ms with a
+breakpoint set on another line. With no breakpoint the VM tests one flag before each instruction. With one, or
+during a step, it also looks each instruction up among the hook's places, and that lasts until the breakpoints
+are removed or the session ends. A handler that sets a few states is far shorter than this one, so the app feels
+the same until a breakpoint sits in code that runs every frame. The RAM is the hook's places, 8 bytes each.
 
 ### A GDB for the board
 
@@ -388,9 +404,58 @@ That writes a `.vsix`. Install it with **Extensions: Install from VSIX**. The ex
 `embedded-react` debug type. The debug adapter is in your project's own `embedded-react` package, so it always
 matches the compiler that wrote `app.erdbg`.
 
+### The board examples
+
+The ESP32-S3 and RP2040 examples have their `.vscode` folder already. Open the example's folder in VS Code and
+press F5:
+
+1. The firmware with the hook is built from its preset, and written to the board when it changed.
+2. The example's demo app is built, and its package written when it isn't the one the last flash wrote.
+3. The session attaches through the board's probe, and a breakpoint in the demo's source stops the board.
+
+| Example                                 | The app            | Firmware goes through | App goes through |
+| --------------------------------------- | ------------------ | --------------------- | ---------------- |
+| `examples/esp32/esp32-s3`               | `demos/thermostat` | the chip's USB port   | the same port    |
+| `examples/rp2040/rp2040-touch-lcd-1.69` | `demos/watch-face` | the debug probe       | the board's USB  |
+
+Once, before the first F5: run `npm install` in `packages/embedded-react` and in the repository's root, and
+install the extension. Start VS Code from a shell that has the board's tools, with `code .`: ESP-IDF exported for
+the ESP32-S3, and `PICO_SDK_PATH`, OpenOCD, a `picotool` with USB support and
+[a GDB with Python](#a-gdb-for-the-board) for the RP2040.
+
+The tasks are in `.vscode/tasks.json`, and each runs by itself from **Tasks: Run Task**. The ESP32 CYD has no
+probe, so it has no configuration.
+
+### A new project
+
+`create-embedded-react` writes the same files for an app of your own:
+
+```bash
+npm create embedded-react@latest my-app -- --board esp32-s3 --firmware ../firmware/build-flow-b-debug/embedded-react-esp32.elf
+```
+
+`--board` takes `esp32-s3`, `rp2040-touch-lcd-1.69`, `stm32f7`, `stm32h7` or `stm32h7-dual-bank` (and
+`esp32-2432s028r`, for its build and flash tasks alone). `--firmware` is the firmware's ELF, as a path
+from where you run the command. F5 then builds the app, flashes it when it changed, and attaches. The firmware is yours to build and
+flash: the project only reads its ELF. An STM32 gets no flash task, since how a package reaches it is the
+firmware's own.
+
+In a project you already have, the pre-launch task is two commands:
+
+```bash
+npx embedded-react build --aot
+npx embedded-react flash --board esp32-s3 --changed
+```
+
+`--changed` writes nothing when the last flash from this project wrote the same package to the same kind of
+board, on the same `--port` when one is given. It doesn't read the board, so it can't tell two boards of one kind
+apart, or see a flash made from elsewhere. The session's [check of the build](#a-debug-file-from-another-build)
+catches both, and the next start flashes.
+
 ### A launch configuration
 
-Add one to `.vscode/launch.json` for your board. Each starts the GDB server with the session and ends it after.
+To write one by hand, add it to `.vscode/launch.json` for your board. Each starts the GDB server with the session
+and ends it after.
 
 An STM32 with an ST-Link:
 
@@ -470,6 +535,16 @@ An RP2040 with a debug probe:
 ```
 
 Once attached, the board keeps running; `"stopOnAttach": true` leaves it halted.
+
+### A debug file from another build
+
+A session checks that `app.erdbg` is the one written with the package the board runs, when it attaches and each
+time the app loads. When it isn't, the session ends there with a message that names both builds, before any
+breakpoint is waited for, and the board runs on. Build the app and flash it, then start again. `flash --changed`
+writes the package at the next start whatever it wrote before.
+
+A package flashed during a session is fine: the debug file is read again when the new app loads, and the
+breakpoints move to it.
 [The debug adapter](../internals/flow-b-packages.md#the-debug-adapter) lists every field.
 
 ### At a stop in the app
@@ -583,7 +658,7 @@ state, and the stop at a fault. What differs:
 | A breakpoint never fires on an ESP32-S3                                         | The chip has had a debug session since its last power-on reset, and the server couldn't read the flash mapping. End the server's arguments with `-c "init; reset halt"`    |
 | A breakpoint never fires on a dual-bank STM32H7                                 | The server's memory map leaves out the second bank, so GDB writes a software breakpoint into flash. Add `-c "set DUAL_BANK 1"` before the target file                      |
 | `erb break` says the firmware has no breakpoint hook                            | Build the firmware with `ERB_DEBUG_HOOK=1`                                                                                                                                 |
-| `the board runs build …, but dist/app.erdbg is build …`                         | The debug file is from another build. Load the one written with the package on the board, or flash the package you just built                                              |
+| `the board runs build …, but dist/app.erdbg is build …`                         | The debug file is from another build. Build the app and flash it again, or load the file written with the package on the board. From an editor, start the session again    |
 | The debug file is another format, or the descriptor another version             | The script, the compiler and the firmware's runtime are from different releases. Use the script from the `embedded-react` release the firmware and the app were built with |
 | `erb_debug doesn't hold the runtime's descriptor`                               | The ELF isn't the one the board runs                                                                                                                                       |
 | The server won't start, or the editor says the port is in use                   | A debug server from an earlier session is still running and holds port 3333. End it                                                                                        |

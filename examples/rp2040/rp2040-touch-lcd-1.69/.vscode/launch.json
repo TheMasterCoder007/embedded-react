@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "embedded-react",
+      "request": "attach",
+      "name": "Debug the watch face on the RP2040",
+      "preLaunchTask": "Build and flash",
+      "cli": "${workspaceFolder}/../../../packages/embedded-react/cli.mts",
+      "program": "${workspaceFolder}/build-debug/embedded-react-watch.elf",
+      "debugFile": "${workspaceFolder}/../../../demos/watch-face/dist/app.erdbg",
+      "gdb": "gdb-multiarch",
+      "osx": {
+        "gdb": "gdb"
+      },
+      "server": [
+        "openocd",
+        "-f",
+        "interface/cmsis-dap.cfg",
+        "-f",
+        "target/rp2040.cfg",
+        "-c",
+        "adapter speed 5000"
+      ],
+      "serverReady": "Listening on port 3333 for gdb connections",
+      "target": "localhost:3333",
+      "disconnectCommands": ["monitor resume"]
+    }
+  ]
+}

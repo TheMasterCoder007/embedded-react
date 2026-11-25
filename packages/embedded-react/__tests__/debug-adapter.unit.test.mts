@@ -45,6 +45,8 @@ class FakeGdb {
   /** What `erb dap status` answers at the next stop. */
   status: Body = {loaded: true, hookStop: false, frames: [], hit: []};
   frames: Body[] = [];
+  /** What `erb dap sync` answers after an attach. */
+  sync: Body = {};
   /** Whether the firmware has the hook. */
   hook = true;
   /** The exception filters GDB was last given. */
@@ -91,6 +93,8 @@ class FakeGdb {
         };
       case 'status':
         return this.status;
+      case 'sync':
+        return this.sync;
       case 'breakpoints':
         return {
           breakpoints: request.breakpoints.map(
@@ -1277,6 +1281,70 @@ describe('debug adapter', () => {
       'erb breakpoints',
       'disconnect',
     ]);
+    expect(editor.gdb.consoleCommands.slice(-2)).toEqual([
+      'monitor resume',
+      'disconnect',
+    ]);
+  });
+
+  it("refuses to attach with a debug file of another build than the board's app", async () => {
+    const editor = new Editor();
+    editor.gdb.sync = {
+      mismatch:
+        'the board runs build 1a2b3c4d, but dist/app.erdbg is build 5e6f7a8b: build the app and flash it again',
+    };
+    await editor.request('initialize', {});
+    const initialized = editor.nextEvent('initialized');
+    const attached = editor.request('attach', {
+      program: 'firmware.elf',
+      debugFile: 'dist/app.erdbg',
+      target: 'localhost:3333',
+      disconnectCommands: ['monitor resume'],
+    });
+    await initialized;
+    await editor.request('configurationDone');
+    const response = await attached;
+    expect(response.success).toBe(false);
+    expect(response.message).toContain('the board runs build 1a2b3c4d');
+    expect(response.message).toContain('flash it again');
+    expect(editor.gdb.asked).not.toContain('continue');
+    // The board is left running.
+    expect(editor.gdb.consoleCommands.slice(-2)).toEqual([
+      'monitor resume',
+      'disconnect',
+    ]);
+  });
+
+  it('ends the session when the app that loads is another build than the debug file', async () => {
+    const editor = new Editor();
+    await editor.request('initialize', {});
+    const initialized = editor.nextEvent('initialized');
+    const attached = editor.request('attach', {
+      program: 'firmware.elf',
+      debugFile: 'dist/app.erdbg',
+      target: 'localhost:3333',
+      disconnectCommands: ['monitor resume'],
+    });
+    await initialized;
+    await editor.request('configurationDone');
+    await attached;
+
+    // The board was reset to attach, and the hook stops at the load.
+    const mismatch =
+      'the board runs build 1a2b3c4d, but dist/app.erdbg is build 5e6f7a8b: build the app and flash it again';
+    editor.gdb.status = {loaded: false, note: mismatch, mismatch};
+    const terminated = editor.nextEvent('terminated');
+    editor.gdb.event('stopped', {
+      reason: 'breakpoint',
+      threadId: 1,
+      hitBreakpointIds: [-1],
+    });
+    await terminated;
+    expect(editor.events.some(event => event.event === 'stopped')).toBe(false);
+    const shown = editor.events.find(
+      event => event.event === 'output' && event.body.category === 'important',
+    );
+    expect(shown?.body.output).toContain('the board runs build 1a2b3c4d');
     expect(editor.gdb.consoleCommands.slice(-2)).toEqual([
       'monitor resume',
       'disconnect',

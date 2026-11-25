@@ -977,9 +977,15 @@ needed, and `target` to attach to a board, as GDB's `target remote` takes it. Th
 | `environment`                                               | Environment variables for GDB and the GDB server, over the editor's own.                                                                                |
 | `stopOnAttach`                                              | Leaves the board halted once attached. It runs on when left out.                                                                                        |
 | `source`                                                    | The app's entry file, when it isn't beside the debug file. The files it imports are found from its folder.                                              |
+| `cli`                                                       | For the VS Code extension: the `embedded-react` CLI to run the adapter from, when it isn't the one in the project's `node_modules`.                     |
 
 GDB leaves a board halted when it disconnects, so a configuration for OpenOCD ends with
 `"disconnectCommands": ["monitor resume"]`.
+
+The script compares the debug file's build with the loaded app's after an attach and at each load, where it first
+reads the file again in case a build rewrote it. On a mismatch the adapter refuses the session: it fails the
+attach, or ends a session that has started with an `important` output event, and resumes the board. It also
+deletes the stamp `flash --changed` goes by (`app.erpkg.flashed`, beside the package), so the next flash writes.
 
 #### The simulator in GDB's place
 

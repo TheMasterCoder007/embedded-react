@@ -173,11 +173,12 @@ sdkconfig layer, and builds `main/main_flow_b.c` in place of `main.c`:
 
 ```bash
 cd examples/esp32/esp32-s3
-idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b \
-    -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.flow-b" set-target esp32s3
-idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b \
-    -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.flow-b" build flash monitor
+idf.py --preset flow-b build flash monitor
 ```
+
+`CMakePresets.json` names each build: `default` is Flow A in `build/`, and `wifi`, `flow-b` and `flow-b-debug`
+build in `build-wifi/`, `build-flow-b/` and `build-flow-b-debug/`. Pass the same `--preset` to every `idf.py`
+command for that build.
 
 With no package installed, the first boot shows the error screen, saying so. Then, from your project:
 
@@ -197,6 +198,13 @@ calls `Chip.freeMemory()`, to check a debugger's stop in a call the app made.
 
 The thermostat demo picks its wide layout at 800×480.
 
+### Debug an app on F5
+
+The `flow-b-debug` preset is the Flow B firmware with the [debugger's hook](../debugging.md#what-it-needs). In
+VS Code, open `examples/esp32/esp32-s3` and press F5: it builds that firmware and the thermostat demo, flashes
+what changed, and attaches over the chip's built-in JTAG. A breakpoint in `demos/thermostat/App.jsx` then stops
+the board. See [The board examples](../debugging.md#the-board-examples) for what it needs.
+
 ## WiFi
 
 The example has an optional WiFi build: a station the app can scan with and join, the network and
@@ -204,11 +212,11 @@ time zone saved in encrypted NVS, and NTP keeping `Date.now()` on time. It is a 
 layered on the defaults, because the WiFi stack needs internal RAM the board is short of:
 
 ```bash
-idf.py -B build-wifi -D SDKCONFIG=sdkconfig.wifi -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.wifi" build flash
+idf.py --preset wifi build flash
 ```
 
-Pass the same arguments to every `idf.py` command for this build (`… -p PORT monitor`, `… menuconfig`);
-plain `idf.py` keeps building the default firmware. The NTP server is `CONFIG_ER_SNTP_SERVER`
+Pass the same preset to every `idf.py` command for this build (`idf.py --preset wifi -p PORT monitor`,
+`… menuconfig`); plain `idf.py` keeps building the default firmware. The NTP server is `CONFIG_ER_SNTP_SERVER`
 (menuconfig, under **embedded-react: WiFi**; default `pool.ntp.org`), and SNTP resyncs hourly and
 after every reconnection.
 
