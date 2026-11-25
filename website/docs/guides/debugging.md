@@ -19,7 +19,8 @@ With no board at hand, the same editor session runs against the simulator:
 - **A probe and a GDB server for it.** An ST-Link on an STM32, the built-in JTAG on an ESP32-S3, a CMSIS-DAP debug
   probe on an RP2040. OpenOCD drives all three.
 - **A GDB for the board, built with Python** (3.8 or later). `gdb -batch -ex "python print(1)"` prints `1` when it
-  has one. Debugging from an editor needs GDB 14 or later.
+  has one. Debugging from an editor needs GDB 14 or later. [A GDB for the board](#a-gdb-for-the-board) says which
+  toolchain's GDB does.
 - **The firmware's ELF**, as the board runs it. Only its symbols are read, so a release build works.
 - **The app's `app.erdbg`.** Every `embedded-react build --aot` writes it beside the package in `dist/`, release or
   not. It has to be the one written with the package on the board: the script checks, and says when it isn't.
@@ -35,6 +36,31 @@ The hook holds 16 places, which `ERB_DEBUG_STOPS` changes, at 8 bytes each. A pl
 A breakpoint takes one for each statement that starts on its line, so a line can take more than one, and
 `erb break` says when the breakpoints need more places than the hook has. The RP2040 example has too little RAM
 left beside its framebuffer for 16, and holds 8.
+
+### A GDB for the board
+
+Not every toolchain's GDB has Python, and some are older than 14. As of November 2026:
+
+| Toolchain                              | Its GDB                                                                                                                                                                                       |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Arm GNU Toolchain                      | `arm-none-eabi-gdb` has no Python. `arm-none-eabi-gdb-py` beside it has: on Linux from 13.3.Rel1, on Windows and macOS from 14.3.Rel1. Releases before 13.3.Rel1 have a GDB older than 14     |
+| STM32CubeIDE and STM32CubeCLT          | No Python, in any release on any system. Use another GDB from this table                                                                                                                      |
+| ESP-IDF                                | Works from ESP-IDF 5.2.2. ESP-IDF 5.1 and 5.2 to 5.2.1 have GDB 12                                                                                                                            |
+| Pico SDK, from the VS Code extension   | On Windows and macOS it is the Arm GNU Toolchain's, in `~/.pico-sdk/toolchain`: use `arm-none-eabi-gdb-py` there, which SDK 2.3.0 and later have. On Linux it is the system's `gdb-multiarch` |
+| `gdb-multiarch` on Debian and Ubuntu   | Works on Debian 13 and Ubuntu 24.04. Debian 12 has GDB 13 and Ubuntu 22.04 GDB 12                                                                                                             |
+| `gdb` from Homebrew, on Apple silicon  | Works, for Arm boards too                                                                                                                                                                     |
+| `gdb-multiarch` from MSYS2, on Windows | Works, with MSYS2's `mingw64\bin` on `PATH`                                                                                                                                                   |
+
+`arm-none-eabi-gdb-py` doesn't carry its Python. It is linked against one version, which has to be installed:
+Python 3.8 on Linux (`libpython3.8`) and Windows, and a Homebrew Python on macOS. It doesn't start without it, and
+the loader's error names the version.
+
+Espressif's GDB has a build for each Python from 3.8 up to the newest at its release (3.14 for GDB 17.1). It runs
+the one for the first `python3` on `PATH`, or `python` on Windows, and falls back to a build with no Python
+without saying so when that version is newer or older than its builds.
+
+From an editor the debug adapter checks all of this before a session starts, and its error says which of these is
+wrong and what to use. For Espressif's GDB it finds a Python the GDB has a build for by itself.
 
 ## Connect the probe
 
@@ -54,8 +80,9 @@ Name the target file for your chip (`stm32f7x.cfg`, `stm32h7x.cfg`). On a dual-b
 gdb build/firmware.elf -ex "target extended-remote :3333"
 ```
 
-The Arm GNU toolchain's `arm-none-eabi-gdb` has no Python. Use its `arm-none-eabi-gdb-py` where it has one, or
-your system's `gdb` or `gdb-multiarch`. Attaching halts the board where it was, without a reset.
+The Arm GNU toolchain's `arm-none-eabi-gdb` and STM32CubeIDE's have no Python. Use the Arm GNU toolchain's
+`arm-none-eabi-gdb-py`, or your system's `gdb` or `gdb-multiarch`:
+[A GDB for the board](#a-gdb-for-the-board). Attaching halts the board where it was, without a reset.
 
 ### ESP32-S3, over its built-in JTAG
 
@@ -70,8 +97,9 @@ openocd -f board/esp32s3-builtin.cfg -c "init; reset halt"
 xtensa-esp32s3-elf-gdb build-flow-b/embedded-react-esp32.elf -ex "target extended-remote :3333"
 ```
 
-Use Espressif's GDB: a stock GDB can't read this chip's registers. The server resets the chip as it starts, so the
-app isn't loaded yet when GDB connects. Set breakpoints, then `continue`.
+Use Espressif's GDB: a stock GDB can't read this chip's registers. When it says it has no Python, the first
+`python3` on `PATH` is a version it has no build for: put one it has first. The server resets the chip as it
+starts, so the app isn't loaded yet when GDB connects. Set breakpoints, then `continue`.
 
 ### RP2040, with a debug probe
 
@@ -413,8 +441,8 @@ An ESP32-S3 over its built-in JTAG:
 ```
 
 VS Code has to find Espressif's tools: start it from a shell with ESP-IDF's environment exported, or give the full
-paths. Espressif's GDB picks its Python from the first `python3` on `PATH` and has none for a version it wasn't
-built for. If the session fails to start, add an `environment` with a `PATH` that puts a Python it has first.
+paths. The adapter finds a Python for Espressif's GDB itself, the one ESP-IDF's installer made or another on
+`PATH`, and the Debug Console says which.
 
 An RP2040 with a debug probe:
 
@@ -550,8 +578,8 @@ state, and the stop at a fault. What differs:
 
 | Symptom                                                                         | Cause and fix                                                                                                                                                              |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source` fails with `Error in sourced command file` and `Undefined command: ""` | This GDB has no Python. Use `arm-none-eabi-gdb-py`, a system `gdb` or `gdb-multiarch`, or Espressif's GDB with a `python3` on `PATH` it was built for                      |
-| The editor's session ends as it starts                                          | The GDB is older than 14, or has no Python. `gdb --version`, then the row above                                                                                            |
+| `source` fails with `Error in sourced command file` and `Undefined command: ""` | This GDB has no Python. Use one that has: [A GDB for the board](#a-gdb-for-the-board)                                                                                      |
+| The editor's session fails to start, with an error about GDB                    | The error says what is wrong with the GDB and what to use. [A GDB for the board](#a-gdb-for-the-board) has the list                                                        |
 | A breakpoint never fires on an ESP32-S3                                         | The chip has had a debug session since its last power-on reset, and the server couldn't read the flash mapping. End the server's arguments with `-c "init; reset halt"`    |
 | A breakpoint never fires on a dual-bank STM32H7                                 | The server's memory map leaves out the second bank, so GDB writes a software breakpoint into flash. Add `-c "set DUAL_BANK 1"` before the target file                      |
 | `erb break` says the firmware has no breakpoint hook                            | Build the firmware with `ERB_DEBUG_HOOK=1`                                                                                                                                 |

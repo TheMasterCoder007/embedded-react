@@ -10,6 +10,7 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+
 ### Added
 
 - `embedded-react dev --aot` runs a Flow B app in a simulator, with a reload on every save.
@@ -29,6 +30,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   parameters. `app.erdbg` is format 2.
 - Flow B: `embedded-react debug-adapter` debugs an app from an editor through GDB, with a VS Code extension
   (`editors/vscode`) that registers it.
+- Flow B: the debug adapter checks its GDB before a session and says what to change when it is too old or has no
+  Python. Espressif's GDB gets a Python it was built for, with no `PATH` in the configuration.
 - Flow B: a debugger stops when the app faults or a load is refused, with the reason and the handler that
   faulted (`erb faults`, and "Stop on app faults" in an editor).
 - A hard fault's record holds the link register, the fault status registers, words of the stack, and where a
@@ -47,6 +50,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   field or a local can be set (`erb set rows[2].done true`).
 
 ## [0.25.0] - 2026-11-20
+
 ### Added
 
 - Flow B: `fontFamily` with an imported font. `build --aot` bakes each font at the sizes its text uses and
@@ -110,6 +114,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   the new size. An app that listens to `Dimensions` or reads `useWindowDimensions()` still resizes live.
 
 ## [0.24.1] - 2026-11-18
+
 ### Added
 
 - dma2d: `no_buffer_sync` in the config turns the page-flip copy off, and the engine renders what each
@@ -122,6 +127,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - ESP32-S3 example: the Flow A firmware builds again.
 
 ## [0.24.0] - 2026-11-17
+
 ### Added
 
 - dma2d: a rotated panel page-flips. With `band_buffer` and `band_pixels` the engine draws through a small
@@ -132,6 +138,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   so a change is rendered once, not once per buffer. The dma2d backend does this.
 
 ## [0.23.0] - 2026-11-17
+
 ### Added
 
 - Engine: `er_set_display_rotation()` runs the app at 90, 180, or 270 degrees to a panel mounted against its
@@ -167,6 +174,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   rebuild.
 
 ## [0.22.1] - 2026-11-16
+
 ### Fixed
 
 - Flow B: an integer in a text printed as `ld` on firmware linked against newlib-nano, whose printf has no 64-bit
@@ -175,6 +183,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   works the decimals out in whole numbers.
 
 ## [0.22.0] - 2026-11-16
+
 ### Added
 
 - Engine: `er_image_unload()` frees a registered image's slot, and `er_image_load_argb8888()` registers an image
@@ -215,6 +224,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow A: a `for...of` or spread over a string no longer hangs the ESP32-S3.
 
 ## [0.21.0] - 2026-11-14
+
 ### Added
 
 - Flow B: template literals, `String(x)`, `toFixed` and `padStart` wherever a string is built: text, a string state,
@@ -318,6 +328,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   It can now hold a spring or decay, and animate the same value more than once.
 
 ## [0.20.0] - 2026-11-05
+
 ### Added
 
 - One Flow B package for every panel size. The compiler finds the layouts from the app's breakpoints, proves every
@@ -394,6 +405,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   code.
 
 ## [0.19.0] - 2026-10-27
+
 ### Changed
 
 - The npm package moved from `bridges/quickjs/js` to `packages/embedded-react`.
@@ -405,6 +417,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - On 32-bit targets, a corrupt section length in a container could pass the bounds check.
 
 ## [0.18.0] - 2026-10-26
+
 ### Added
 
 - `opacity` on `Text` and `Image`, static and animated, in both flows. `TextInput` takes an animated
@@ -498,6 +511,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   variable that didn't parse silently took its default; only a blank one does now.
 
 ## [0.17.0] - 2026-10-15
+
 ### Added
 
 - Flow B: values derived from `screen.width`/`screen.height` are worked out at boot from the real panel
@@ -522,6 +536,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   handler's cost on the ESP32-S3.
 
 ## [0.16.0] - 2026-10-14
+
 ### Changed
 
 - **Breaking (Flow B):** every element declares the props, style keys, and children it lowers, and anything else
@@ -607,6 +622,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   height, so the lines below painted over the siblings that follow it.
 
 ## [0.15.0] - 2026-09-27
+
 ### Changed
 
 - The starter that `npm create embedded-react` scaffolds is redesigned and responsive: it lays itself out from
@@ -633,6 +649,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   so tapping the menu button seemed to do nothing.
 
 ## [0.14.1] - 2026-09-21
+
 ### Added
 
 - Flow B compiles `Animated.loop` around an `Animated.sequence`, such as a pulse that grows and shrinks,
@@ -651,6 +668,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   note renders as text, and the copy button grabs only the shell commands.
 
 ## [0.14.0] - 2026-09-17
+
 ### Added
 
 - The ESP32-S3 example has a Wi-Fi build (`sdkconfig.defaults.wifi`). The thermostat's settings get a Wi-Fi
@@ -694,10 +712,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   no longer means changing the guard either.
 
 - CI now runs the QuickJS runtime tests, from source and as bytecode, against both of the bridge job's
-  Linux builds (the native and the bare-metal allocator); they had only ever run locally. `ER_BRIDGE_BUILD_DIR` 
+  Linux builds (the native and the bare-metal allocator); they had only ever run locally. `ER_BRIDGE_BUILD_DIR`
   points the test runners at a bridge build other than `bridges/quickjs/build`.
 
-- Building a board example against an AOT app generated for a *different* board is now a compiler
+- Building a board example against an AOT app generated for a _different_ board is now a compiler
   error instead of firmware that boots and lays out wrong. All three examples consume the same
   `dist/app.gen.c`, and a responsive demo folds its layout to the screen size at generate time, so
   `app.gen.h` now records what it was generated for and each board asserts it. The desktop AOT host
@@ -890,7 +908,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   prop a child component was never given — is omitted, and in text `{undefined}` renders nothing while
   `s + undefined` appends "undefined". Previously an absent prop could hide a node (`visible`) or put
   the word "undefined" in a `placeholder`. A `const` whose value is `undefined` folds like any other; a
-  binding *named* `undefined` is a located error.
+  binding _named_ `undefined` is a located error.
 
 - A local, parameter, or state that shadows a module constant now wins when AOT text is folded. The
   constant fold ran before the runtime bindings were consulted, so a shadowed name silently rendered the
@@ -900,7 +918,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   and `||` to one of their operands, which the emitted C has no way to reproduce; write the branch out
   as `{cond ? 'yes' : ''}`. A logical whose sides are both boolean still lowers.
 
-- A board example built against an AOT app generated from a different *demo* is now a compiler error
+- A board example built against an AOT app generated from a different _demo_ is now a compiler error
   naming the mismatch, rather than a pile of implicit declarations for host setters that demo never
   generated. The marker encodes the app name one-to-one, so two apps can never share one.
 
@@ -930,7 +948,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   convention in the field names.
 
 - The frame split no longer counts the same commit twice. React commits from inside the pump, so that
-  `er_commit()` landed in the JS phase *and* in layout+raster — the four phases claimed more time than
+  `er_commit()` landed in the JS phase _and_ in layout+raster — the four phases claimed more time than
   the frame lasted and `other_us` sat at 0. JS now reports JS alone.
 
 - A moving `<Svg>` shape no longer leaves part of itself behind. The incremental damage rect for a
@@ -949,6 +967,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   errors were logged while the console was down, and they are repeated once it is back.
 
 ## [0.13.0] - 2026-09-04
+
 ### Added
 
 - `<TouchableOpacity>` now dims on press, in **both flows**. It was a bare alias of `<Pressable>` that
@@ -1129,7 +1148,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   centred layouts, on either axis. `justifyContent`, `alignItems`, `alignContent` and the space-* modes
   are all affected, for flow and absolutely positioned children alike.
 - A child on a reversed flex axis (`flexDirection: 'column-reverse'` / `'row-reverse'`) is now held
-  off the edge the axis starts from by the margin on *that* side — `marginBottom` for
+  off the edge the axis starts from by the margin on _that_ side — `marginBottom` for
   `column-reverse`. Asymmetric margins landed the wrong one against the start edge, so a flow child
   and an identical uninset absolute child disagreed inside a reversed parent.
 - `flexWrap: 'wrap-reverse'` now moves the wrap lines to the far cross edge, not just reverse their
@@ -1249,7 +1268,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `er_get_dirty_rects()` / `er_get_dirty_rect()` reported nothing on Flow A. React commits inside
   `er_runtime_pump()`, so the host's own `er_commit()` — a no-op — was wiping the answer before the
   host could read it. A commit that paints nothing now leaves the last painted rects in place.
-- `er_get_dirty_rect()` reported nothing on a full repaint that no node had dirtied while `er_get_dirty_rects()` 
+- `er_get_dirty_rect()` reported nothing on a full repaint that no node had dirtied while `er_get_dirty_rects()`
   reported the whole screen. Both now report the region actually painted.
 - Adding or removing a transform on a view left a rotated or scaled child inside it half-drawn. Only
   the outermost transform is rendered through the scratch buffer, so a change up top silently moves
@@ -1265,12 +1284,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   its own — so the check passed unchanged with the collector switched off.
 
 ## [0.12.0] - 2026-08-19
+
 ### Added
 
 - `display: 'none'` hides a subtree without unmounting it. The node and everything under it drop out
   of layout, rendering, and hit-testing. However, the native nodes stay allocated with their props intact,
-  so showing the subtree again is a repaint rather than a rebuild (build each page once, then flip between 
-  them, instead of tearing down and recreating a few hundred nodes in interpreted QuickJS on every page change). 
+  so showing the subtree again is a repaint rather than a rebuild (build each page once, then flip between
+  them, instead of tearing down and recreating a few hundred nodes in interpreted QuickJS on every page change).
   `visible`, which was listed as a passthrough prop but did nothing outside `<Modal>`, is now an alias for it:
   `visible={false}` means `display: 'none'`, with an explicit `style.display` winning over it (on
   `<Modal>` it keeps its existing meaning). Works in both flows — Flow A through `style` or the prop,
@@ -1297,8 +1317,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   gone from the render walk, so nothing contributed them to the reported rect, and a host that
   transfers only that rect left the stale content on the panel.
 
-
 ## [0.11.1] - 2026-08-18
+
 ### Fixed
 
 - The STM32 DMA2D backend did not compile in 0.11.0 — `wait_pending()` was missing the brace closing
@@ -1308,6 +1328,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   cannot end it early.
 
 ## [0.11.0] - 2026-08-18
+
 ### Added
 
 - Opaque images now render through a copy fast path instead of per-pixel blending. Every image is
@@ -1357,7 +1378,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Running out of vector storage slots (`ERUI_MAX_VECTOR_NODES`) now says so in release builds. A
   `<Svg>` that cannot get a slot holds no geometry and draws nothing. Because slots go out in
-  mount order, *which* shapes vanish moves around as screens mount and unmount — on a panel that
+  mount order, _which_ shapes vanish moves around as screens mount and unmount — on a panel that
   looks like random glitching rather than a pool that needs raising, and it previously cost a full
   debugging cycle to trace. The first refusal now prints one `stderr` line (once per process, even
   under `NDEBUG` — unlike the other vector pools, whose warnings are debug-only) and raises a flag
@@ -1429,6 +1450,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   via the new `er_get_dirty_rects()`; `er_get_dirty_rect()` still returns the covering box.
 
 ## [0.10.2] - 2026-08-03
+
 ### Fixed
 
 - `native_ui_bridge.c`'s `apply_props` no longer probes all ~90 known prop names (`JS_GetPropertyStr`
@@ -1474,6 +1496,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   the text-measuring work drops to zero.
 
 ## [0.10.1] - 2026-07-31
+
 ### Fixed
 
 - Apps running the JavaScript runtime on a bare-metal board could run out of memory over time, even
@@ -1494,6 +1517,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   cleanup and memory cap are working, and refuse to start or show it on screen if not.
 
 ## [0.10.0] - 2026-07-30
+
 ### Added
 
 - Gradients on hand-written `<Svg>` shapes. Previously only an imported .svg artwork file could carry
@@ -1573,8 +1597,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   forever: scrolling moves a row, so it is reported as having moved, but a row that is now out of sight is
   skipped when drawing, and only drawing updates the record of where it was last drawn. So it stayed
   "moved" and kept the changed region of every frame propped open, which in turn defeated the shortcut
-  that normally lets the engine skip untouched parts of the screen. A row with nothing left on screen now 
-  settles after its old area is cleaned up once and is still redrawn normally when scrolled back into view. 
+  that normally lets the engine skip untouched parts of the screen. A row with nothing left on screen now
+  settles after its old area is cleaned up once and is still redrawn normally when scrolled back into view.
   Affects every app with a ScrollView or FlatList.
 - Fixed division in apps compiled ahead of time to C. JavaScript always divides as decimals, but the
   compiler emitted plain C division, which discards the fraction when both sides are whole numbers. Any
@@ -1603,6 +1627,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   declared before it is used, which the watch-face demo needs for its swipe-to-settle animation.
 
 ## [0.9.0] - 2026-07-23
+
 ### Added
 
 - Multicore rendering (opt-in). On builds made with `ERUI_RENDER_WORKERS` above 1, a host can
@@ -1664,6 +1689,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   scratch buffer. Any on-screen size now renders; only the element's own size is limited.
 
 ## [0.8.0] - 2026-07-21
+
 ### Added
 
 - A lite JavaScript profile. The runtime starts with only the built-ins the React runtime actually
@@ -1686,6 +1712,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   uses the package's own copy.
 
 ## [0.7.0] - 2026-07-04
+
 ### Added
 
 - Support for page-flipped / multi-buffer displays. Some panels rotate two or more framebuffers and flip
@@ -1696,6 +1723,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   copying. The default is unchanged for single-buffer displays.
 
 ## [0.6.0] - 2026-07-01
+
 ### Added
 
 - On-device hot reload over USB. Save an edit, and it streams to a connected board and swaps in live — no
@@ -1706,6 +1734,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   scaffolder include a script for it, and the tool clearly explains what to do when it can't connect.
 
 ## [0.5.3] - 2026-06-29
+
 ### Fixed
 
 - SVG gradients render again. Linear, radial, and conic gradients on vector shapes had regressed to drawing
@@ -1714,6 +1743,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   "not found" response and stays running instead of shutting down.
 
 ## [0.5.2] - 2026-06-28
+
 ### Fixed
 
 - The simulators now enable every engine feature at full capacity. They previously left some limits at the
@@ -1721,11 +1751,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   certain count). Real device builds still use the lean defaults.
 
 ## [0.5.1] - 2026-06-28
+
 ### Changed
 
 - The JavaScript and TypeScript starter templates ship an updated app icon.
 
 ## [0.5.0] - 2026-06-28
+
 ### Added
 
 - TypeScript support, end to end. You can write apps in TypeScript, scaffold a TypeScript starter, and use
@@ -1735,6 +1767,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   of the box with no extra type packages to install.
 
 ## [0.4.1] - 2026-06-27
+
 ### Changed
 
 - Animated scaling and rotation do less work per frame, with no change to how they look.
@@ -1745,6 +1778,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   changed is redrawn.
 
 ## [0.4.0] - 2026-06-26
+
 ### Added
 
 - Import an SVG file and render it as a live vector graphic. It works on both device paths and supports the
@@ -1759,6 +1793,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Conic gradients render faster on the device, with no visible change to output.
 
 ## [0.3.0] - 2026-06-16
+
 ### Added
 
 - A build command that produces the device artifact from your own project — either a bytecode bundle for
@@ -1770,6 +1805,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - The build command compiles device bytecode without needing a native compiler.
 
 ## [0.2.3] - 2026-06-15
+
 ### Fixed
 
 - Fixed a crash ("maximum call stack size exceeded") that hit newly scaffolded apps on the first run of the
@@ -1777,6 +1813,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   your app; it's now limited to your own source.
 
 ## [0.2.2] - 2026-06-15
+
 ### Fixed
 
 - Hardened looping animations so an animation that finishes instantly can't recurse into its next iteration.
@@ -1823,6 +1860,7 @@ First beta.
   the second pass; sequences now reset correctly each time they start.
 
 ## [0.1.1] - 2026-06-14
+
 ### Fixed
 
 - Apps that use Math.PI in the ahead-of-time build now compile on all toolchains.

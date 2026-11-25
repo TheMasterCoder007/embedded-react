@@ -52,6 +52,7 @@
     "flash.mts",
     "fault-decode.mts",
     "debug-adapter.mts",
+    "gdb-check.mts",
     "compile-bin.mts",
     "persist-transform.mts",
     "cli.mts",

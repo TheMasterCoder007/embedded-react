@@ -18,8 +18,10 @@ import {describe, expect, it} from 'vitest';
 import {PassThrough} from 'node:stream';
 import {
   DebugAdapter,
+  mergeEnvironment,
   readMessages,
   writeMessage,
+  type AdapterOptions,
   type Message,
 } from '../debug-adapter.mts';
 
@@ -279,18 +281,24 @@ class Editor {
   private readonly eventWaiters: {name: string; take(event: Message): void}[] =
     [];
   private seq = 1;
+  /** The environment GDB was started in. */
+  gdbEnvironment: NodeJS.ProcessEnv | null = null;
 
-  constructor() {
+  constructor(checkGdb?: AdapterOptions['checkGdb']) {
     new DebugAdapter({
       input: this.input,
       output: this.output,
       script: '/pkg/gdb/erb.py',
-      startGdb: () => ({
-        stdin: this.gdb.stdin,
-        stdout: this.gdb.stdout,
-        onExit: () => {},
-        kill: () => {},
-      }),
+      checkGdb,
+      startGdb: (_command, _cwd, environment) => {
+        this.gdbEnvironment = environment;
+        return {
+          stdin: this.gdb.stdin,
+          stdout: this.gdb.stdout,
+          onExit: () => {},
+          kill: () => {},
+        };
+      },
     });
     readMessages(this.output, message => {
       if (message.type === 'response') {
@@ -412,6 +420,57 @@ describe('debug adapter', () => {
     const response = await editor.request('launch', {program: 'firmware.elf'});
     expect(response.success).toBe(false);
     expect(response.message).toMatch(/debugFile/);
+  });
+
+  it("puts a configuration's variable over one of another case on Windows only", () => {
+    const base = {Path: 'C:\\Windows', HOME: 'C:\\Users\\dev'};
+    expect(mergeEnvironment(base, {PATH: 'C:\\Python312'}, 'win32')).toEqual({
+      PATH: 'C:\\Python312',
+      HOME: 'C:\\Users\\dev',
+    });
+    expect(mergeEnvironment(base, {PATH: '/usr/bin'}, 'linux')).toEqual({
+      ...base,
+      PATH: '/usr/bin',
+    });
+  });
+
+  it('fails the session with what the check of GDB says, before GDB or the server starts', async () => {
+    const editor = new Editor(async command => {
+      throw new Error(`${command} is GDB 12.1.`);
+    });
+    await editor.request('initialize');
+    const response = await editor.request('attach', {
+      debugFile: 'dist/app.erdbg',
+      gdb: 'old-gdb',
+      server: ['no-such-server'],
+    });
+    expect(response.success).toBe(false);
+    expect(response.message).toBe('old-gdb is GDB 12.1.');
+    expect(editor.gdbEnvironment).toBeNull();
+  });
+
+  it('runs GDB in the environment its check returns, and says what the check notes', async () => {
+    let cleaned = false;
+    const editor = new Editor(async (_command, _cwd, environment) => ({
+      environment: {...environment, PATH: '/python/3.12/bin'},
+      note: 'gdb runs with Python 3.12.',
+      cleanUp: () => {
+        cleaned = true;
+      },
+    }));
+    await editor.start('launch');
+    expect(editor.gdbEnvironment?.PATH).toBe('/python/3.12/bin');
+    expect(
+      editor.events.some(
+        event =>
+          event.event === 'output' &&
+          event.body.output === 'embedded-react: gdb runs with Python 3.12.\n',
+      ),
+    ).toBe(true);
+    await editor.request('disconnect');
+    // The session ends once the editor has its answer.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(cleaned).toBe(true);
   });
 
   it("sends the app's breakpoints to the hook and the rest to GDB", async () => {

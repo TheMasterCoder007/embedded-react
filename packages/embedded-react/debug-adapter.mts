@@ -40,6 +40,7 @@ import {posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {Readable, Writable} from 'node:stream';
 import {SimulatorLink} from './aot-sim/adapter-link.mts';
+import {checkGdb, type CheckedGdb} from './gdb-check.mts';
 
 /** A protocol message: a request, a response or an event. */
 export interface Message {
@@ -63,11 +64,19 @@ type StartGdb = (
   environment: NodeJS.ProcessEnv,
 ) => GdbProcess;
 
+type CheckGdb = (
+  command: string,
+  cwd: string | undefined,
+  environment: NodeJS.ProcessEnv,
+) => Promise<CheckedGdb>;
+
 export interface AdapterOptions {
   input: Readable;
   output: Writable;
   /** Starts GDB. Tests pass a stand-in. */
   startGdb?: StartGdb;
+  /** Checks GDB before it starts. Left out with a stand-in GDB, nothing is checked. */
+  checkGdb?: CheckGdb;
   /** gdb/erb.py, when it isn't beside this file. */
   script?: string;
   /** The CLI a launch starts the simulator with, when it isn't beside this file. */
@@ -280,6 +289,35 @@ function fileName(path: string): string {
 }
 
 /**
+ * An environment with a configuration's variables over it. Windows ignores a name's case, so there a variable
+ * replaces one spelled `Path` when the configuration says `PATH`.
+ *
+ * @param base  The environment.
+ * @param over  The configuration's variables.
+ * @param platform  The machine's system.
+ *
+ * @returns The merged environment.
+ */
+export function mergeEnvironment(
+  base: NodeJS.ProcessEnv,
+  over: Record<string, string>,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const merged = {...base};
+  for (const [name, value] of Object.entries(over)) {
+    if (platform === 'win32') {
+      for (const key of Object.keys(merged)) {
+        if (key.toUpperCase() === name.toUpperCase()) {
+          delete merged[key];
+        }
+      }
+    }
+    merged[name] = value;
+  }
+  return merged;
+}
+
+/**
  * Starts GDB with its own debug adapter.
  *
  * @param command  The GDB to run.
@@ -320,6 +358,9 @@ function startGdbProcess(
 export class DebugAdapter {
   private readonly output: Writable;
   private readonly startGdb: StartGdb;
+  private readonly checkGdb: CheckGdb | null;
+  /** Removes what the check of GDB made. */
+  private cleanUpGdb: (() => void) | null = null;
   private readonly script: string;
   private readonly cli: string;
 
@@ -380,6 +421,7 @@ export class DebugAdapter {
   constructor(options: AdapterOptions) {
     this.output = options.output;
     this.startGdb = options.startGdb ?? startGdbProcess;
+    this.checkGdb = options.checkGdb ?? (options.startGdb ? null : checkGdb);
     this.script =
       options.script ?? fileURLToPath(new URL('./gdb/erb.py', import.meta.url));
     // Beside this file: cli.mts in the repository, cli.mjs once published.
@@ -919,11 +961,21 @@ export class DebugAdapter {
    * @param config  The launch configuration.
    */
   private async prepare(config: Record<string, any>): Promise<void> {
+    const gdbCommand = config.gdb ?? 'gdb';
+    let environment = this.environment(config);
+    // Before the server starts, so a GDB that can't run leaves none behind.
+    if (this.checkGdb) {
+      const checked = await this.checkGdb(gdbCommand, config.cwd, environment);
+      environment = checked.environment;
+      this.cleanUpGdb = checked.cleanUp;
+      if (checked.note) {
+        this.say(`embedded-react: ${checked.note}`);
+      }
+    }
     if (config.server) {
       await this.startServer(config);
     }
-    const gdbCommand = config.gdb ?? 'gdb';
-    const gdb = this.startGdb(gdbCommand, config.cwd, this.environment(config));
+    const gdb = this.startGdb(gdbCommand, config.cwd, environment);
     this.gdb = gdb;
     readMessages(gdb.stdout, message => this.onGdbMessage(message));
     gdb.onExit(errors => this.gdbEnded(gdbCommand, errors));
@@ -1104,7 +1156,7 @@ export class DebugAdapter {
    * @returns The environment.
    */
   private environment(config: Record<string, any>): NodeJS.ProcessEnv {
-    return {...process.env, ...config.environment};
+    return mergeEnvironment(process.env, config.environment ?? {});
   }
 
   /**
@@ -1166,9 +1218,7 @@ export class DebugAdapter {
 
   private gdbEnded(command: string, errors: string): void {
     this.gdb = null;
-    const reason = errors
-      ? `${command} ended: ${errors}. The adapter needs GDB 14 or later, built with Python.`
-      : `${command} ended.`;
+    const reason = errors ? `${command} ended: ${errors}` : `${command} ended.`;
     for (const waiter of this.waiting.values()) {
       waiter.reject(new Error(reason));
     }
@@ -1210,6 +1260,8 @@ export class DebugAdapter {
     this.simulator = null;
     this.server?.kill();
     this.server = null;
+    this.cleanUpGdb?.();
+    this.cleanUpGdb = null;
     const gdb = this.gdb;
     if (gdb && now) {
       gdb.kill();

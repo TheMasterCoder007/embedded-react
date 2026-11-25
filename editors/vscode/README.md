@@ -31,7 +31,7 @@ browser instead, or leaves it closed. "Embedded React: attach to the simulator" 
 
 - A project with `embedded-react` installed, and an app built with `embedded-react build --aot`.
 - Firmware built with `ERB_DEBUG_HOOK=1`, for breakpoints and stepping in the app and the stop at a fault.
-- GDB 14 or later for the board, built with Python.
+- GDB 14 or later for the board, built with Python. The session's error says when the GDB isn't, and what to use.
 - A GDB server for the probe, such as OpenOCD.
 
 Add a configuration to `.vscode/launch.json` (the snippets "Embedded React: board through OpenOCD" and "Embedded React:
@@ -45,7 +45,13 @@ ESP32-S3 built-in JTAG" fill one in), then start it:
   "program": "${workspaceFolder}/build/firmware.elf",
   "debugFile": "${workspaceFolder}/dist/app.erdbg",
   "gdb": "arm-none-eabi-gdb",
-  "server": ["openocd", "-f", "interface/stlink.cfg", "-f", "target/stm32f7x.cfg"],
+  "server": [
+    "openocd",
+    "-f",
+    "interface/stlink.cfg",
+    "-f",
+    "target/stm32f7x.cfg"
+  ],
   "serverReady": "Listening on port 3333 for gdb connections",
   "target": "localhost:3333",
   "disconnectCommands": ["monitor resume"]
