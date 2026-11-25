@@ -959,6 +959,13 @@ on stdin and stdout, and runs GDB with GDB's own adapter (`gdb -i dap`, so GDB 1
 
 The script's commands need the board halted, so a breakpoint set while it runs halts it and resumes it.
 
+Before a session starts GDB or the server, the adapter runs the GDB once to read its version and its Python. One
+that is missing, older than 14, built without Python or linked against a Python that isn't installed fails the
+session with a message that says which, and what to use. Espressif's GDB is a launcher beside one build per Python
+version: it runs the build for the first Python on `PATH`, or a build with no Python when it has none for that
+version. For that GDB the adapter looks for a Python it has a build for, first the ones ESP-IDF's installer made
+and then `PATH`, and starts GDB with that one first on `PATH`.
+
 An editor starts the adapter with a configuration. `program` (the firmware's ELF) and `debugFile` (`app.erdbg`) are
 needed, and `target` to attach to a board, as GDB's `target remote` takes it. The rest are optional:
 

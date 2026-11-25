@@ -172,7 +172,7 @@
                 "additionalProperties": {
                   "type": "string"
                 },
-                "description": "Environment variables for GDB and the GDB server, over the editor's own. A GDB that picks its Python from PATH needs a PATH with one it was built for."
+                "description": "Environment variables for GDB and the GDB server, over the editor's own."
               },
               "simulator": {
                 "type": [
@@ -232,7 +232,7 @@
                 "additionalProperties": {
                   "type": "string"
                 },
-                "description": "Environment variables for GDB and the GDB server, over the editor's own. A GDB that picks its Python from PATH needs a PATH with one it was built for."
+                "description": "Environment variables for GDB and the GDB server, over the editor's own."
               },
               "simulator": {
                 "type": [
