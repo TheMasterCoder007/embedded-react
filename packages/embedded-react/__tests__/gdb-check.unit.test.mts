@@ -48,10 +48,10 @@ function machine(setup: Machine): Host & {made: string[]; removed: string[]} {
     home: windows ? 'C:\\Users\\dev' : '/home/dev',
     made,
     removed,
-    run: async (command, _args, _cwd, environment) => {
-      const pathFolders = (environment.PATH ?? environment.Path ?? '').split(
-        windows ? ';' : ':',
-      );
+    run: async (command, _args, cwd, environment) => {
+      const pathFolders = (environment.PATH ?? environment.Path ?? '')
+        .split(windows ? ';' : ':')
+        .map(folder => folder || cwd || '.');
       const separator = windows ? '\\' : '/';
       const path = /[\\/]/.test(command)
         ? command
@@ -322,6 +322,29 @@ describe('checkGdb', () => {
     expect(checked.environment.PATH).toBe('/tmp/link-0:/usr/bin');
     checked.cleanUp();
     expect(host.removed).toEqual(['/tmp/link-0']);
+  });
+
+  it('reads an empty PATH entry as the folder GDB runs in', async () => {
+    const idf = '/home/dev/.espressif/python_env/idf6.1_py3.12_env/bin';
+    const checked = await checkGdb(
+      'xtensa-esp32s3-elf-gdb',
+      ESP_BIN,
+      {PATH: ':/usr/bin'},
+      machine({
+        folders: {
+          '/usr/bin': ['python3'],
+          [ESP_BIN]: ESP_BUILDS,
+          '/home/dev/.espressif/python_env': ['idf6.1_py3.12_env'],
+          [idf]: ['python3'],
+        },
+        programs: {
+          [ESP_GDB]: espressif({'/usr/bin': '3.15', [idf]: '3.12'}),
+          '/usr/bin/python3': () => ran('3.15\n'),
+          [`${idf}/python3`]: () => ran('3.12\n'),
+        },
+      }),
+    );
+    expect(checked.environment.PATH).toBe(`${idf}::/usr/bin`);
   });
 
   it("says which Pythons Espressif's GDB has builds for when none is installed", async () => {

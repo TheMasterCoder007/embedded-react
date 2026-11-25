@@ -281,11 +281,11 @@ function missingPythonDll(
   if (!dll) {
     return null;
   }
-  const found = [win32.dirname(path!), ...pathFolders(environment, host)].some(
-    folder =>
-      host
-        .list(folder)
-        .some(name => name.toLowerCase() === dll[0].toLowerCase()),
+  const found = [
+    win32.dirname(path!),
+    ...pathFolders(environment, cwd, host),
+  ].some(folder =>
+    host.list(folder).some(name => name.toLowerCase() === dll[0].toLowerCase()),
   );
   return found ? null : `${dll[1]}.${dll[2]}`;
 }
@@ -367,7 +367,7 @@ async function withPython(
   // ESP-IDF's own Python first, then any on PATH.
   for (const folder of [
     ...idfPythons(environment, host),
-    ...pathFolders(environment, host),
+    ...pathFolders(environment, cwd, host),
   ]) {
     const version = await versionIn(folder);
     const found = version && has(version) && (await attempt(folder, false));
@@ -379,7 +379,7 @@ async function withPython(
   if (!windows) {
     for (const build of builds) {
       const name = `python${build.join('.')}`;
-      const folder = pathFolders(environment, host).find(candidate =>
+      const folder = pathFolders(environment, cwd, host).find(candidate =>
         host.list(candidate).includes(name),
       );
       const found =
@@ -391,7 +391,7 @@ async function withPython(
     }
   }
 
-  const first = pathFolders(environment, host).find(folder =>
+  const first = pathFolders(environment, cwd, host).find(folder =>
     host.list(folder).includes(python),
   );
   const firstVersion = first && (await versionIn(first));
@@ -468,7 +468,9 @@ function findProgram(
 ): string | null {
   const windows = host.platform === 'win32';
   const paths = windows ? win32 : posix;
-  const folders = /[\\/]/.test(command) ? [''] : pathFolders(environment, host);
+  const folders = /[\\/]/.test(command)
+    ? ['']
+    : pathFolders(environment, cwd, host);
   const endings = windows
     ? ['', ...(variable(environment, 'PATHEXT', host) ?? '.EXE').split(';')]
     : [''];
@@ -543,15 +545,23 @@ function variableName(
  * The folders on PATH.
  *
  * @param environment  The environment.
+ * @param cwd  The folder the program runs in, which an empty entry means anywhere but on Windows.
  * @param host  The machine.
  *
  * @returns The folders, in order.
  */
-function pathFolders(environment: NodeJS.ProcessEnv, host: Host): string[] {
-  const paths = host.platform === 'win32' ? win32 : posix;
-  return (variable(environment, 'PATH', host) ?? '')
-    .split(paths.delimiter)
-    .filter(Boolean);
+function pathFolders(
+  environment: NodeJS.ProcessEnv,
+  cwd: string | undefined,
+  host: Host,
+): string[] {
+  const value = variable(environment, 'PATH', host);
+  if (value === undefined) {
+    return [];
+  }
+  return host.platform === 'win32'
+    ? value.split(win32.delimiter).filter(Boolean)
+    : value.split(posix.delimiter).map(folder => folder || cwd || '.');
 }
 
 /**
@@ -569,12 +579,11 @@ function withFirst(
   host: Host,
 ): NodeJS.ProcessEnv {
   const paths = host.platform === 'win32' ? win32 : posix;
+  const value = variable(environment, 'PATH', host);
   return {
     ...environment,
-    [variableName(environment, 'PATH', host)]: [
-      folder,
-      ...pathFolders(environment, host),
-    ].join(paths.delimiter),
+    [variableName(environment, 'PATH', host)]:
+      value === undefined ? folder : `${folder}${paths.delimiter}${value}`,
   };
 }
 
