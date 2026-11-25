@@ -31,6 +31,8 @@ interface Machine {
   platform?: NodeJS.Platform;
   /** Each folder's names. */
   folders: Record<string, string[]>;
+  /** Each file's bytes. */
+  files?: Record<string, string>;
   /** What each program prints, by its path. GDB's is given the first folder on its PATH. */
   programs: Record<string, (firstOnPath: string) => Ran>;
 }
@@ -63,6 +65,7 @@ function machine(setup: Machine): Host & {made: string[]; removed: string[]} {
     },
     list: folder => folders[folder] ?? [],
     real: path => path,
+    read: path => setup.files?.[path] ?? '',
     link: (name, target) => {
       const folder = `/tmp/link-${made.length}`;
       folders[folder] = [name];
@@ -211,21 +214,46 @@ describe('checkGdb', () => {
     ).rejects.toThrow("it is linked against Python 3.8, which isn't installed");
   });
 
-  it('reads a missing DLL on Windows as a missing Python', async () => {
+  it('names the Python a Windows GDB needs when its DLL is not found', async () => {
+    const gdb = 'C:\\arm\\bin\\arm-none-eabi-gdb-py.exe';
+    const windows = (folders: Record<string, string[]>) =>
+      machine({
+        platform: 'win32',
+        folders: {'C:\\arm\\bin': ['arm-none-eabi-gdb-py.exe'], ...folders},
+        files: {[gdb]: 'MZ...KERNEL32.dll\0python38.dll\0...'},
+        programs: {[gdb]: () => ran('', 0xc0000135)},
+      });
+    await expect(
+      checkGdb(gdb, undefined, {Path: 'C:\\tools'}, windows({})),
+    ).rejects.toThrow("it is linked against Python 3.8, which isn't installed");
+    // With Python's DLL there, another one is missing.
     await expect(
       checkGdb(
-        'C:\\arm\\bin\\arm-none-eabi-gdb.exe',
+        gdb,
+        undefined,
+        {Path: 'C:\\Python38'},
+        windows({'C:\\Python38': ['Python38.dll']}),
+      ),
+    ).rejects.toThrow('Windows could not find a DLL it needs');
+  });
+
+  it('does not blame Python for a missing DLL of a Windows GDB that needs none', async () => {
+    const gdb = 'C:\\arm\\bin\\arm-none-eabi-gdb.exe';
+    await expect(
+      checkGdb(
+        gdb,
         undefined,
         {Path: ''},
         machine({
           platform: 'win32',
-          folders: {},
-          programs: {
-            'C:\\arm\\bin\\arm-none-eabi-gdb.exe': () => ran('', 0xc0000135),
-          },
+          folders: {'C:\\arm\\bin': ['arm-none-eabi-gdb.exe']},
+          files: {[gdb]: 'MZ...KERNEL32.dll\0libstdc++-6.dll\0...'},
+          programs: {[gdb]: () => ran('', 0xc0000135)},
         }),
       ),
-    ).rejects.toThrow("it is linked against Python, which isn't installed");
+    ).rejects.toThrow(
+      `${gdb} could not start: Windows could not find a DLL it needs. Run it from a Command Prompt to see which.`,
+    );
   });
 
   it('says when Python is there and does not start', async () => {

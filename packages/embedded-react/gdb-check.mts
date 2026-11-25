@@ -26,6 +26,7 @@
 import {execFile} from 'node:child_process';
 import {
   mkdtempSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -57,6 +58,8 @@ export interface Host {
   list(folder: string): string[];
   /** A path with its links followed. */
   real(path: string): string;
+  /** A file's bytes as text, or none when it can't be read. */
+  read(path: string): string;
   /** Makes a folder that holds one link, and returns the folder. */
   link(name: string, target: string): string;
   remove(folder: string): void;
@@ -127,6 +130,13 @@ const hostMachine: Host = {
       return path;
     }
   },
+  read: path => {
+    try {
+      return readFileSync(path, 'latin1');
+    } catch {
+      return '';
+    }
+  },
   link: (name, target) => {
     const folder = mkdtempSync(join(tmpdir(), 'embedded-react-gdb-'));
     symlinkSync(target, join(folder, name));
@@ -153,7 +163,7 @@ export async function checkGdb(
   host: Host = hostMachine,
 ): Promise<CheckedGdb> {
   const probe = await host.run(command, PROBE, cwd, environment);
-  const version = started(command, probe, host);
+  const version = started(command, cwd, environment, probe, host);
   if (pythonOf(probe.output)) {
     return {environment, note: null, cleanUp: () => {}};
   }
@@ -181,13 +191,21 @@ export async function checkGdb(
  * Tells a GDB that ran from one that didn't, or is too old.
  *
  * @param command  The GDB, as the configuration names it.
+ * @param cwd  The folder it runs in.
+ * @param environment  Its environment.
  * @param probe  How it ran.
  * @param host  The machine.
  *
  * @returns Its version.
  * @throws An error for one that didn't start or is too old.
  */
-function started(command: string, probe: Ran, host: Host): Version {
+function started(
+  command: string,
+  cwd: string | undefined,
+  environment: NodeJS.ProcessEnv,
+  probe: Ran,
+  host: Host,
+): Version {
   if (probe.failure === 'ENOENT') {
     throw new Error(
       `${command} was not found. Give "gdb" its full path, or put its folder on PATH.`,
@@ -195,10 +213,18 @@ function started(command: string, probe: Ran, host: Host): Version {
   }
   const line = /^GNU gdb\b.*?(\d+)\.(\d+)[^\s)]*$/m.exec(probe.output);
   if (!line) {
-    const python = missingPython(probe);
+    const python =
+      probe.status === DLL_NOT_FOUND
+        ? missingPythonDll(command, cwd, environment, host)
+        : missingPython(probe);
+    if (python) {
+      throw new Error(
+        `${command} could not start: it is linked against Python ${python}, which isn't installed where it looks. Install that Python, or give "gdb" another: ${otherGdb(host.platform)}. ${GUIDE}`,
+      );
+    }
     throw new Error(
-      python
-        ? `${command} could not start: it is linked against Python${python === true ? '' : ` ${python}`}, which isn't installed where it looks. Install that Python, or give "gdb" another: ${otherGdb(host.platform)}. ${GUIDE}`
+      probe.status === DLL_NOT_FOUND
+        ? `${command} could not start: Windows could not find a DLL it needs. Run it from a Command Prompt to see which.`
         : `${command} could not start: ${tail(probe.output) || probe.failure || `it ended with status ${probe.status}`}.`,
     );
   }
@@ -212,16 +238,13 @@ function started(command: string, probe: Ran, host: Host): Version {
 }
 
 /**
- * The Python a program that didn't start was linked against.
+ * The Python a program that didn't start was linked against, from the loader's error.
  *
  * @param probe  How it ran.
  *
- * @returns Its version, true when the loader didn't name one, or null when Python wasn't what it missed.
+ * @returns Its version, or null when Python wasn't what the loader missed.
  */
-function missingPython(probe: Ran): string | true | null {
-  if (probe.status === DLL_NOT_FOUND) {
-    return true;
-  }
+function missingPython(probe: Ran): string | null {
   if (
     !/Library not loaded|error while loading shared libraries/.test(
       probe.output,
@@ -234,6 +257,37 @@ function missingPython(probe: Ran): string | true | null {
       probe.output,
     );
   return named ? (named[1] ?? named[2] ?? named[3]) : null;
+}
+
+/**
+ * The Python DLL a Windows program needs and can't find. Windows doesn't say which DLL it missed, so this reads
+ * the one the program names and looks for it where Windows does.
+ *
+ * @param command  The program, as the configuration names it.
+ * @param cwd  The folder it runs in.
+ * @param environment  Its environment.
+ * @param host  The machine.
+ *
+ * @returns The Python's version, or null when the program needs none or has it.
+ */
+function missingPythonDll(
+  command: string,
+  cwd: string | undefined,
+  environment: NodeJS.ProcessEnv,
+  host: Host,
+): string | null {
+  const path = findProgram(command, cwd, environment, host);
+  const dll = path && /python(\d)(\d+)\.dll/i.exec(host.read(path));
+  if (!dll) {
+    return null;
+  }
+  const found = [win32.dirname(path!), ...pathFolders(environment, host)].some(
+    folder =>
+      host
+        .list(folder)
+        .some(name => name.toLowerCase() === dll[0].toLowerCase()),
+  );
+  return found ? null : `${dll[1]}.${dll[2]}`;
 }
 
 /**
