@@ -829,7 +829,8 @@ function flash(args: string[]): void {
     const stampPath = flashStampPath(
       resolve(cwd, explicit ?? 'dist/app.erpkg'),
     );
-    const stamp = flashStamp(boardName!, packageBytes);
+    const port = optValue(args, '--port')?.value;
+    const stamp = flashStamp(boardName!, packageBytes, port);
     if (
       args.includes('--changed') &&
       existsSync(stampPath) &&
@@ -844,7 +845,7 @@ function flash(args: string[]): void {
     const written = flashSlot({
       packageBytes,
       board,
-      port: optValue(args, '--port')?.value,
+      port,
       log: line => console.log(line),
     });
     writeFileSync(stampPath, stamp);

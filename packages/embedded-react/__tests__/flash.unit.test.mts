@@ -710,13 +710,16 @@ describe('the stamp of a flash', () => {
     );
   });
 
-  it('differs for another board or another package', () => {
+  it('differs for another board, port or package', () => {
     const other = Buffer.from(
       emitPackageContainer({program: Buffer.alloc(32, 0x5b)}).bytes,
     );
     const stamp = flashStamp('esp32-s3', packageBytes());
     expect(flashStamp('esp32-2432s028r', packageBytes())).not.toBe(stamp);
     expect(flashStamp('esp32-s3', other)).not.toBe(stamp);
+    expect(flashStamp('esp32-s3', packageBytes(), '/dev/cu.test')).not.toBe(
+      stamp,
+    );
   });
 
   it('refuses bytes that are not a package', () => {

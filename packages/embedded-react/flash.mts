@@ -198,13 +198,19 @@ export function checkPackage(bytes: Buffer): void {
 }
 
 /**
- * What `flash` keeps beside a package it wrote: the board and the package's CRC, so `flash --changed` writes
- * nothing when both are the same.
+ * What `flash` keeps beside a package it wrote: the board, its port when one was named, and the package's CRC, so
+ * `flash --changed` writes nothing when they are the same. It names the kind of board, not the one on the desk:
+ * a second board of the same kind on the same port looks flashed, and the debug adapter's check of the build
+ * catches that.
  */
-export function flashStamp(boardName: string, packageBytes: Buffer): string {
+export function flashStamp(
+  boardName: string,
+  packageBytes: Buffer,
+  port?: string,
+): string {
   checkPackage(packageBytes);
   const crc = packageBytes.readUInt32LE(CONTAINER_CRC_AT);
-  return `${boardName} ${crc.toString(16).padStart(8, '0')}\n`;
+  return `${boardName}${port ? ` ${port}` : ''} ${crc.toString(16).padStart(8, '0')}\n`;
 }
 
 /** Where `flash` keeps a package's stamp: beside the package. */

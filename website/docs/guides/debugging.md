@@ -447,7 +447,10 @@ npx embedded-react build --aot
 npx embedded-react flash --board esp32-s3 --changed
 ```
 
-`--changed` writes nothing when the last flash from this project wrote the same package to the same board.
+`--changed` writes nothing when the last flash from this project wrote the same package to the same kind of
+board, on the same `--port` when one is given. It doesn't read the board, so it can't tell two boards of one kind
+apart, or see a flash made from elsewhere. The session's [check of the build](#a-debug-file-from-another-build)
+catches both, and the next start flashes.
 
 ### A launch configuration
 

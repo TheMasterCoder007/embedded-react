@@ -176,8 +176,9 @@ cd examples/esp32/esp32-s3
 idf.py --preset flow-b build flash monitor
 ```
 
-`CMakePresets.json` names each build: `default` is Flow A, and `wifi`, `flow-b` and `flow-b-debug` each have a
-build folder of their own (`build-flow-b/`). Pass the same `--preset` to every `idf.py` command for that build.
+`CMakePresets.json` names each build: `default` is Flow A in `build/`, and `wifi`, `flow-b` and `flow-b-debug`
+build in `build-wifi/`, `build-flow-b/` and `build-flow-b-debug/`. Pass the same `--preset` to every `idf.py`
+command for that build.
 
 With no package installed, the first boot shows the error screen, saying so. Then, from your project:
 
