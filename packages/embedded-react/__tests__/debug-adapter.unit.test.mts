@@ -18,6 +18,7 @@ import {describe, expect, it} from 'vitest';
 import {PassThrough} from 'node:stream';
 import {
   DebugAdapter,
+  mergeEnvironment,
   readMessages,
   writeMessage,
   type AdapterOptions,
@@ -419,6 +420,18 @@ describe('debug adapter', () => {
     const response = await editor.request('launch', {program: 'firmware.elf'});
     expect(response.success).toBe(false);
     expect(response.message).toMatch(/debugFile/);
+  });
+
+  it("puts a configuration's variable over one of another case on Windows only", () => {
+    const base = {Path: 'C:\\Windows', HOME: 'C:\\Users\\dev'};
+    expect(mergeEnvironment(base, {PATH: 'C:\\Python312'}, 'win32')).toEqual({
+      PATH: 'C:\\Python312',
+      HOME: 'C:\\Users\\dev',
+    });
+    expect(mergeEnvironment(base, {PATH: '/usr/bin'}, 'linux')).toEqual({
+      ...base,
+      PATH: '/usr/bin',
+    });
   });
 
   it('fails the session with what the check of GDB says, before GDB or the server starts', async () => {

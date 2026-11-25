@@ -289,6 +289,35 @@ function fileName(path: string): string {
 }
 
 /**
+ * An environment with a configuration's variables over it. Windows ignores a name's case, so there a variable
+ * replaces one spelled `Path` when the configuration says `PATH`.
+ *
+ * @param base  The environment.
+ * @param over  The configuration's variables.
+ * @param platform  The machine's system.
+ *
+ * @returns The merged environment.
+ */
+export function mergeEnvironment(
+  base: NodeJS.ProcessEnv,
+  over: Record<string, string>,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const merged = {...base};
+  for (const [name, value] of Object.entries(over)) {
+    if (platform === 'win32') {
+      for (const key of Object.keys(merged)) {
+        if (key.toUpperCase() === name.toUpperCase()) {
+          delete merged[key];
+        }
+      }
+    }
+    merged[name] = value;
+  }
+  return merged;
+}
+
+/**
  * Starts GDB with its own debug adapter.
  *
  * @param command  The GDB to run.
@@ -1127,7 +1156,7 @@ export class DebugAdapter {
    * @returns The environment.
    */
   private environment(config: Record<string, any>): NodeJS.ProcessEnv {
-    return {...process.env, ...config.environment};
+    return mergeEnvironment(process.env, config.environment ?? {});
   }
 
   /**
