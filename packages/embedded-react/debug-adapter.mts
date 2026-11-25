@@ -35,11 +35,13 @@
 // --aot`) answers the same requests about the app from its own memory, and the editor's side is unchanged.
 
 import {spawn} from 'node:child_process';
+import {rmSync} from 'node:fs';
 import {connect} from 'node:net';
 import {posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {Readable, Writable} from 'node:stream';
 import {SimulatorLink} from './aot-sim/adapter-link.mts';
+import {flashStampPath} from './flash.mts';
 import {checkGdb, type CheckedGdb} from './gdb-check.mts';
 
 /** A protocol message: a request, a response or an event. */
@@ -94,6 +96,8 @@ interface Status {
   description?: string;
   fault?: Fault | null;
   watch?: Change | null;
+  /** Why the debug file isn't the one of the app the board runs, when it isn't. */
+  mismatch?: string | null;
 }
 
 /** A watched state's change the board stopped at. */
@@ -190,6 +194,7 @@ const CAPABILITIES = {
 
 /** The fields of a launch configuration the adapter reads itself. The rest go to GDB. */
 const OWN_FIELDS = [
+  'cli',
   'debugFile',
   'environment',
   'gdb',
@@ -760,6 +765,9 @@ export class DebugAdapter {
     const status = (await this.erb({do: 'status'}).catch(
       () => null,
     )) as Status | null;
+    if (status?.mismatch && this.session === 'attach') {
+      return this.refuse(refusal(status.mismatch));
+    }
     if (
       status &&
       !status.loaded &&
@@ -799,6 +807,36 @@ export class DebugAdapter {
       }
     }
     this.event('stopped', stopped);
+  }
+
+  /** Drops what `flash --changed` goes by, so the next flash writes the package whatever the last one wrote. */
+  private forgetFlash(): void {
+    const debugFile: unknown = this.config.debugFile;
+    if (typeof debugFile !== 'string' || !debugFile.endsWith('.erdbg')) {
+      return;
+    }
+    try {
+      rmSync(flashStampPath(debugFile.replace(/\.erdbg$/, '.erpkg')), {
+        force: true,
+      });
+    } catch {}
+  }
+
+  /**
+   * Ends a session that can't go on, with why, and leaves the board running.
+   *
+   * @param message  Why.
+   */
+  private async refuse(message: string): Promise<void> {
+    this.forgetFlash();
+    this.event('output', {category: 'important', output: `${message}\n`});
+    this.event('output', {category: 'stderr', output: `${message}\n`});
+    await this.leaveBoard();
+    if (!this.ended) {
+      this.ended = true;
+      this.event('terminated');
+    }
+    this.end();
   }
 
   /**
@@ -891,7 +929,11 @@ export class DebugAdapter {
           await this.console(command);
         }
         // A board that was reset to attach has no app yet: its load writes the breakpoints.
-        await this.erb({do: 'sync'}).catch(() => {});
+        const synced = await this.erb({do: 'sync'}).catch(() => null);
+        if (synced?.mismatch) {
+          this.forgetFlash();
+          throw new Error(refusal(synced.mismatch));
+        }
         await this.listThreads();
         if (!config.stopOnAttach) {
           await this.gdbRequest('continue', {threadId: this.thread});
@@ -1887,6 +1929,17 @@ export class DebugAdapter {
       indexedVariables: answer.rows || undefined,
     };
   }
+}
+
+/**
+ * What a session that is refused for its debug file says.
+ *
+ * @param mismatch  The script's words for it.
+ *
+ * @returns The message.
+ */
+function refusal(mismatch: string): string {
+  return `The app's debug file isn't the one of the app on the board: ${mismatch}.`;
 }
 
 /**

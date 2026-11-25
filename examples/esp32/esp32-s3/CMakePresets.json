@@ -1,0 +1,48 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Flow A",
+      "generator": "Ninja",
+      "binaryDir": "build",
+      "cacheVariables": {
+        "IDF_TARGET": "esp32s3"
+      }
+    },
+    {
+      "name": "wifi",
+      "displayName": "Flow A with WiFi",
+      "generator": "Ninja",
+      "binaryDir": "build-wifi",
+      "cacheVariables": {
+        "IDF_TARGET": "esp32s3",
+        "SDKCONFIG": "sdkconfig.wifi",
+        "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.defaults.wifi"
+      }
+    },
+    {
+      "name": "flow-b",
+      "displayName": "Flow B",
+      "generator": "Ninja",
+      "binaryDir": "build-flow-b",
+      "cacheVariables": {
+        "IDF_TARGET": "esp32s3",
+        "SDKCONFIG": "sdkconfig.flow-b",
+        "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.defaults.flow-b"
+      }
+    },
+    {
+      "name": "flow-b-debug",
+      "displayName": "Flow B, with the debugger's hook",
+      "generator": "Ninja",
+      "binaryDir": "build-flow-b-debug",
+      "cacheVariables": {
+        "IDF_TARGET": "esp32s3",
+        "SDKCONFIG": "sdkconfig.flow-b",
+        "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.defaults.flow-b",
+        "ERB_DEBUG_HOOK": "1"
+      }
+    }
+  ]
+}

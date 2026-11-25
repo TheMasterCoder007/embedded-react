@@ -1,0 +1,51 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Firmware: build and flash",
+      "detail": "The Flow B firmware with the debugger's hook. Only what changed is written.",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["--preset", "flow-b-debug", "flash"],
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "App: build",
+      "detail": "The thermostat demo, as a Flow B package with its debug file.",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/../../../packages/embedded-react/cli.mts",
+        "build",
+        "--aot"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/../../../demos/thermostat"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "App: flash",
+      "detail": "Writes the package when it isn't the one the last flash wrote.",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/../../../packages/embedded-react/cli.mts",
+        "flash",
+        "--board",
+        "esp32-s3",
+        "--changed"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/../../../demos/thermostat"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build and flash",
+      "dependsOrder": "sequence",
+      "dependsOn": ["Firmware: build and flash", "App: build", "App: flash"],
+      "problemMatcher": []
+    }
+  ]
+}

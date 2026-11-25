@@ -92,12 +92,14 @@ export function activate(context: vscode.ExtensionContext): void {
           typeof projectFolder === 'string' ? projectFolder : null,
           folder,
         ].filter((start): start is string => typeof start === 'string');
+        const named: unknown = session.configuration.cli;
         const cli =
+          (typeof named === 'string' && named) ||
           settings.get<string>('cli') ||
           starts.map(findCli).find(found => found !== null);
         if (!cli) {
           throw new Error(
-            'No embedded-react package in the project\'s node_modules. Install it there, or name its CLI in the "embedded-react.cli" setting.',
+            'No embedded-react package in the project\'s node_modules. Install it there, or name its CLI in the configuration\'s "cli" or the "embedded-react.cli" setting.',
           );
         }
         // The editor runs a command that is just `node` in its own runtime, with require(), which can't load the

@@ -125,6 +125,10 @@
                 "type": "string",
                 "description": "The folder GDB and the GDB server run in."
               },
+              "cli": {
+                "type": "string",
+                "description": "The embedded-react CLI to run the debug adapter from, over the \"embedded-react.cli\" setting. Without either, the package in the project's node_modules."
+              },
               "server": {
                 "type": "array",
                 "items": {
@@ -219,6 +223,10 @@
               "cwd": {
                 "type": "string",
                 "description": "The folder the program runs in, or the app's project for the simulator."
+              },
+              "cli": {
+                "type": "string",
+                "description": "The embedded-react CLI to run the debug adapter from, over the \"embedded-react.cli\" setting. Without either, the package in the project's node_modules."
               },
               "setupCommands": {
                 "type": "array",

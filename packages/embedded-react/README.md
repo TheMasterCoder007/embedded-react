@@ -42,7 +42,7 @@ The package is the React Native analog: hooks come from `react`, everything else
 | `npx embedded-react build --aot` | A Flow B package, `dist/app.erpkg`, for the Flow B runtime to load. State, handlers, timers, effects, lists, animations, PanResponder, `<Svg>` and the keyboard config. It holds every layout the app's breakpoints call for, and `--screen 240x320,320x240` keeps only the ones those sizes pick |
 | `npx embedded-react build --aot --release` | A Flow B package for release, without its debug table. Every `--aot` build writes `dist/app.erdbg` beside the package, for host tools |
 | `npx embedded-react build --aot --bake` | A Flow B package as a C array, `dist/app.erpkg.c`, to link into firmware with no spare partition |
-| `npx embedded-react flash --board NAME` | Writes `dist/app.erpkg` to the board's staging slot, through `esptool` or `picotool`. The last good package stays until the new one passes verification |
+| `npx embedded-react flash --board NAME` | Writes `dist/app.erpkg` to the board's staging slot, through `esptool` or `picotool`. The last good package stays until the new one passes verification. `--changed` writes nothing when the last flash wrote this package |
 | `npx embedded-react pack --board NAME` | Writes a slot's image to a file, as a UF2 on the RP2040, for a factory line or a board that isn't attached |
 | `npx embedded-react where FUNCTION OFFSET` | Prints the source line of a Flow B fault, from the function and offset the error screen shows |
 | `npx embedded-react decode-fault RECORD --elf FIRMWARE.elf` | Traces a hard fault from the record the board logs after the reset: the C call chain from the firmware's ELF, and the app's source line. Give `--elf` once for each image of a firmware built as several |

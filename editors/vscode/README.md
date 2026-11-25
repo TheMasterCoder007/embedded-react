@@ -34,7 +34,10 @@ browser instead, or leaves it closed. "Embedded React: attach to the simulator" 
 - GDB 14 or later for the board, built with Python. The session's error says when the GDB isn't, and what to use.
 - A GDB server for the probe, such as OpenOCD.
 
-Add a configuration to `.vscode/launch.json` (the snippets "Embedded React: board through OpenOCD" and "Embedded React:
+The ESP32-S3 and RP2040 board examples have a `.vscode` folder that builds, flashes and attaches on F5, and
+`npm create embedded-react@latest my-app -- --board <name>` writes one for a new project.
+
+To write one by hand, add a configuration to `.vscode/launch.json` (the snippets "Embedded React: board through OpenOCD" and "Embedded React:
 ESP32-S3 built-in JTAG" fill one in), then start it:
 
 ```json
@@ -57,6 +60,10 @@ ESP32-S3 built-in JTAG" fill one in), then start it:
   "disconnectCommands": ["monitor resume"]
 }
 ```
+
+A configuration's `"cli"` names the `embedded-react` CLI to run the adapter from, when it isn't the one in the
+project's `node_modules`. A debug file that isn't the one of the app on the board ends the session with a message
+that says so.
 
 [Debugging on a board](https://embedded-react.dev/guides/debugging#from-an-editor) has a configuration for each board
 family, and [The debug adapter](https://embedded-react.dev/internals/flow-b-packages#the-debug-adapter) describes each

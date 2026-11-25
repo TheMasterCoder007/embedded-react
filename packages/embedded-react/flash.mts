@@ -59,6 +59,10 @@ const ESP_PARTITION_LABEL_AT = 12;
 const ESP_PARTITION_LABEL_BYTES = 16;
 const ESP_SLOT_LABELS = ['erb_a', 'erb_b'];
 
+const ESP_CONNECT_TRIES = 3;
+const ESP_CONNECT_WAIT_MS = 1500;
+const TOOL_NOT_FOUND = 'TOOL_NOT_FOUND';
+
 const PICO_REBOOT_TIMEOUT_MS = 10000;
 const PICO_READY_TRIES = 40;
 const PICO_READY_WAIT_MS = 250;
@@ -192,6 +196,20 @@ export function checkPackage(bytes: Buffer): void {
     );
   }
 }
+
+/**
+ * What `flash` keeps beside a package it wrote: the board and the package's CRC, so `flash --changed` writes
+ * nothing when both are the same.
+ */
+export function flashStamp(boardName: string, packageBytes: Buffer): string {
+  checkPackage(packageBytes);
+  const crc = packageBytes.readUInt32LE(CONTAINER_CRC_AT);
+  return `${boardName} ${crc.toString(16).padStart(8, '0')}\n`;
+}
+
+/** Where `flash` keeps a package's stamp: beside the package. */
+export const flashStampPath = (packagePath: string): string =>
+  `${packagePath}.flashed`;
 
 /** Whether the bytes are a whole Flow B package. */
 function isWholePackage(bytes: Buffer): boolean {
@@ -356,7 +374,9 @@ function runTool(
     }
     return;
   }
-  throw new Error(`${names[0]} wasn't found. ${install}`);
+  throw Object.assign(new Error(`${names[0]} wasn't found. ${install}`), {
+    code: TOOL_NOT_FOUND,
+  });
 }
 
 const sleepMs = (ms: number) =>
@@ -373,10 +393,12 @@ const espAccess = ({
   chip,
   port,
   run,
+  sleep,
 }: {
   chip: string;
   port?: string;
   run: RunTool;
+  sleep: (ms: number) => unknown;
 }): FlashAccess => {
   const names = process.env.ESPTOOL
     ? [process.env.ESPTOOL]
@@ -397,7 +419,19 @@ const espAccess = ({
     read,
     slots: dir => {
       const file = join(dir, 'partitions.bin');
-      read(ESP_PARTITION_TABLE_AT, ESP_PARTITION_TABLE_BYTES, file);
+      // The first command can find the board still coming back from a reset, as it is straight after a firmware
+      // flash: its USB port is gone for a moment.
+      for (let tries = 1; ; tries++) {
+        try {
+          read(ESP_PARTITION_TABLE_AT, ESP_PARTITION_TABLE_BYTES, file);
+          break;
+        } catch (error: any) {
+          if (tries === ESP_CONNECT_TRIES || error.code === TOOL_NOT_FOUND) {
+            throw error;
+          }
+          sleep(ESP_CONNECT_WAIT_MS);
+        }
+      }
       const slots = slotsFromPartitionTable(readFileSync(file));
       if (!slots) {
         throw new Error(
@@ -546,7 +580,7 @@ export function flashSlot({
   const access =
     board.tool === 'picotool'
       ? picoAccess({board, run, sleep})
-      : espAccess({chip: board.chip, port, run});
+      : espAccess({chip: board.chip, port, run, sleep});
   const scratchDir = mkdtempSync(join(tmpdir(), 'er-flash-'));
   let begun = false;
   try {

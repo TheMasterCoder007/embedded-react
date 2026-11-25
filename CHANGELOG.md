@@ -13,6 +13,11 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Added
 
+- The ESP32-S3 and RP2040 examples build, flash and debug their demo app on F5 in VS Code, with a preset for the
+  firmware with the debugger's hook.
+- `create-embedded-react --board <name>` writes VS Code's launch configuration and tasks for a board.
+- `embedded-react flash --changed` writes nothing when the last flash wrote the same package.
+- Flow B: a debug session ends with a message when the debug file isn't the one of the app on the board.
 - `embedded-react dev --aot` runs a Flow B app in a simulator, with a reload on every save.
 - Flow B: an editor debugs an app in the simulator with no board, probe or GDB (`"simulator": true` in a launch
   configuration).

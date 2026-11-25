@@ -16,6 +16,8 @@ the project to another panel, and the things that go wrong.
 
 ```
 CMakeLists.txt            top-level IDF project; FetchContent of QuickJS-ng (v0.15.0) + embedded-react
+CMakePresets.json         the builds by name: default (Flow A), wifi, flow-b, flow-b-debug
+.vscode/                  F5 in VS Code: build, flash and debug the thermostat demo on the Flow B firmware
 sdkconfig.defaults        ESP32-S3, octal PSRAM, 16 MB flash, a 64 KB main task stack
 sdkconfig.defaults.wifi   layered over the defaults for the WiFi build
 sdkconfig.defaults.flow-b layered over the defaults for the Flow B build
@@ -53,16 +55,14 @@ parttool.py write_partition --partition-name=config --input dist/app.erpkg
 
 Optional builds: `idf.py -DER_HOTRELOAD=1 build flash` for hot reload over the native USB port
 (`npx embedded-react dev --device`), `-DER_PERF_DETAIL=1` to add the engine's frame timings to the on-panel metrics, and
-`idf.py -B build-wifi -D SDKCONFIG=sdkconfig.wifi -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.wifi" build flash`
-for the Wi-Fi build.
+`idf.py --preset wifi build flash` for the Wi-Fi build, in `build-wifi/`.
 
 ## Flow B
 
 No QuickJS: the firmware reserves an arena and loads a compiled package from one of two flash slots.
 
 ```bash
-idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.flow-b" set-target esp32s3
-idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.flow-b" build flash
+idf.py --preset flow-b build flash                                        # in build-flow-b/
 npx embedded-react build --aot                                            # → dist/app.erpkg
 npx embedded-react flash --board esp32-s3 --port PORT
 ```
@@ -71,7 +71,23 @@ Add `-DER_HOTRELOAD=1` to the build to send a package over the native USB port o
 `npx embedded-react dev --device --aot`. `-DER_BOARD_CRASH_TEST=1` forces a panic 5 s after boot and `=2` a hang, to
 check the error screen after the reset. After a panic the log has a `fault record:` line, which
 `npx embedded-react decode-fault` traces with the firmware's ELF.
-`-DERB_DEBUG_HOOK=1` adds the hook for breakpoints, stepping and the stop at a fault from GDB (`erb break`,
-`erb step`).
 `-DER_BOARD_CRASH_TEST=3` panics when an app calls `Chip.freeMemory()`, to check a debugger's stop in a call the
 app made.
+
+### Debug an app
+
+`idf.py --preset flow-b-debug build flash` is the Flow B firmware with the hook for breakpoints, stepping and the
+stop at a fault (`ERB_DEBUG_HOOK=1`), in `build-flow-b-debug/`.
+
+In VS Code, open this folder and press F5. It builds that firmware and the thermostat demo, flashes what changed,
+and attaches over the chip's built-in JTAG, so a breakpoint in `demos/thermostat/App.jsx` stops the board. It
+needs:
+
+- the board's **USB** port connected, not the UART one: it is the probe, and the firmware and the app are flashed
+  through it
+- VS Code started from a shell with ESP-IDF exported (`code .`), so it finds `idf.py`, OpenOCD and Espressif's GDB
+- `npm install` run once in `packages/embedded-react`
+- the [extension](https://embedded-react.dev/guides/debugging#install-the-extension)
+
+`.vscode/launch.json` and `.vscode/tasks.json` name the demo and this checkout's CLI by path. Copied out of the
+repository, point them at your app's project and its `embedded-react`.
