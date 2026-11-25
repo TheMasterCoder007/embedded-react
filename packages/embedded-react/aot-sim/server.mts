@@ -85,6 +85,17 @@ interface Status {
   sizes: {width: number; height: number}[];
 }
 
+/**
+ * A panel's side, kept to what the simulator makes.
+ *
+ * @param pixels  The side asked for.
+ *
+ * @returns A whole number from 1 to LARGEST_SIDE.
+ */
+function side(pixels: number): number {
+  return Math.min(Math.max(Math.round(pixels) || 1, 1), LARGEST_SIDE);
+}
+
 /** The worker's file beside this one: .mts in the repository, .mjs once published. */
 function workerUrl(): URL {
   const extension = import.meta.url.endsWith('.mts') ? '.mts' : '.mjs';
@@ -256,8 +267,10 @@ export async function runAotDevServer(
         width,
         height,
       }));
-      const first = options.screen ??
+      const wanted = options.screen ??
         status.sizes[0] ?? {width: 800, height: 480};
+      // A layout can be built for a size no panel has, so the first panel is kept to what a resize allows.
+      const first = {width: side(wanted.width), height: side(wanted.height)};
       const loaded = new Promise<boolean>(resolve => {
         onLoaded = resolve;
       });
