@@ -1,5 +1,5 @@
 # CI — runs on every PR + push to master. Fast, display-free checks (parity.mts opens real SDL
-# windows, so it stays a dev-machine check, not CI). Six independent jobs:
+# windows, so it stays a dev-machine check, not CI). Seven independent jobs:
 #   js      — the npm package: 210+ vitest unit tests + the version/LICENSE/NOTICE drift gate.
 #   engine  — the C99 engine: configure, build, and run the host ctests (no MCU, no SDL).
 #   bridge  — the QuickJS bridge: build against the pinned QuickJS + the JS heap-accounting/GC test,
@@ -9,6 +9,7 @@
 #             scenario's golden image.
 #   erb-fuzz — mutate real Flow B packages, load them and run what passes, under ASan and UBSan.
 #   consumer — npm pack the package, install it into a scratch project, and build from there.
+#   vscode   — typecheck the VS Code extension and package it.
 name: CI
 
 on:
@@ -249,6 +250,24 @@ jobs:
       - run: npm run erb:gdb
       # Plays an editor's session with the debug adapter against the same host.
       - run: npm run erb:dap
+
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      # Builds the extension and packs it as the release does, which checks the manifest too.
+      - run: npm run package
 
   erb-fuzz:
     name: Fuzz the package loader and VM

@@ -392,17 +392,18 @@ app's values in the Variables pane. It needs everything above, with GDB 14 or la
 
 ### Install the extension
 
-The extension is in the repository, in `editors/vscode`:
+Search for **Embedded React** in the Extensions view, or:
 
 ```bash
-cd editors/vscode
-npm install
-npm run package
+code --install-extension embedded-react.embedded-react-debug
 ```
 
-That writes a `.vsix`. Install it with **Extensions: Install from VSIX**. The extension only registers the
-`embedded-react` debug type. The debug adapter is in your project's own `embedded-react` package, so it always
-matches the compiler that wrote `app.erdbg`.
+It is on the Visual Studio Marketplace and on Open VSX, for editors built on VS Code. Each release also has the
+`.vsix` attached, to install with **Extensions: Install from VSIX**.
+
+The extension only registers the `embedded-react` debug type. The debug adapter is in your project's own
+`embedded-react` package, so it always matches the compiler that wrote `app.erdbg`. A package too old to have
+the adapter ends the session with a message that says so: update it with `npm install embedded-react@latest`.
 
 ### The board examples
 
@@ -454,8 +455,8 @@ catches both, and the next start flashes.
 
 ### A launch configuration
 
-To write one by hand, add it to `.vscode/launch.json` for your board. Each starts the GDB server with the session
-and ends it after.
+To write one by hand, add it to `.vscode/launch.json` for your board. **Add Configuration** has a snippet for each
+of these, under "Embedded React". Each starts the GDB server with the session and ends it after.
 
 An STM32 with an ST-Link:
 
