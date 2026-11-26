@@ -673,7 +673,7 @@ What a session has, beside VS Code's:
 For [the simulator](#in-the-simulator-with-no-board) the parameters are
 `{"simulator": true, "cwd": "${workspace_loc:/my-app}"}`, and there is no GDB or server to find.
 
-A session that can't start, for a GDB that isn't found say, stays at **Launching** in the Progress view: LSP4E
+A session that can't start, say because the GDB isn't found, stays at **Launching** in the Progress view: LSP4E
 keeps waiting after the adapter has refused. Cancel it there, and the error that follows has the adapter's reason.
 
 ## In CLion
