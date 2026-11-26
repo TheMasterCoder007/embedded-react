@@ -977,10 +977,20 @@ needed, and `target` to attach to a board, as GDB's `target remote` takes it. Th
 | `environment`                                               | Environment variables for GDB and the GDB server, over the editor's own.                                                                                |
 | `stopOnAttach`                                              | Leaves the board halted once attached. It runs on when left out.                                                                                        |
 | `source`                                                    | The app's entry file, when it isn't beside the debug file. The files it imports are found from its folder.                                              |
+| `request`                                                   | `attach` or `launch`, for an editor that sends one request for both. Without it, the request the editor sent decides.                                   |
 | `cli`                                                       | For the VS Code extension: the `embedded-react` CLI to run the adapter from, when it isn't the one in the project's `node_modules`.                     |
 
 GDB leaves a board halted when it disconnects, so a configuration for OpenOCD ends with
-`"disconnectCommands": ["monitor resume"]`.
+`"disconnectCommands": ["monitor resume"]`. An attached board is never killed: the adapter detaches whether the
+editor disconnects or terminates, and whatever it asks for the debuggee.
+
+Some editors end a session by killing the adapter and every process it started, which gives it no time to resume
+a halted board. So on macOS and Linux the adapter starts a small guard outside its own process tree, and the guard
+runs the GDB server. When the adapter goes without having left the board, the guard connects a GDB of its own,
+runs `disconnectCommands` and disconnects, and then ends the server, by force if it must.
+
+Some editors show where a stop is and not why, so the adapter also prints a fault's reason and a watched state's
+change to the console.
 
 The script compares the debug file's build with the loaded app's after an attach and at each load, where it first
 reads the file again in case a build rewrote it. On a mismatch the adapter refuses the session: it fails the

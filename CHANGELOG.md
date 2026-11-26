@@ -13,6 +13,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Added
 
+- Flow B: an app debugs from an Eclipse-based IDE through LSP4E and from CLion through LSP4IJ, with a guide section
+  for each.
 - The VS Code extension is on the Visual Studio Marketplace and Open VSX, published with each release, with a
   launch snippet for each board family.
 - The ESP32-S3 and RP2040 examples build, flash and debug their demo app on F5 in VS Code, with a preset for the

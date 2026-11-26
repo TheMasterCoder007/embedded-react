@@ -51,6 +51,8 @@ class FakeGdb {
   hook = true;
   /** The exception filters GDB was last given. */
   exceptionFilters: string[] = [];
+  /** The arguments of each request's last call, by its command. */
+  readonly lastArguments = new Map<string, Body>();
   private seq = 1;
   private deferred: Message | null = null;
   /** GDB can't list a running board's threads. */
@@ -222,6 +224,7 @@ class FakeGdb {
       });
     }
     this.asked.push(request.command);
+    this.lastArguments.set(request.command, args);
     switch (request.command) {
       case 'initialize':
         this.respond(request, {
@@ -618,6 +621,15 @@ describe('debug adapter', () => {
       text: 'list read past its end',
       threadId: 1,
     });
+    // An editor that shows no reason for a stop has it in its console.
+    expect(
+      editor.events.some(
+        event =>
+          event.event === 'output' &&
+          event.body.output ===
+            'embedded-react: App fault: list read past its end\n  at App.tsx:32  onPress\n',
+      ),
+    ).toBe(true);
     const info = await editor.request('exceptionInfo', {threadId: 1});
     expect(info.body).toEqual({
       exceptionId: 'list read past its end',
@@ -1177,6 +1189,14 @@ describe('debug adapter', () => {
       threadId: 1,
       hitBreakpointIds: [STATE_ID + 1],
     });
+    expect(
+      editor.events.some(
+        event =>
+          event.event === 'output' &&
+          event.body.output ===
+            'embedded-react: total: 4 → 5, written at App.tsx:32  onPress\n',
+      ),
+    ).toBe(true);
     const stack = await editor.request('stackTrace', {threadId: 1});
     expect(
       stack.body.stackFrames.map(
@@ -1349,6 +1369,36 @@ describe('debug adapter', () => {
       'monitor resume',
       'disconnect',
     ]);
+  });
+
+  it('attaches for a launch request whose configuration says "request": "attach"', async () => {
+    const editor = new Editor();
+    await editor.start('launch', {request: 'attach', target: 'localhost:3333'});
+    // The editor took it for a launch, so its stop button asks to terminate.
+    const terminated = editor.nextEvent('terminated');
+    const ended = await editor.request('terminate');
+    expect(ended.success).toBe(true);
+    await terminated;
+    expect(editor.gdb.asked).toEqual([
+      'pause',
+      'erb breakpoints',
+      'disconnect',
+    ]);
+    expect(editor.gdb.lastArguments.has('attach')).toBe(true);
+    expect(editor.gdb.lastArguments.has('launch')).toBe(false);
+    expect(editor.gdb.lastArguments.get('disconnect')).toEqual({
+      terminateDebuggee: false,
+    });
+  });
+
+  it('leaves an attached board running when the editor asks to terminate the debuggee', async () => {
+    const editor = new Editor();
+    await editor.start('attach', {target: 'localhost:3333'});
+    const ended = await editor.request('disconnect', {terminateDebuggee: true});
+    expect(ended.success).toBe(true);
+    expect(editor.gdb.lastArguments.get('disconnect')).toEqual({
+      terminateDebuggee: false,
+    });
   });
 
   it('stays halted after attaching when the configuration asks', async () => {
