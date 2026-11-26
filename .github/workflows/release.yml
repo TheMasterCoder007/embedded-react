@@ -10,6 +10,10 @@
 # Token secrets (the registries below have no OIDC equivalent):
 #   IDF_COMPONENT_API_TOKEN  — ESP Component Registry token (components.espressif.com → Tokens)
 #   PLATFORMIO_AUTH_TOKEN    — PlatformIO account token (`pio account token`)
+#   VSCE_PAT                 — Visual Studio Marketplace token for the `embedded-react` publisher (Azure DevOps →
+#                              Personal Access Tokens, scope Marketplace → Manage)
+#   OVSX_PAT                 — Open VSX token (open-vsx.org → Settings → Access Tokens), with the
+#                              `embedded-react` namespace created once: `npx ovsx create-namespace embedded-react`
 # And set IDF_COMPONENT_NAMESPACE below to your registry namespace before the first ESP-IDF publish.
 name: Release
 
@@ -30,6 +34,8 @@ jobs:
     env:
       IDF_COMPONENT_API_TOKEN: ${{ secrets.IDF_COMPONENT_API_TOKEN }}
       PLATFORMIO_AUTH_TOKEN: ${{ secrets.PLATFORMIO_AUTH_TOKEN }}
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -155,11 +161,31 @@ jobs:
           python -m pip install --upgrade platformio
           pio pkg publish --no-interactive
 
-      # --- Channel 4: GitHub Release + source bundle (the CMake / FetchContent channel) ---
+      # --- Channel 4: the VS Code extension (editors/vscode), at the same version ---
+      # Packed once, so both registries and the GitHub Release get the same file. A version a registry already
+      # has is skipped, so a re-run is safe.
+      - name: Package the VS Code extension
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm run typecheck
+          npm run package -- --out "embedded-react-debug-${GITHUB_REF_NAME#v}.vsix"
+      - name: Publish to the Visual Studio Marketplace
+        if: ${{ env.VSCE_PAT != '' }}
+        working-directory: editors/vscode
+        run: npx vsce publish --skip-duplicate --packagePath embedded-react-debug-*.vsix
+      - name: Publish to Open VSX
+        if: ${{ env.OVSX_PAT != '' }}
+        working-directory: editors/vscode
+        run: npx ovsx publish --skip-duplicate embedded-react-debug-*.vsix
+
+      # --- Channel 5: GitHub Release + source bundle (the CMake / FetchContent channel) ---
       - name: Build source bundle
         run: tar -czf embedded-react-${GITHUB_REF_NAME}-src.tar.gz engine runtime backends LICENSE NOTICE README.md
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: embedded-react-*-src.tar.gz
+          files: |
+            embedded-react-*-src.tar.gz
+            editors/vscode/embedded-react-debug-*.vsix

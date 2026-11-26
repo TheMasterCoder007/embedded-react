@@ -1012,7 +1012,7 @@ reset halt"`. Espressif's GDB picks its Python from the first `python3` on `PATH
 wasn't built for, so `environment` sets a `PATH` with one it has.
 
 The VS Code extension in `editors/vscode` registers the adapter as the `embedded-react` debug type and runs it from
-the project's own `embedded-react` package. Any editor that hosts a debug adapter can run the same command. CI plays
+the project's own `embedded-react` package. It is published with each release, at the same version. Any editor that hosts a debug adapter can run the same command. CI plays
 an editor's session against the Linux host (`npm run erb:dap`).
 
 ### A hard fault with no probe attached

@@ -292,6 +292,7 @@ const LEGAL_FILES = ['LICENSE', 'NOTICE'];
 const PACKAGE_DIRS = [
   'packages/embedded-react',
   'create-embedded-react',
+  'editors/vscode',
   'engine',
   'runtime',
 ];

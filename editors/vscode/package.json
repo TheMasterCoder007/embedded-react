@@ -5,6 +5,21 @@
   "version": "0.25.0",
   "publisher": "embedded-react",
   "license": "Apache-2.0",
+  "icon": "icon.png",
+  "homepage": "https://embedded-react.dev/guides/debugging#from-an-editor",
+  "bugs": {
+    "url": "https://github.com/TheMasterCoder007/embedded-react/issues"
+  },
+  "keywords": [
+    "embedded",
+    "react",
+    "microcontroller",
+    "debugger",
+    "gdb",
+    "esp32",
+    "stm32",
+    "rp2040"
+  ],
   "private": true,
   "repository": {
     "type": "git",
@@ -24,13 +39,14 @@
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js",
     "typecheck": "tsc -p tsconfig.json",
-    "package": "npm run build && vsce package --no-dependencies"
+    "package": "npm run build && vsce package --no-dependencies --baseContentUrl https://github.com/TheMasterCoder007/embedded-react/blob/HEAD/editors/vscode --baseImagesUrl https://github.com/TheMasterCoder007/embedded-react/raw/HEAD/editors/vscode"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
     "@types/vscode": "~1.90.0",
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.28.1",
+    "ovsx": "^1.4.0",
     "typescript": "^5.5.0"
   },
   "contributes": {
@@ -317,21 +333,47 @@
             }
           },
           {
-            "label": "Embedded React: board through OpenOCD",
-            "description": "Debug a Flow B app on a board with a probe OpenOCD drives, such as an ST-Link.",
+            "label": "Embedded React: STM32 with an ST-Link",
+            "description": "Debug a Flow B app on an STM32 through an ST-Link.",
             "body": {
               "type": "embedded-react",
               "request": "attach",
-              "name": "Debug the app on the board",
+              "name": "Debug the app on the STM32",
               "program": "^\"\\${workspaceFolder}/${1:build/firmware.elf}\"",
               "debugFile": "^\"\\${workspaceFolder}/dist/app.erdbg\"",
               "gdb": "${2:arm-none-eabi-gdb}",
               "server": [
                 "openocd",
                 "-f",
-                "${3:interface/stlink.cfg}",
+                "interface/stlink.cfg",
                 "-f",
-                "${4:target/stm32f7x.cfg}"
+                "target/${3|stm32f7x,stm32h7x,stm32f4x,stm32l4x|}.cfg"
+              ],
+              "serverReady": "Listening on port 3333 for gdb connections",
+              "target": "localhost:3333",
+              "disconnectCommands": [
+                "monitor resume"
+              ]
+            }
+          },
+          {
+            "label": "Embedded React: STM32H7 with two flash banks",
+            "description": "Debug a Flow B app on a dual-bank STM32H7 through an ST-Link.",
+            "body": {
+              "type": "embedded-react",
+              "request": "attach",
+              "name": "Debug the app on the STM32H7",
+              "program": "^\"\\${workspaceFolder}/${1:build/firmware.elf}\"",
+              "debugFile": "^\"\\${workspaceFolder}/dist/app.erdbg\"",
+              "gdb": "${2:arm-none-eabi-gdb}",
+              "server": [
+                "openocd",
+                "-f",
+                "interface/stlink.cfg",
+                "-c",
+                "set DUAL_BANK 1",
+                "-f",
+                "target/stm32h7x.cfg"
               ],
               "serverReady": "Listening on port 3333 for gdb connections",
               "target": "localhost:3333",
@@ -356,6 +398,32 @@
                 "board/esp32s3-builtin.cfg",
                 "-c",
                 "init; reset halt"
+              ],
+              "serverReady": "Listening on port 3333 for gdb connections",
+              "target": "localhost:3333",
+              "disconnectCommands": [
+                "monitor resume"
+              ]
+            }
+          },
+          {
+            "label": "Embedded React: RP2040 with a debug probe",
+            "description": "Debug a Flow B app on an RP2040 through a CMSIS-DAP probe.",
+            "body": {
+              "type": "embedded-react",
+              "request": "attach",
+              "name": "Debug the app on the RP2040",
+              "program": "^\"\\${workspaceFolder}/${1:build/firmware.elf}\"",
+              "debugFile": "^\"\\${workspaceFolder}/dist/app.erdbg\"",
+              "gdb": "${2:arm-none-eabi-gdb}",
+              "server": [
+                "openocd",
+                "-f",
+                "interface/cmsis-dap.cfg",
+                "-f",
+                "target/rp2040.cfg",
+                "-c",
+                "adapter speed 5000"
               ],
               "serverReady": "Listening on port 3333 for gdb connections",
               "target": "localhost:3333",

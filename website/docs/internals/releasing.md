@@ -60,13 +60,16 @@ by channel:
    `engine/`, then `embedded-react-runtime` from `runtime/`, which depends on that engine version.
 3. **PlatformIO**, from the root `library.json`, when `PLATFORMIO_AUTH_TOKEN` is set. One library
    holds the engine and the runtime.
-4. **GitHub Release**, with generated notes and a source tarball (`engine`, `runtime`, `backends`,
-   `LICENSE`, `NOTICE`, `README.md`) for the CMake `FetchContent` channel.
+4. **The VS Code extension**, from `editors/vscode`: the Visual Studio Marketplace when `VSCE_PAT` is set, and
+   Open VSX when `OVSX_PAT` is set. It is packed once, and a version a registry already has is skipped.
+5. **GitHub Release**, with generated notes, the extension's `.vsix` and a source tarball (`engine`, `runtime`,
+   `backends`, `LICENSE`, `NOTICE`, `README.md`) for the CMake `FetchContent` channel.
 
 Each channel is gated on its own variable or secret, so they can be enabled one at a time. First-time
 setup for npm is the trusted publisher on npmjs.com, pointed at this repository and workflow, with
 the owner name in the exact case GitHub reports; a case mismatch makes the token exchange fail
-silently and npm fall back to asking for a token.
+silently and npm fall back to asking for a token. The extension needs the `embedded-react` publisher on the
+Marketplace and the `embedded-react` namespace on Open VSX, each made once by hand.
 
 ## The docs site
 

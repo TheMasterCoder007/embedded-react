@@ -51,6 +51,27 @@ function findCli(start: string): string | null {
 }
 
 /**
+ * The version of a package that has no debug adapter, from its CLI.
+ *
+ * @param cli  The CLI's script.
+ *
+ * @returns The package's version when it is too old to debug with, or null.
+ */
+function versionWithoutAdapter(cli: string): string | null {
+  const packageFolder = dirname(cli);
+  const manifest = join(packageFolder, 'package.json');
+  if (!existsSync(manifest)) {
+    return null;
+  }
+  const {name, version} = JSON.parse(readFileSync(manifest, 'utf8'));
+  // The published package has the adapter compiled, and the repository's has its source.
+  const hasAdapter = ['debug-adapter.mjs', 'debug-adapter.mts'].some(file =>
+    existsSync(join(packageFolder, file)),
+  );
+  return name === PACKAGE_NAME && !hasAdapter ? String(version) : null;
+}
+
+/**
  * A program's full path, from PATH.
  *
  * @param program  The program's name.
@@ -100,6 +121,12 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!cli) {
           throw new Error(
             'No embedded-react package in the project\'s node_modules. Install it there, or name its CLI in the configuration\'s "cli" or the "embedded-react.cli" setting.',
+          );
+        }
+        const tooOld = versionWithoutAdapter(cli);
+        if (tooOld) {
+          throw new Error(
+            `embedded-react ${tooOld} in this project is older than debugging from the editor needs. Update it with "npm install embedded-react@latest".`,
           );
         }
         // The editor runs a command that is just `node` in its own runtime, with require(), which can't load the

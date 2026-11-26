@@ -5,8 +5,20 @@ app's source, the step buttons, the app's frames in the call stack, and its stat
 An app fault stops on the line that faulted, with its reason. On a board, C breakpoints and stepping work in the same
 session.
 
+![A Flow B app stopped at a breakpoint, with its state in the Variables pane and the simulator beside the code](images/debugging.png)
+
+## Install
+
+Search for "Embedded React" in the Extensions view, or:
+
+```bash
+code --install-extension embedded-react.embedded-react-debug
+```
+
+It is on the Visual Studio Marketplace and on Open VSX, and each release has the `.vsix` attached.
+
 The extension only registers the `embedded-react` debug type. The debug adapter is in the project's `embedded-react`
-package (`embedded-react debug-adapter`), so it always matches the compiler that wrote `app.erdbg`.
+package (`embedded-react debug-adapter`), so it always matches the compiler that wrote `app.erdbg`. When the project's package is too old to have one, the session's error says so.
 
 ## In the simulator
 
@@ -37,8 +49,15 @@ browser instead, or leaves it closed. "Embedded React: attach to the simulator" 
 The ESP32-S3 and RP2040 board examples have a `.vscode` folder that builds, flashes and attaches on F5, and
 `npm create embedded-react@latest my-app -- --board <name>` writes one for a new project.
 
-To write one by hand, add a configuration to `.vscode/launch.json` (the snippets "Embedded React: board through OpenOCD" and "Embedded React:
-ESP32-S3 built-in JTAG" fill one in), then start it:
+To write one by hand, add a configuration to `.vscode/launch.json`, then start it. **Add Configuration** has a snippet
+for each board family:
+
+- "Embedded React: STM32 with an ST-Link"
+- "Embedded React: STM32H7 with two flash banks"
+- "Embedded React: ESP32-S3 built-in JTAG"
+- "Embedded React: RP2040 with a debug probe"
+
+The STM32 one fills in this:
 
 ```json
 {
@@ -76,4 +95,5 @@ npm install
 npm run build
 ```
 
-`npm run package` writes a `.vsix` to install with "Extensions: Install from VSIX".
+`npm run package` writes a `.vsix` to install with "Extensions: Install from VSIX". The release workflow publishes
+the same file, at the repository's version.
