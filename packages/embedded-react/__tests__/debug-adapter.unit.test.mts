@@ -1384,7 +1384,10 @@ describe('debug adapter', () => {
       'erb breakpoints',
       'disconnect',
     ]);
-    expect(editor.gdb.lastArguments.has('attach')).toBe(true);
+    // The field is the adapter's own, so GDB's attach doesn't get it.
+    expect(editor.gdb.lastArguments.get('attach')).not.toHaveProperty(
+      'request',
+    );
     expect(editor.gdb.lastArguments.has('launch')).toBe(false);
     expect(editor.gdb.lastArguments.get('disconnect')).toEqual({
       terminateDebuggee: false,

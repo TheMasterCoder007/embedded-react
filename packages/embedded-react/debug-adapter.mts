@@ -213,6 +213,7 @@ const OWN_FIELDS = [
   'simulator',
   'entry',
   'port',
+  'request',
   'screen',
 ];
 

@@ -740,7 +740,7 @@ erb file /path/to/my-app/dist/app.erdbg
 
 [The commands](#commands) then work there, `erb break` and `erb where` among them. The IDE still sees a C
 session: a stop the app made shows in the VM's C, and the app's line and values come from the commands. The
-session's GDB needs Python. The GDB CLion bundles has it, and STM32CubeIDE's doesn't.
+session's GDB needs Python. CLion's bundled GDB has it, and STM32CubeIDE's doesn't.
 
 ## In the simulator, with no board
 
