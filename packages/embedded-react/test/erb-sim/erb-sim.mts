@@ -370,6 +370,17 @@ async function session(project: string, port: number): Promise<void> {
       [sizeless.body, page.status],
     );
 
+    await editor.request('embedded-react.outline', {
+      rect: {x: -10, y: -10, width: 30, height: 30},
+    });
+    check(
+      'an outline is cut to the panel',
+      await page.shows(
+        status => JSON.stringify(status.outline) === '[0,0,20,20]',
+      ),
+      page.status,
+    );
+
     const outlined = await editor.request('embedded-react.outline', {
       rect: plus?.rect,
     });

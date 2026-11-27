@@ -59,6 +59,8 @@ class NodeTree implements vscode.TreeDataProvider<Row> {
   private outdated = false;
   private tops: Row[] = [];
   private readonly rows = new Map<TreeNode, Row>();
+  /** The id of the node the view has selected, which keeps its outline at the next stop. */
+  private selected: number | null = null;
   view: vscode.TreeView<Row> | null = null;
 
   /**
@@ -121,6 +123,14 @@ class NodeTree implements vscode.TreeDataProvider<Row> {
     try {
       const answer = await session.customRequest(NODES_REQUEST);
       this.show(answer?.nodes ?? []);
+      // The view keeps a node selected by its id, and running on took its outline off.
+      const kept = [...this.rows.keys()].find(
+        node => node.id === this.selected,
+      );
+      this.selected = kept?.id ?? null;
+      if (kept) {
+        this.draw(kept.rect);
+      }
     } catch (error) {
       this.show([], error instanceof Error ? error.message : String(error));
     }
@@ -229,9 +239,14 @@ class NodeTree implements vscode.TreeDataProvider<Row> {
    */
   outline(selected: readonly Row[]): void {
     const row = selected.find(candidate => candidate.kind === 'node');
+    this.selected = row?.node.id ?? null;
+    this.draw(row?.node.rect);
+  }
+
+  private draw(rect: TreeNode['rect'] | undefined): void {
     // The adapter leaves a running app alone, and an older one has no such request.
     this.session
-      ?.customRequest(OUTLINE_REQUEST, {rect: row?.node.rect})
+      ?.customRequest(OUTLINE_REQUEST, {rect})
       .then(undefined, () => {});
   }
 
@@ -259,9 +274,11 @@ class NodeTree implements vscode.TreeDataProvider<Row> {
             vscode.Uri.file(place.path).fsPath === path,
         ),
     );
-    // A component's top node comes first, and so does a list's first row: that one, unless one is selected already.
-    if (made.length && !made.some(row => view.selection.includes(row))) {
-      await view.reveal(made[0], {select: true, focus: false});
+    // The top node of each use, not the nodes inside it: one per row of a list.
+    const tops = made.filter(row => !row.parent || !made.includes(row.parent));
+    // The first one, unless one is selected already.
+    if (tops.length && !tops.some(row => view.selection.includes(row))) {
+      await view.reveal(tops[0], {select: true, focus: false});
     }
   }
 }

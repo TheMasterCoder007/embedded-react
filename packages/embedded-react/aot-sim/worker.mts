@@ -85,6 +85,18 @@ export type FromWorker =
   | {kind: 'answer'; id: number; answer: Record<string, any>}
   | {kind: 'event'; event: string; body: Record<string, any>};
 
+/** A rect cut to the panel: its left, top, width and height, or null when none of it is on the panel. */
+function onPanel([x, y, rectWidth, rectHeight]: number[]):
+  [number, number, number, number] | null {
+  const left = Math.max(x, 0);
+  const top = Math.max(y, 0);
+  const right = Math.min(x + rectWidth, width);
+  const bottom = Math.min(y + rectHeight, height);
+  return right > left && bottom > top
+    ? [left, top, right - left, bottom - top]
+    : null;
+}
+
 /** The simulator's module, as Emscripten makes it. */
 interface SimulatorModule {
   HEAPU8: Uint8Array;
@@ -330,8 +342,8 @@ function request(message: Extract<ToWorker, {kind: 'request'}>): void {
       Array.isArray(askedRect) && askedRect.length === 4
         ? (askedRect.map(Number) as [number, number, number, number])
         : null;
-    // A node with no size has none.
-    const outline = rect && rect[2] > 0 && rect[3] > 0 ? rect : null;
+    // Cut to the panel, as a board's is. A node with no size there has none.
+    const outline = rect && onPanel(rect);
     post({kind: 'outline', rect: outline});
     answer = {shown: outline !== null};
   } else {

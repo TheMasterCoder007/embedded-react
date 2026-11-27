@@ -2436,6 +2436,9 @@ class ErOutline(gdb.Command):
             return
         if not wanted.isdigit():
             raise ErbError("er outline takes a node's number from er nodes, or off")
+        # A running app paints over it, and its frame can't be written under it.
+        if not board_halted():
+            raise ErbError("er outline needs a halted board")
 
         def find(nodes):
             for node in nodes:

@@ -618,7 +618,7 @@ which [`er nodes`](#commands) prints as text.
   node, when the view shows. The line of a component's element, `<Card />`, selects the top node the component
   made.
 - **The selected node is outlined on the panel** while the app is stopped, in magenta, and the outline goes when
-  the app runs on. On a board this needs a panel that stays lit while the chip is halted and is scanned from a
+  the app runs on. A node that stays selected is outlined again at the next stop. On a board this needs a panel that stays lit while the chip is halted and is scanned from a
   framebuffer in memory, which the debugger draws on: an STM32's LTDC, with the `dma2d` backend. An ESP32-S3's RGB
   panel is fed by the chip as it runs, and a panel driven over SPI keeps its picture in its own memory, so they
   have none, and the Debug Console says so once. A tall node's sides are dotted, to keep the writes few. In the
