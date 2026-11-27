@@ -41,6 +41,7 @@ import {posix} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {Readable, Writable} from 'node:stream';
 import {SimulatorLink} from './aot-sim/adapter-link.mts';
+import {startGuard, type Guard} from './debug-guard.mts';
 import {flashStampPath} from './flash.mts';
 import {checkGdb, type CheckedGdb} from './gdb-check.mts';
 
@@ -57,7 +58,8 @@ export interface GdbProcess {
   stdout: Readable;
   /** Calls the listener once when GDB ends, with what it wrote to stderr. */
   onExit(listener: (errors: string) => void): void;
-  kill(): void;
+  /** Ends GDB: at once when `now`, as GDB puts off a request to end while it waits on a board. */
+  kill(now?: boolean): void;
 }
 
 type StartGdb = (
@@ -79,6 +81,8 @@ export interface AdapterOptions {
   startGdb?: StartGdb;
   /** Checks GDB before it starts. Left out with a stand-in GDB, nothing is checked. */
   checkGdb?: CheckGdb;
+  /** Whether a board session runs the guard that resumes the board if the adapter is killed. Off with a stand-in GDB. */
+  guard?: boolean;
   /** gdb/erb.py, when it isn't beside this file. */
   script?: string;
   /** The CLI a launch starts the simulator with, when it isn't beside this file. */
@@ -209,6 +213,7 @@ const OWN_FIELDS = [
   'simulator',
   'entry',
   'port',
+  'request',
   'screen',
 ];
 
@@ -355,7 +360,7 @@ function startGdbProcess(
     onExit: onEnd => {
       listener = onEnd;
     },
-    kill: () => child.kill(),
+    kill: now => child.kill(now ? 'SIGKILL' : 'SIGTERM'),
   };
 }
 
@@ -373,6 +378,11 @@ export class DebugAdapter {
   /** The simulator, which stands where GDB does when the configuration names it. */
   private simulator: SimulatorLink | null = null;
   private server: ReturnType<typeof spawn> | null = null;
+  private readonly guarded: boolean;
+  /** Runs the GDB server of a board session, and resumes the board if the adapter is killed. */
+  private guard: Guard | null = null;
+  /** Whether the adapter left the board itself, with nothing for the guard to do. */
+  private left = false;
   private clientSeq = 1;
   private gdbSeq = 1;
   private readonly waiting = new Map<number, Waiter>();
@@ -427,6 +437,9 @@ export class DebugAdapter {
     this.output = options.output;
     this.startGdb = options.startGdb ?? startGdbProcess;
     this.checkGdb = options.checkGdb ?? (options.startGdb ? null : checkGdb);
+    // The guard leaves the adapter's process tree through a shell, which Windows doesn't have.
+    this.guarded =
+      options.guard ?? (!options.startGdb && process.platform !== 'win32');
     this.script =
       options.script ?? fileURLToPath(new URL('./gdb/erb.py', import.meta.url));
     // Beside this file: cli.mts in the repository, cli.mjs once published.
@@ -493,7 +506,12 @@ export class DebugAdapter {
         return this.respond(request, CAPABILITIES);
       case 'launch':
       case 'attach': {
-        const started = this.start(request, request.command);
+        // An editor that can only send one of the two says which it means in the configuration's "request".
+        const named: unknown = args.request;
+        const started = this.start(
+          request,
+          named === 'launch' || named === 'attach' ? named : request.command,
+        );
         this.started = started.catch(() => {});
         return started;
       }
@@ -539,7 +557,8 @@ export class DebugAdapter {
       case 'disconnect':
         return this.disconnect(request);
       case 'terminate':
-        if (this.simulator) {
+        // A board the session attached to isn't its to end.
+        if (this.simulator || this.session === 'attach') {
           return this.disconnect(request);
         }
         return this.forward(request);
@@ -786,12 +805,17 @@ export class DebugAdapter {
       stopped.description = this.fault.refused ? 'Load refused' : 'App fault';
       stopped.text = this.fault.reason;
       delete stopped.hitBreakpointIds;
+      // For an editor that shows a stop's place and not its reason.
+      this.say(`embedded-react: ${stopped.description}: ${this.fault.text}`);
     } else if (this.status?.watch) {
       const change = this.status.watch;
       stopped.reason = 'data breakpoint';
       stopped.description = `${change.label}: ${change.previous} → ${change.value}`;
       stopped.text = `Written at ${change.where}`;
       delete stopped.hitBreakpointIds;
+      this.say(
+        `embedded-react: ${stopped.description}, written at ${change.where}`,
+      );
       if (change.id !== null) {
         stopped.hitBreakpointIds = [STATE_BREAKPOINT + change.id];
       }
@@ -992,6 +1016,7 @@ export class DebugAdapter {
       if (this.config.target) {
         await this.console('disconnect');
       }
+      this.left = true;
     } catch (error: any) {
       this.say(`embedded-react: ${error.message}`);
     }
@@ -1014,8 +1039,22 @@ export class DebugAdapter {
         this.say(`embedded-react: ${checked.note}`);
       }
     }
+    const guard =
+      this.guarded && this.session === 'attach'
+        ? () =>
+            startGuard({
+              server: config.server,
+              cwd: config.cwd,
+              environment,
+              gdb: gdbCommand,
+              target: config.target,
+              disconnectCommands: config.disconnectCommands ?? [],
+            })
+        : null;
     if (config.server) {
-      await this.startServer(config);
+      await this.startServer(config, guard);
+    } else if (guard) {
+      this.guard = guard();
     }
     const gdb = this.startGdb(gdbCommand, config.cwd, environment);
     this.gdb = gdb;
@@ -1205,8 +1244,12 @@ export class DebugAdapter {
    * Starts the configuration's GDB server and waits until GDB can connect to it.
    *
    * @param config  The launch configuration.
+   * @param guard  Starts the guard that runs the server, for a board session that has one.
    */
-  private async startServer(config: Record<string, any>): Promise<void> {
+  private async startServer(
+    config: Record<string, any>,
+    guard: (() => Guard) | null,
+  ): Promise<void> {
     const [command, ...args] = config.server as string[];
     const port = /^(?:tcp:)?([^:]*):(\d+)$/.exec(config.target ?? '');
     const host = port?.[1] || 'localhost';
@@ -1216,12 +1259,6 @@ export class DebugAdapter {
         `Port ${port[2]} is already in use, so another GDB server is running. End it, or leave "server" out to use it.`,
       );
     }
-    const server = spawn(command, args, {
-      cwd: config.cwd,
-      env: this.environment(config),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    this.server = server;
     let printed = '';
     let failure = '';
     const onOutput = (chunk: Buffer) => {
@@ -1229,15 +1266,30 @@ export class DebugAdapter {
       printed = (printed + text).slice(-ERRORS_KEPT);
       this.event('output', {category: 'console', output: text});
     };
-    server.stdout?.on('data', onOutput);
-    server.stderr?.on('data', onOutput);
-    server.on('error', error => {
-      failure = `${command} could not start: ${error.message}`;
-    });
-    server.on('exit', code => {
-      failure ||= `${command} ended with code ${code}`;
-      this.server = null;
-    });
+    if (guard) {
+      // The guard starts it, outside the adapter's process tree.
+      this.guard = guard();
+      this.guard.stdout.on('data', onOutput);
+      this.guard.onFailure(why => {
+        failure ||= why;
+      });
+    } else {
+      const server = spawn(command, args, {
+        cwd: config.cwd,
+        env: this.environment(config),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      this.server = server;
+      server.stdout?.on('data', onOutput);
+      server.stderr?.on('data', onOutput);
+      server.on('error', error => {
+        failure = `${command} could not start: ${error.message}`;
+      });
+      server.on('exit', code => {
+        failure ||= `${command} ended with code ${code}`;
+        this.server = null;
+      });
+    }
 
     const deadline = Date.now() + (config.serverTimeout ?? SERVER_TIMEOUT_MS);
     for (;;) {
@@ -1284,7 +1336,17 @@ export class DebugAdapter {
       return;
     }
     await this.leaveBoard();
-    if (this.gdb) {
+    if (this.gdb && this.session === 'attach') {
+      // The board runs on, whatever the editor asks: some send `terminateDebuggee` for every session.
+      await this.gdbCall('disconnect', {terminateDebuggee: false}).catch(
+        () => {},
+      );
+      this.respond(request);
+      if (request.command === 'terminate' && !this.ended) {
+        this.ended = true;
+        this.event('terminated');
+      }
+    } else if (this.gdb) {
       await this.forward(request).catch(() => this.respond(request));
     } else {
       this.respond(request);
@@ -1302,11 +1364,14 @@ export class DebugAdapter {
     this.simulator = null;
     this.server?.kill();
     this.server = null;
+    // Without the adapter's word that it left the board, the guard resumes it.
+    this.guard?.end(this.left);
+    this.guard = null;
     this.cleanUpGdb?.();
     this.cleanUpGdb = null;
     const gdb = this.gdb;
     if (gdb && now) {
-      gdb.kill();
+      gdb.kill(true);
     } else if (gdb) {
       gdb.stdin.end();
       setTimeout(() => gdb.kill(), GDB_EXIT_MS).unref();

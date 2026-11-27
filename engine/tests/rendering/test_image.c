@@ -1072,7 +1072,8 @@ int main(void)
                     const uint32_t expected = image_wide[x / 2] & k_cases[case_index].color_mask;
                     if (px(&test_context, x, y) != expected)
                     {
-                        fprintf(stderr, "FAIL: wide %s image: wrong pixel at (%d,%d)\n", k_cases[case_index].what, x, y);
+                        fprintf(
+                            stderr, "FAIL: wide %s image: wrong pixel at (%d,%d)\n", k_cases[case_index].what, x, y);
                         return EXIT_FAILURE;
                     }
                 }

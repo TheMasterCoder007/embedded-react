@@ -1,6 +1,12 @@
 # JetBrains
 .idea/
 
+# Eclipse-based IDEs
+.metadata/
+.project
+.cproject
+.settings/
+
 # clangd's index, written by an editor's C tooling
 .cache/
 

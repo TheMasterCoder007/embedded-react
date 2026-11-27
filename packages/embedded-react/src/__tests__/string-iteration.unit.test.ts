@@ -46,7 +46,10 @@ function sourceFiles(directory: string): string[] {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       if (entry.name !== '__tests__') files.push(...sourceFiles(path));
-    } else if (/\.(js|jsx|ts|tsx|mts)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+    } else if (
+      /\.(js|jsx|ts|tsx|mts)$/.test(entry.name) &&
+      !entry.name.endsWith('.d.ts')
+    ) {
       files.push(path);
     }
   }
@@ -63,7 +66,8 @@ function iteratedExpression(node: ts.Node): ts.Expression | undefined {
   if (ts.isForOfStatement(node)) return node.expression;
   if (ts.isSpreadElement(node)) return node.expression;
   if (ts.isYieldExpression(node) && node.asteriskToken) return node.expression;
-  if (ts.isVariableDeclaration(node) && ts.isArrayBindingPattern(node.name)) return node.initializer;
+  if (ts.isVariableDeclaration(node) && ts.isArrayBindingPattern(node.name))
+    return node.initializer;
   if (
     ts.isBinaryExpression(node) &&
     node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
@@ -71,12 +75,17 @@ function iteratedExpression(node: ts.Node): ts.Expression | undefined {
   ) {
     return node.right;
   }
-  if (ts.isCallExpression(node) && node.expression.getText() === 'Array.from') return node.arguments[0];
+  if (ts.isCallExpression(node) && node.expression.getText() === 'Array.from')
+    return node.arguments[0];
   return undefined;
 }
 
 /** Every place the files iterate a string, as `file:line`. */
-function stringIterations(program: ts.Program, files: string[], root: string): string[] {
+function stringIterations(
+  program: ts.Program,
+  files: string[],
+  root: string,
+): string[] {
   const checker = program.getTypeChecker();
   const found: string[] = [];
   for (const file of files) {
@@ -85,7 +94,8 @@ function stringIterations(program: ts.Program, files: string[], root: string): s
     const visit = (node: ts.Node): void => {
       const expression = iteratedExpression(node);
       if (expression && mayBeString(checker.getTypeAtLocation(expression))) {
-        const line = source.getLineAndCharacterOfPosition(expression.getStart()).line + 1;
+        const line =
+          source.getLineAndCharacterOfPosition(expression.getStart()).line + 1;
         found.push(`${relative(root, file)}:${line}`);
       }
       ts.forEachChild(node, visit);
@@ -104,7 +114,11 @@ function checkSnippet(code: string): string[] {
     fileName === name
       ? ts.createSourceFile(fileName, code, languageVersion, true)
       : readFile(fileName, languageVersion, ...rest);
-  return stringIterations(ts.createProgram([name], COMPILER_OPTIONS, host), [name], SOURCE_ROOT);
+  return stringIterations(
+    ts.createProgram([name], COMPILER_OPTIONS, host),
+    [name],
+    SOURCE_ROOT,
+  );
 }
 
 describe('string iteration in the Flow A bundle', () => {

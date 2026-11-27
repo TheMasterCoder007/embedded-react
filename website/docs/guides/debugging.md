@@ -1,6 +1,6 @@
 ---
 title: 'Debugging on a board'
-description: 'Debug a Flow B app on the board through a debug probe: GDB commands that read the app by its own names, expressions over its locals and state, breakpoints with conditions and stepping in its source, a stop when the app faults, and the same from VS Code.'
+description: 'Debug a Flow B app on the board through a debug probe: GDB commands that read the app by its own names, expressions over its locals and state, breakpoints with conditions and stepping in its source, a stop when the app faults, and the same from VS Code, an Eclipse-based IDE or CLion.'
 ---
 
 A Flow B app on a board can be debugged the way its firmware is: through a debug probe, with GDB. A script in the
@@ -390,6 +390,9 @@ Here the firmware set it through an input, and the backtrace names the C that di
 The same session runs inside VS Code: breakpoints in the gutter of the app's source, the step buttons, and the
 app's values in the Variables pane. It needs everything above, with GDB 14 or later and the hook in the firmware.
 
+The debug adapter behind it is not VS Code's own. [An Eclipse-based IDE](#in-an-eclipse-based-ide) and
+[CLion](#in-clion) run it too, each through a plugin that hosts any debug adapter.
+
 ### Install the extension
 
 Search for **Embedded React** in the Extensions view, or:
@@ -600,6 +603,145 @@ A breakpoint in a C file works as in any C debug session, and so does **Pause**.
 - **The Variables pane** has the C frame's own variables, and **App state** on every frame.
 - **The step buttons** step C.
 
+## In an Eclipse-based IDE
+
+An Eclipse-based IDE, such as STM32CubeIDE, runs the debug adapter through LSP4E, Eclipse's own client for debug
+adapters. It needs no plugin of this project's.
+
+1. **Install LSP4E.** In **Help > Install New Software**, work with
+   `https://download.eclipse.org/lsp4e/releases/latest/` and tick **Debug Adapter client for Eclipse IDE**.
+2. **Have the app's folder in the workspace**, as a project of its own: **File > New > Project > General >
+   Project**, with **Use default location** unticked and the app's folder as the location. A breakpoint only goes
+   in a file the workspace has. The workspace's own folder has to be outside the app's repository: Eclipse makes no
+   project of a folder inside its workspace.
+3. **Add a debug configuration.** In **Run > Debug Configurations**, make a new **Debug Adapter Launcher**, and
+   under **Launch a Debug Server using the following arguments** give it:
+
+   - **Command:** the full path of `node`.
+   - **Arguments:** `/path/to/my-app/node_modules/embedded-react/cli.mjs debug-adapter`. They are split at each
+     space and take no variables, so the path is a full one with no space in it.
+   - **Launch Parameters (Json):** the fields of [a launch configuration](#a-launch-configuration), with
+     `"request": "attach"`:
+
+```json
+{
+  "request": "attach",
+  "program": "${workspace_loc:/firmware}/build/firmware.elf",
+  "debugFile": "${workspace_loc:/my-app}/dist/app.erdbg",
+  "cwd": "${workspace_loc:/my-app}",
+  "gdb": "/opt/homebrew/bin/gdb",
+  "server": [
+    "/opt/homebrew/bin/openocd",
+    "-f",
+    "interface/stlink.cfg",
+    "-f",
+    "target/stm32h7x.cfg"
+  ],
+  "serverReady": "Listening on port 3333 for gdb connections",
+  "target": "localhost:3333",
+  "disconnectCommands": ["monitor resume"]
+}
+```
+
+`"request": "attach"` is what makes the session an attach: the configuration has no other switch for it.
+`${workspace_loc:/my-app}` is the folder of the workspace's project `my-app`. An IDE started from the desktop
+doesn't have the shell's `PATH`, so `node`, the GDB and the server are full paths here, or `"environment"` gives
+a `PATH` that has them. STM32CubeIDE's own GDB has no Python: [A GDB for the board](#a-gdb-for-the-board) lists
+ones that do.
+
+To set a breakpoint, open the app's source with **Open With > Generic Text Editor** and double-click the ruler
+beside the line. Then start the configuration with **Debug**.
+
+What a session has, beside VS Code's:
+
+| In VS Code                               | In an Eclipse-based IDE                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Breakpoints in the app's source and in C | The same. C breakpoints are the IDE's own                                                                     |
+| A condition and a hit count              | In the Breakpoints view, with the breakpoint selected                                                         |
+| A log message                            | Not there. [`erb log`](#conditions-hit-counts-and-logpoints) in the console is                                |
+| A breakpoint that moved, or was refused  | Not shown: the marker stays where it was put. One that moved still stops                                      |
+| The step buttons                         | The same                                                                                                      |
+| The call stack                           | In the Debug view, under the thread that stopped: its first 20 frames. Each task of an RTOS is a thread there |
+| Locals and App state, and Set Value      | Two entries in the Variables view, **Locals** and **App state**. **Change Value**                             |
+| Hover and Watch                          | Hover, and the Expressions view                                                                               |
+| The Debug Console                        | The session's console: GDB's commands, and the script's                                                       |
+| Break on Value Change                    | Not there. [`erb watch`](#commands) in the console is                                                         |
+| The stop at a fault, with its reason     | It stops on the line, and the reason is in the console. `erb faults off` ends it                              |
+| Disconnect leaves the board running      | The same, for **Terminate** too                                                                               |
+| The simulator in a split                 | The console has the page's address, to open in a browser                                                      |
+
+For [the simulator](#in-the-simulator-with-no-board) the parameters are
+`{"simulator": true, "cwd": "${workspace_loc:/my-app}"}`, and there is no GDB or server to find.
+
+A session that can't start, say because the GDB isn't found, stays at **Launching** in the Progress view: LSP4E
+keeps waiting after the adapter has refused. Cancel it there, and the error that follows has the adapter's reason.
+
+## In CLion
+
+CLion runs the debug adapter through [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij), a plugin with a
+run configuration for any debug adapter. It works the same in the other JetBrains IDEs.
+
+CLion's own DAP debug profile can start the adapter too, but it isn't enough: it sends only the breakpoints set in
+C and C++ files, so one in the app's source never reaches the adapter, and its Variables pane shows a frame's
+locals and not the app's state.
+
+1. **Install LSP4IJ** from **Settings > Plugins > Marketplace**.
+2. **Add a run configuration.** In **Run > Edit Configurations**, add a **Debug Adapter Protocol** one:
+
+   - **Server** tab, **Command:** `node node_modules/embedded-react/cli.mjs debug-adapter`.
+   - **Mappings** tab, **File name patterns:** `*.tsx`, `*.jsx`, `*.ts` and `*.js` for the app, and `*.c` and
+     `*.h` for breakpoints in the firmware's C.
+   - **Configuration** tab, **Working directory:** the app's folder. Leave it a launch, and in
+     **DAP parameters (JSON)** give the fields of [a launch configuration](#a-launch-configuration), with
+     `"request": "attach"`:
+
+```json
+{
+  "request": "attach",
+  "program": "${workspaceFolder}/../firmware/build/firmware.elf",
+  "debugFile": "${workspaceFolder}/dist/app.erdbg",
+  "cwd": "${workspaceFolder}",
+  "gdb": "gdb",
+  "server": [
+    "openocd",
+    "-f",
+    "interface/stlink.cfg",
+    "-f",
+    "target/stm32h7x.cfg"
+  ],
+  "serverReady": "Listening on port 3333 for gdb connections",
+  "target": "localhost:3333",
+  "disconnectCommands": ["monitor resume"]
+}
+```
+
+`${workspaceFolder}` is the working directory. The configuration's own attach mode connects to an adapter that
+already listens on a port, which this one doesn't, so it stays a launch and `"request": "attach"` says the rest.
+The **Server** tab takes environment variables, for a `PATH` with `node`, the GDB and the server when CLion wasn't
+started from a shell that has them.
+
+A breakpoint goes in the gutter of any file the mappings name. From there the session is VS Code's: conditions,
+hit counts and log messages in the breakpoint's dialog, the step buttons, **Locals** and **App state** with
+**Set Value**, **Break on Value Change** on a state, and **Stop on app faults** under the session's exception
+breakpoints. The simulator's page isn't shown in the IDE: the console has its address.
+
+For [the simulator](#in-the-simulator-with-no-board) the parameters are
+`{"simulator": true, "cwd": "${workspaceFolder}"}`.
+
+## With no plugin
+
+Where a plugin can't be installed, the IDE's own debug session of the firmware still takes the script. In CLion's
+GDB tab, or the Debugger Console of an Eclipse-based IDE, [load it](#load-the-script) as in a terminal:
+
+```text
+source /path/to/my-app/node_modules/embedded-react/gdb/erb.py
+erb file /path/to/my-app/dist/app.erdbg
+```
+
+[The commands](#commands) then work there, `erb break` and `erb where` among them. The IDE still sees a C
+session: a stop the app made shows in the VM's C, and the app's line and values come from the commands. The
+session's GDB needs Python. CLion's bundled GDB has it, and STM32CubeIDE's doesn't.
+
 ## In the simulator, with no board
 
 The Flow B simulator runs the app as a package, in the same runtime a board runs, and an editor debugs it there
@@ -657,7 +799,9 @@ state, and the stop at a fault. What differs:
 | `source` fails with `Error in sourced command file` and `Undefined command: ""` | This GDB has no Python. Use one that has: [A GDB for the board](#a-gdb-for-the-board)                                                                                      |
 | The editor's session fails to start, with an error about GDB                    | The error says what is wrong with the GDB and what to use. [A GDB for the board](#a-gdb-for-the-board) has the list                                                        |
 | A breakpoint never fires on an ESP32-S3                                         | The chip has had a debug session since its last power-on reset, and the server couldn't read the flash mapping. End the server's arguments with `-c "init; reset halt"`    |
+| An ESP32-S3 boots to a black screen after a session that ended badly            | The firmware in flash fails its checksum at boot, which the boot log says. Flash the firmware again                                                                        |
 | A breakpoint never fires on a dual-bank STM32H7                                 | The server's memory map leaves out the second bank, so GDB writes a software breakpoint into flash. Add `-c "set DUAL_BANK 1"` before the target file                      |
+| An Eclipse-based IDE stays at **Launching**                                     | The session couldn't start, and LSP4E keeps waiting. Cancel it in the Progress view: [In an Eclipse-based IDE](#in-an-eclipse-based-ide)                                   |
 | `erb break` says the firmware has no breakpoint hook                            | Build the firmware with `ERB_DEBUG_HOOK=1`                                                                                                                                 |
 | `the board runs build …, but dist/app.erdbg is build …`                         | The debug file is from another build. Build the app and flash it again, or load the file written with the package on the board. From an editor, start the session again    |
 | The debug file is another format, or the descriptor another version             | The script, the compiler and the firmware's runtime are from different releases. Use the script from the `embedded-react` release the firmware and the app were built with |
