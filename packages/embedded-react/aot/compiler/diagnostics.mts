@@ -105,6 +105,27 @@ export function withComponentUse<Result>(
   }
 }
 
+/**
+ * Lowers elements written where a component is used, such as the children it is given, so they are the caller's
+ * and not the component's.
+ *
+ * @param uses  The uses the caller's own nodes have, from currentUses() at the call.
+ * @param lower  The lowering.
+ *
+ * @returns What the lowering returns.
+ */
+export function withUses<Result>(
+  uses: SourcePosition[],
+  lower: () => Result,
+): Result {
+  const inside = componentUses.splice(0, componentUses.length, ...uses);
+  try {
+    return lower();
+  } finally {
+    componentUses.splice(0, componentUses.length, ...inside);
+  }
+}
+
 /** The most bytes each of the engine's fixed string buffers holds, as er_scene.h defines them. */
 export const ENGINE_STRING_MAX = {
   ER_TEXT_MAX: 255,

@@ -18,7 +18,12 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {aotError, withComponentUse} from './diagnostics.mts';
+import {
+  aotError,
+  currentUses,
+  withComponentUse,
+  withUses,
+} from './diagnostics.mts';
 import {foldBoot, isBoot} from './boot.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
@@ -66,7 +71,7 @@ import {
 } from './contexts.mts';
 import {narrowOn, narrowed, narrowedScope} from './tagged-records.mts';
 import type * as t from '@babel/types';
-import type {AotError} from './diagnostics.mts';
+import type {AotError, SourcePosition} from './diagnostics.mts';
 import type {Out} from './out.mts';
 import type {IrBranch, IrChild, IrElement, IrShow} from './ir/nodes.mts';
 import type {IrExpr} from './ir/expressions.mts';
@@ -431,8 +436,17 @@ export function emitComponent(
   state: StateTable,
   options?: EmitOptions,
 ): IrElement {
+  const callerUses = currentUses();
   return withComponentUse(element.loc?.start, () =>
-    expandComponent(element, scope, output, environment, state, options),
+    expandComponent(
+      element,
+      scope,
+      output,
+      environment,
+      state,
+      callerUses,
+      options,
+    ),
   );
 }
 
@@ -444,6 +458,7 @@ export function emitComponent(
  * @param output  The build's output.
  * @param environment  The caller's environment.
  * @param state  The state table.
+ * @param callerUses  Where the components the caller is inside are used.
  * @param options  The emit options.
  *
  * @returns The body, lowered.
@@ -454,6 +469,7 @@ function expandComponent(
   output: Out,
   environment: Env,
   state: StateTable,
+  callerUses: SourcePosition[],
   options?: EmitOptions,
 ): IrElement {
   // Look up the component and keep the call-site children that render something.
@@ -521,6 +537,7 @@ function expandComponent(
     scope,
     environment,
     ref: childrenRef,
+    uses: callerUses,
   };
 
   // Each inlined instance namespaces its own hooks under a unique `c<N>_` prefix so instances stay independent.
@@ -732,14 +749,17 @@ export function emitProvider(
   ) {
     const slot = environment.children!;
     const nodes = rendered(slot.nodes);
-    if (nodes.length === 1 && nodes[0].type === 'JSXElement') {
-      return emitNode(
-        nodes[0],
-        slot.scope,
-        output,
-        {...slot.environment, providers: provided.providers},
-        state,
-        options,
+    const [only] = nodes;
+    if (nodes.length === 1 && only.type === 'JSXElement') {
+      return withUses(slot.uses, () =>
+        emitNode(
+          only,
+          slot.scope,
+          output,
+          {...slot.environment, providers: provided.providers},
+          state,
+          options,
+        ),
       );
     }
   }
@@ -1261,16 +1281,16 @@ export function emitChildren(
     if (isChildrenRef(expression, environment)) {
       // {children} / {props.children}: emit the captured call-site children, in the caller's scope/env. They read
       // a context from the providers where they are rendered, as in React.
+      const slot = environment.children!;
       lowered.push(
-        ...emitChildren(
-          environment.children!.nodes,
-          environment.children!.scope,
-          output,
-          {
-            ...environment.children!.environment,
-            providers: environment.providers,
-          },
-          state,
+        ...withUses(slot.uses, () =>
+          emitChildren(
+            slot.nodes,
+            slot.scope,
+            output,
+            {...slot.environment, providers: environment.providers},
+            state,
+          ),
         ),
       );
       continue;

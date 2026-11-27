@@ -401,6 +401,8 @@ export interface ChildrenSlot {
   scope: Scope;
   environment: Env;
   ref: ChildrenRef | null;
+  /** Where the components the caller is inside are used: the children are the caller's nodes. */
+  uses: SourcePosition[];
 }
 
 /** A callback prop: the caller's function, compiled in the caller's env and state. */
