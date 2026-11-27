@@ -19,9 +19,9 @@
 //
 // It builds tools/erb-frames' headless host as erb-gdb does, compiles the native-calls fixture with its debug file, and
 // plays an editor's part of a session: a breakpoint in the fixture's source and one on a C function, a tap that
-// reaches both, the call stack and variables at each stop, expressions in hover and Watch, and the step buttons in C
-// and in the app. A second session presses the counter fixture's button six times past a logpoint, a breakpoint with a
-// condition and one with a hit count. A third runs the list-fault fixture, whose handler reads a row its list doesn't
+// reaches both, the call stack and variables at each stop, expressions in hover and Watch, the node tree, and the step
+// buttons in C and in the app. A second session presses the counter fixture's button six times past a logpoint, a
+// breakpoint with a condition and one with a hit count. A third runs the list-fault fixture, whose handler reads a row its list doesn't
 // have, to the stop at the fault, and a fourth gives the host that package cut short, to the stop at the refused load.
 // A fifth sets data breakpoints on the counter's number and string states, and runs to each change.
 //
@@ -350,6 +350,23 @@ async function session(
     context: 'hover',
   });
   check('a local evaluates by name', hover.body?.result === '1', hover);
+  const tree = await editor.request('embedded-react.nodes');
+  /** Each node of the tree, the tops first. */
+  const flat = (nodes: Body[]): Body[] =>
+    nodes.flatMap(node => [node, ...flat(node.children)]);
+  const next = flat(tree.body?.nodes ?? []).find(node =>
+    node.props.some((prop: Body) => prop.value === '"next"'),
+  );
+  check(
+    "the node tree has the button's text, with its rect and its element's line",
+    next?.type === 'text' &&
+      next.rect.width > 0 &&
+      next.source?.name === 'native-calls.tsx' &&
+      readFileSync(FIXTURE, 'utf8')
+        .split('\n')
+        [next.source.line - 1]?.includes('>next</Text>'),
+    tree.body ?? tree,
+  );
   const evaluated: [string, string, string][] = [
     ['hover', 'step * 2 + 1', '3'],
     ['watch', 'total >= 0 && !even ? "odd" : "even"', '"odd"'],

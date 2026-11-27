@@ -39,7 +39,7 @@ DEBUG_FILE_FORMAT = 3
 ERB_DEBUG_MAGIC = 0x44425245
 ERB_DEBUG_VERSION = 3
 ER_DEBUG_MAGIC = 0x45445245
-ER_DEBUG_VERSION = 2
+ER_DEBUG_VERSION = 3
 
 NO_FUNCTION = 0xFFFF
 NO_TAG = 0xFFFF
@@ -208,10 +208,17 @@ def engine_layout():
             ("version", "u16", 1),
             ("pool_count", "u16", 1),
             ("pools", "ptr", len(POOL_NAMES)),
-            ("node", "u16", 10),
+            ("node", "u16", len(NODE_FIELDS) + len(NODE_PROPS)),
             ("root_tag", "ptr", 1),
             ("halted", "ptr", 1),
+            ("screen", "ptr", 1),
         ]
+    )
+
+
+def screen_layout():
+    return Layout(
+        [("pixels", "ptr", 1), ("width", "u16", 1), ("height", "u16", 1), ("stride", "u16", 1), ("rotation", "u16", 1), ("format", "u8", 1)]
     )
 
 
@@ -244,6 +251,127 @@ NODE_FIELDS = [
     "scroll_x_at",
     "scroll_y_at",
 ]
+
+# A node's props, in ERDebugProp's order: its name there, its name in the app, how it is read, and the nodes that
+# have it. An enum is its names by value, and a value of 0 or with no name isn't shown.
+NODE_PROPS = [
+    ("LAYOUT_LEFT", "left", "i16", "all"),
+    ("LAYOUT_TOP", "top", "i16", "all"),
+    ("LAYOUT_RIGHT", "right", "i16", "all"),
+    ("LAYOUT_BOTTOM", "bottom", "i16", "all"),
+    ("LAYOUT_WIDTH", "width", "i16", "all"),
+    ("LAYOUT_HEIGHT", "height", "i16", "all"),
+    ("LAYOUT_MIN_WIDTH", "minWidth", "i16", "all"),
+    ("LAYOUT_MAX_WIDTH", "maxWidth", "i16", "all"),
+    ("LAYOUT_MIN_HEIGHT", "minHeight", "i16", "all"),
+    ("LAYOUT_MAX_HEIGHT", "maxHeight", "i16", "all"),
+    ("LAYOUT_PADDING", "padding", "i16", "all"),
+    ("LAYOUT_PADDING_LEFT", "paddingLeft", "i16", "all"),
+    ("LAYOUT_PADDING_TOP", "paddingTop", "i16", "all"),
+    ("LAYOUT_PADDING_RIGHT", "paddingRight", "i16", "all"),
+    ("LAYOUT_PADDING_BOTTOM", "paddingBottom", "i16", "all"),
+    ("LAYOUT_MARGIN", "margin", "i16", "all"),
+    ("LAYOUT_MARGIN_LEFT", "marginLeft", "i16", "all"),
+    ("LAYOUT_MARGIN_TOP", "marginTop", "i16", "all"),
+    ("LAYOUT_MARGIN_RIGHT", "marginRight", "i16", "all"),
+    ("LAYOUT_MARGIN_BOTTOM", "marginBottom", "i16", "all"),
+    ("LAYOUT_GAP", "gap", "i16", "all"),
+    ("LAYOUT_ROW_GAP", "rowGap", "i16", "all"),
+    ("LAYOUT_COLUMN_GAP", "columnGap", "i16", "all"),
+    ("LAYOUT_FLEX_GROW", "flexGrow", "i16z", "all"),
+    ("LAYOUT_FLEX_SHRINK", "flexShrink", "i16z", "all"),
+    ("LAYOUT_FLEX_BASIS", "flexBasis", "i16", "all"),
+    ("LAYOUT_FLEX_DIRECTION", "flexDirection", (None, "row", "row-reverse", "column-reverse"), "all"),
+    ("LAYOUT_FLEX_WRAP", "flexWrap", (None, "wrap", "wrap-reverse"), "all"),
+    ("LAYOUT_ALIGN_ITEMS", "alignItems", (None, "stretch", "flex-start", "center", "flex-end"), "all"),
+    ("LAYOUT_ALIGN_SELF", "alignSelf", (None, "stretch", "flex-start", "center", "flex-end"), "all"),
+    ("LAYOUT_ALIGN_CONTENT", "alignContent", (None, "flex-end", "center", "stretch", "space-between", "space-around"), "all"),
+    ("LAYOUT_JUSTIFY_CONTENT", "justifyContent", (None, "center", "flex-end", "space-between", "space-around", "space-evenly"), "all"),
+    ("LAYOUT_POSITION", "position", (None, "absolute"), "all"),
+    ("LAYOUT_DISPLAY", "display", (None, "none"), "all"),
+    ("LAYOUT_OVERFLOW", "overflow", (None, "hidden", "scroll"), "all"),
+    ("LAYOUT_ASPECT_RATIO", "aspectRatio", "f32", "all"),
+    ("LAYOUT_FLEX_BASIS_PERCENT", "flexBasis", "percent", "all"),
+    ("LAYOUT_WIDTH_PERCENT", "width", "percent", "all"),
+    ("LAYOUT_HEIGHT_PERCENT", "height", "percent", "all"),
+    ("LAYOUT_LEFT_PERCENT", "left", "percent", "all"),
+    ("LAYOUT_TOP_PERCENT", "top", "percent", "all"),
+    ("LAYOUT_RIGHT_PERCENT", "right", "percent", "all"),
+    ("LAYOUT_BOTTOM_PERCENT", "bottom", "percent", "all"),
+    ("Z_INDEX", "zIndex", "i16z", "all"),
+    ("TRANSLATE_X", "translateX", "f32", "all"),
+    ("TRANSLATE_Y", "translateY", "f32", "all"),
+    ("SCALE_X", "scaleX", "scale", "all"),
+    ("SCALE_Y", "scaleY", "scale", "all"),
+    ("ROTATE", "rotate", "f32", "all"),
+    ("ROTATE_X", "rotateX", "f32", "all"),
+    ("ROTATE_Y", "rotateY", "f32", "all"),
+    ("PERSPECTIVE", "perspective", "f32", "all"),
+    ("VIEW_BACKGROUND_COLOR", "backgroundColor", "color", "view"),
+    ("VIEW_BACKGROUND_IMAGE", "backgroundImage", (None, "linear-gradient", "radial-gradient", "conic-gradient"), "view"),
+    ("VIEW_BORDER_COLOR", "borderColor", "color", "view"),
+    ("VIEW_BORDER_WIDTH", "borderWidth", "i16z", "view"),
+    ("VIEW_BORDER_LEFT_WIDTH", "borderLeftWidth", "i16z", "view"),
+    ("VIEW_BORDER_TOP_WIDTH", "borderTopWidth", "i16z", "view"),
+    ("VIEW_BORDER_RIGHT_WIDTH", "borderRightWidth", "i16z", "view"),
+    ("VIEW_BORDER_BOTTOM_WIDTH", "borderBottomWidth", "i16z", "view"),
+    ("VIEW_BORDER_STYLE", "borderStyle", (None, "dashed", "dotted"), "view"),
+    ("VIEW_BORDER_RADIUS", "borderRadius", "i16z", "view"),
+    ("VIEW_BORDER_TOP_LEFT_RADIUS", "borderTopLeftRadius", "i16z", "view"),
+    ("VIEW_BORDER_TOP_RIGHT_RADIUS", "borderTopRightRadius", "i16z", "view"),
+    ("VIEW_BORDER_BOTTOM_RIGHT_RADIUS", "borderBottomRightRadius", "i16z", "view"),
+    ("VIEW_BORDER_BOTTOM_LEFT_RADIUS", "borderBottomLeftRadius", "i16z", "view"),
+    ("VIEW_OPACITY", "opacity", "opacity", "view"),
+    ("VIEW_SHADOW_OPACITY", "shadowOpacity", "f32", "view"),
+    ("VIEW_SHADOW_RADIUS", "shadowRadius", "u8z", "view"),
+    ("VIEW_ELEVATION", "elevation", "u8z", "view"),
+    ("MODAL_VISIBLE", "visible", "bool", "modal"),
+    ("MODAL_BACKDROP_COLOR", "backdropColor", "color", "modal"),
+    ("TEXT_TEXT", "text", "text", "text"),
+    ("TEXT_COLOR", "color", "color", "text"),
+    ("TEXT_FONT_FAMILY", "fontFamily", "text", "text"),
+    ("TEXT_FONT_SIZE", "fontSize", "u8z", "text"),
+    ("TEXT_FONT_WEIGHT", "fontWeight", (None, "bold"), "text"),
+    ("TEXT_FONT_STYLE", "fontStyle", (None, "italic"), "text"),
+    ("TEXT_TEXT_ALIGN", "textAlign", (None, "center", "right"), "text"),
+    ("TEXT_NUMBER_OF_LINES", "numberOfLines", "u8z", "text"),
+    ("TEXT_LINE_HEIGHT", "lineHeight", "i16z", "text"),
+    ("TEXT_LETTER_SPACING", "letterSpacing", "i16z", "text"),
+    ("TEXT_TEXT_DECORATION", "textDecorationLine", (None, "underline", "line-through"), "text"),
+    ("TEXT_OPACITY", "opacity", "opacity", "text"),
+    ("IMAGE_SOURCE", "source", "text", "image"),
+    ("IMAGE_RESIZE_MODE", "resizeMode", (None, "contain", "stretch", "repeat", "center"), "image"),
+    ("IMAGE_TINT_COLOR", "tintColor", "color", "image"),
+    ("IMAGE_OPACITY", "opacity", "opacity", "image"),
+    ("INPUT_VALUE", "value", "text", "text_input"),
+    ("INPUT_PLACEHOLDER", "placeholder", "text", "text_input"),
+    ("INPUT_COLOR", "color", "color", "text_input"),
+    ("INPUT_FONT_FAMILY", "fontFamily", "text", "text_input"),
+    ("INPUT_FONT_SIZE", "fontSize", "u8z", "text_input"),
+    ("INPUT_BACKGROUND_COLOR", "backgroundColor", "color", "text_input"),
+    ("INPUT_BORDER_COLOR", "borderColor", "color", "text_input"),
+    ("INPUT_BORDER_WIDTH", "borderWidth", "i16z", "text_input"),
+    ("INPUT_BORDER_RADIUS", "borderRadius", "i16z", "text_input"),
+    ("INPUT_OPACITY", "opacity", "opacity", "text_input"),
+    ("SWITCH_VALUE", "value", "bool", "switch"),
+    ("SWITCH_TRACK_COLOR_FALSE", "trackColor.false", "color", "switch"),
+    ("SWITCH_TRACK_COLOR_TRUE", "trackColor.true", "color", "switch"),
+    ("SWITCH_THUMB_COLOR", "thumbColor", "color", "switch"),
+    ("INDICATOR_COLOR", "color", "color", "activity_indicator"),
+    ("INDICATOR_ANIMATING", "animating", "bool", "activity_indicator"),
+    ("ARC_VALUE", "value", "f32", "arc"),
+    ("ARC_MIN", "min", "f32", "arc"),
+    ("ARC_MAX", "max", "f32", "arc"),
+    ("ARC_START_ANGLE", "startAngle", "f32", "arc"),
+    ("ARC_SWEEP_ANGLE", "sweepAngle", "f32", "arc"),
+    ("ARC_WIDTH", "thickness", "i16z", "arc"),
+    ("ARC_TRACK_COLOR", "trackColor", "color", "arc"),
+    ("ARC_INDICATOR_COLOR", "indicatorColor", "color", "arc"),
+]
+
+VIEW_NODES = ("view", "scroll_view", "flat_list", "pressable", "modal")
+NO_LENGTH = -0x8000
+LONGEST_PROP_TEXT = 60
 
 
 class Runtime:
@@ -326,8 +454,21 @@ class Engine:
                 }
             )
         self.node = {name: unpack("H", data, field("node") + 2 * index) for index, name in enumerate(NODE_FIELDS)}
+        props_at = field("node") + 2 * len(NODE_FIELDS)
+        self.props = [unpack("H", data, props_at + 2 * index) for index in range(len(NODE_PROPS))]
         self.root_tag_address = unpack(pointer, data, field("root_tag"))
         self.halted = unpack(pointer, data, field("halted"))
+        self.screen_address = unpack(pointer, data, field("screen"))
+
+    def screen(self):
+        """The framebuffer the panel shows (ERDebugScreen), its `pixels` 0 for a panel that isn't scanned from
+        memory."""
+        layout = screen_layout()
+        data = read(self.screen_address, layout.size)
+        screen = {name: unpack("H", data, layout.offsets[name]) for name in ("width", "height", "stride", "rotation")}
+        screen["pixels"] = unpack("I" if pointer_bytes() == 4 else "Q", data, layout.offsets["pixels"])
+        screen["format"] = data[layout.offsets["format"]]
+        return screen
 
     def records(self, pool):
         """Each record of a pool, as bytes, and whether it is in use."""
@@ -1612,6 +1753,7 @@ erb next             Run to the next statement, over a function the app calls.
 erb finish           Run until the function returns to its caller.
 erb pools            What the app and the engine use of their pools.
 er nodes             The node tree, with each node's rect and source line.
+er outline TAG       Outlines a node on the panel until the board resumes; er outline off removes it.
 
 Breakpoints, stepping and the stop at a fault need firmware built with ERB_DEBUG_HOOK=1."""
 
@@ -2033,7 +2175,7 @@ class ErbPools(gdb.Command):
 
 
 class ErCommand(gdb.Command):
-    """Engine commands. er nodes: the node tree."""
+    """Engine commands. er nodes: the node tree. er outline: a node outlined on the panel."""
 
     def __init__(self):
         super().__init__("er", gdb.COMMAND_DATA, gdb.COMPLETE_NONE, True)
@@ -2055,6 +2197,265 @@ def template_children(template):
     return children
 
 
+def read_nodes(engine):
+    """The nodes in use, as bytes by tag. The tree is read from its root down, so the rest of the pool isn't."""
+    pool = engine.pools[0]
+    fields = engine.node
+    nodes = {}
+    waiting = [read_value("H", engine.root_tag_address)]
+    while waiting:
+        tag = waiting.pop()
+        if tag >= pool["count"] or tag in nodes:
+            continue
+        record = read(pool["records"] + tag * pool["stride"], pool["stride"])
+        if record[pool["used_at"]]:
+            nodes[tag] = record
+            waiting.append(unpack("H", record, fields["next_sibling_at"]))
+            waiting.append(unpack("H", record, fields["first_child_at"]))
+    if not nodes:
+        # Before the app's first commit the engine has no root yet.
+        for tag, record, in_use in engine.records(pool):
+            if in_use:
+                nodes[tag] = record
+    return nodes
+
+
+def prop_text(kind, record, at):
+    """A prop as the app's source would say it, or None for one that isn't set."""
+    if isinstance(kind, tuple):
+        value = record[at]
+        return kind[value] if value < len(kind) else None
+    if kind == "text":
+        text = record[at:].split(b"\0", 1)[0].decode("utf-8", "replace")
+        if len(text) > LONGEST_PROP_TEXT:
+            text = text[:LONGEST_PROP_TEXT] + "…"
+        return json.dumps(text, ensure_ascii=False) if text else None
+    if kind in ("i16", "i16z"):
+        value = unpack("h", record, at)
+        return None if value == NO_LENGTH or (kind == "i16z" and value == 0) else str(value)
+    if kind in ("u8z", "bool", "opacity"):
+        value = record[at]
+        if kind == "opacity":
+            return None if value == 255 else number_text(round(value / 255, 2))
+        if value == 0:
+            return None
+        return "true" if kind == "bool" else str(value)
+    if kind == "color":
+        value = unpack("I", record, at)
+        if value == 0:
+            return None
+        alpha = value >> 24
+        return "#%06x" % (value & 0xFFFFFF) + ("" if alpha == 255 else "%02x" % alpha)
+    value = unpack("f", record, at)
+    if value != value or value == 0 or (kind == "scale" and value == 1):
+        return None
+    text = number_text(round(value, 3))
+    return text + "%" if kind == "percent" else text
+
+
+def node_props(engine, record, kind):
+    """The props a node has set, as [name, value] pairs in the table's order. A size in percent is said for the
+    size."""
+    groups = ("all", kind) + (("view",) if kind in VIEW_NODES else ())
+    props = {}
+    for (_, name, how, group), at in zip(NODE_PROPS, engine.props):
+        if group in groups:
+            text = prop_text(how, record, at)
+            if text is not None:
+                props[name] = text
+    return [[name, text] for name, text in props.items()]
+
+
+def node_tree(app):
+    """The node tree, each node with its type, its rect on the screen, its element's place in the source and its
+    props: the tops, which is the root alone once the app has committed."""
+    engine = Engine(app.runtime.engine_address)
+    fields = engine.node
+    nodes = read_nodes(engine)
+    type_format = {1: "B", 2: "H", 4: "I"}[fields["type_bytes"]]
+
+    def u16(record, name):
+        return unpack("H", record, fields[name])
+
+    # Each node code reaches, by its handle.
+    templates = app.panel["templates"]
+    places = {}
+    for template_index, template in enumerate(templates):
+        for node_index, node in enumerate(template["nodes"]):
+            handle = node.get("handle")
+            if not handle:
+                continue
+            data = read(app.arena + handle["offset"], handle["count"] * HANDLE_BYTES)
+            for row in range(handle["count"]):
+                tag = unpack("i", data, row * HANDLE_BYTES) - 1
+                serial = unpack("I", data, row * HANDLE_BYTES + 4)
+                if tag in nodes and unpack("I", nodes[tag], fields["serial_at"]) == serial:
+                    places[tag] = (template_index, node_index)
+    children_of = [template_children(template) for template in templates]
+    node_types = debug_file.get("nodeTypes", [])
+
+    def type_name(record):
+        number = unpack(type_format, record, fields["type_at"])
+        name = node_types[number] if number < len(node_types) and node_types[number] else "type %d" % number
+        return name.replace("ER_NODE_", "").lower()
+
+    def engine_children(tag):
+        child = u16(nodes[tag], "first_child_at")
+        while child != NO_TAG and child in nodes:
+            yield child
+            child = u16(nodes[child], "next_sibling_at")
+
+    # The rest are matched to their template by where they sit under a node whose place is known.
+    def match(tag):
+        place = places.get(tag)
+        if place is None:
+            return
+        template_index, node_index = place
+        template = templates[template_index]
+        unclaimed = [index for index in children_of[template_index][node_index]]
+        for child in engine_children(tag):
+            known = places.get(child)
+            if known is not None:
+                if known[0] == template_index and known[1] in unclaimed:
+                    unclaimed = unclaimed[unclaimed.index(known[1]) + 1 :]
+            elif unclaimed and template["nodes"][unclaimed[0]]["type"].replace("ER_NODE_", "").lower() == type_name(nodes[child]):
+                places[child] = (template_index, unclaimed.pop(0))
+            match(child)
+
+    root = read_value("H", engine.root_tag_address)
+    tops = [root] if root in nodes else [tag for tag, record in nodes.items() if u16(record, "parent_at") not in nodes]
+    if tops and tops[0] not in places and templates and templates[0]["nodes"]:
+        places[tops[0]] = (0, 0)
+    for top in tops:
+        match(top)
+
+    # Layout places a node on the screen; a ScrollView above it moves it by its offset.
+    def built(tag, scrolled_x, scrolled_y):
+        record = nodes[tag]
+        x, y, width, height = struct.unpack_from(endian() + "hhhh", record, fields["rect_at"])
+        place = places.get(tag)
+        source = None
+        column = None
+        uses = []
+        if place:
+            node = templates[place[0]]["nodes"][place[1]]
+            if node["line"] is not None:
+                source = place_of(node)
+                column = node.get("column")
+                # Where the components it is made inside are used, outermost first.
+                uses = [list(place_of(use)) + [use["column"]] for use in node.get("uses", [])]
+        kind = type_name(record)
+        scroll_x = scrolled_x + int(unpack("f", record, fields["scroll_x_at"]))
+        scroll_y = scrolled_y + int(unpack("f", record, fields["scroll_y_at"]))
+        return {
+            "tag": tag,
+            "type": kind,
+            "rect": [x - scrolled_x, y - scrolled_y, width, height],
+            "place": source,
+            "column": column,
+            "uses": uses,
+            "props": node_props(engine, record, kind),
+            "children": [built(child, scroll_x, scroll_y) for child in engine_children(tag)],
+        }
+
+    return [built(top, 0, 0) for top in tops]
+
+
+OUTLINE_PIXELS = 2
+# A tall outline's sides are drawn as this many short runs, as each is a write of its own.
+MOST_OUTLINE_RUNS = 64
+# Magenta, in each ERDebugPixelFormat.
+OUTLINE_COLORS = [("H", 0xF81F), (None, b"\xff\x00\xff"), ("I", 0xFFFF00FF)]
+NO_SCREEN = "the panel isn't scanned from memory the debugger can draw on"
+
+# What the outline covers on the panel, to put back: each run's address and bytes.
+outline_saved = []
+
+
+def erase_outline():
+    """Puts back what the outline covers."""
+    while outline_saved:
+        address, data = outline_saved[-1]
+        write(address, data)
+        outline_saved.pop()
+
+
+def panel_rect(screen, rect):
+    """A rect of the app's on the panel as it scans, cut to the panel: left, top, width, height."""
+    x, y, width, height = rect
+    if screen["rotation"] == 90:
+        x, y, width, height = screen["width"] - (y + height), x, height, width
+    elif screen["rotation"] == 180:
+        x, y = screen["width"] - (x + width), screen["height"] - (y + height)
+    elif screen["rotation"] == 270:
+        x, y, width, height = y, screen["height"] - (x + width), height, width
+    left, top = max(x, 0), max(y, 0)
+    return left, top, min(x + width, screen["width"]) - left, min(y + height, screen["height"]) - top
+
+
+def draw_outline(rect):
+    """Outlines a rect of the app's on the panel, in place of the last one. The board must be halted.
+    Returns whether it drew one: a rect with no size on the panel has none."""
+    erase_outline()
+    screen = Engine(Runtime().engine_address).screen()
+    if not screen["pixels"] or screen["format"] >= len(OUTLINE_COLORS):
+        raise ErbError(NO_SCREEN)
+    left, top, width, height = panel_rect(screen, rect)
+    if width <= 0 or height <= 0:
+        return False
+    fmt, color = OUTLINE_COLORS[screen["format"]]
+    pixel = struct.pack(endian() + fmt, color) if fmt else color
+    thick = OUTLINE_PIXELS
+    # The top and bottom edges whole, and the sides between them.
+    sides = range(top + thick, top + height - thick)
+    step = max(1, -(-len(sides) // MOST_OUTLINE_RUNS))
+    runs = [(left, row, width) for row in range(top, top + height) if row not in sides]
+    for row in sides[::step]:
+        if width > 2 * thick:
+            runs += [(left, row, thick), (left + width - thick, row, thick)]
+        else:
+            runs.append((left, row, width))
+    for x, row, count in runs:
+        address = screen["pixels"] + row * screen["stride"] + x * len(pixel)
+        outline_saved.append((address, read(address, count * len(pixel))))
+        write(address, pixel * count)
+    return True
+
+
+class ErOutline(gdb.Command):
+    """er outline TAG outlines a node on the panel, by its number in er nodes, until the board resumes.
+    er outline off removes it. For a panel the chip scans from memory."""
+
+    def __init__(self):
+        super().__init__("er outline", gdb.COMMAND_DATA)
+
+    def invoke(self, argument, from_tty):
+        wanted = argument.strip().lstrip("#")
+        if wanted == "off":
+            erase_outline()
+            return
+        if not wanted.isdigit():
+            raise ErbError("er outline takes a node's number from er nodes, or off")
+        # A running app paints over it, and its frame can't be written under it.
+        if not board_halted():
+            raise ErbError("er outline needs a halted board")
+
+        def find(nodes):
+            for node in nodes:
+                if node["tag"] == int(wanted):
+                    return node
+                found = find(node["children"])
+                if found:
+                    return found
+
+        node = find(node_tree(App()))
+        if node is None:
+            raise ErbError("no node #%s: er nodes lists them" % wanted)
+        if not draw_outline(node["rect"]):
+            raise ErbError("%s #%d has no size on the panel" % (node["type"], node["tag"]))
+        print("%s #%d outlined at %d,%d %dx%d" % ((node["type"], node["tag"]) + tuple(node["rect"])))
+
+
 class ErNodes(gdb.Command):
     """The node tree: each node's type, its rect on the screen, and the source line of its element."""
 
@@ -2062,94 +2463,19 @@ class ErNodes(gdb.Command):
         super().__init__("er nodes", gdb.COMMAND_DATA)
 
     def invoke(self, argument, from_tty):
-        app = App()
-        engine = Engine(app.runtime.engine_address)
-        fields = engine.node
-        pool = engine.pools[0]
-        nodes = {}
-        for tag, record, in_use in engine.records(pool):
-            if in_use:
-                nodes[tag] = record
-        type_format = {1: "B", 2: "H", 4: "I"}[fields["type_bytes"]]
-
-        def u16(record, name):
-            return unpack("H", record, fields[name])
-
-        # Each node code reaches, by its handle.
-        templates = app.panel["templates"]
-        places = {}
-        for template_index, template in enumerate(templates):
-            for node_index, node in enumerate(template["nodes"]):
-                handle = node.get("handle")
-                if not handle:
-                    continue
-                data = read(app.arena + handle["offset"], handle["count"] * HANDLE_BYTES)
-                for row in range(handle["count"]):
-                    tag = unpack("i", data, row * HANDLE_BYTES) - 1
-                    serial = unpack("I", data, row * HANDLE_BYTES + 4)
-                    if tag in nodes and unpack("I", nodes[tag], fields["serial_at"]) == serial:
-                        places[tag] = (template_index, node_index)
-        children_of = [template_children(template) for template in templates]
-        node_types = debug_file.get("nodeTypes", [])
-
-        def type_name(record):
-            number = unpack(type_format, record, fields["type_at"])
-            name = node_types[number] if number < len(node_types) and node_types[number] else "type %d" % number
-            return name.replace("ER_NODE_", "").lower()
-
-        def engine_children(tag):
-            child = u16(nodes[tag], "first_child_at")
-            while child != NO_TAG and child in nodes:
-                yield child
-                child = u16(nodes[child], "next_sibling_at")
-
-        # The rest are matched to their template by where they sit under a node whose place is known.
-        def match(tag):
-            place = places.get(tag)
-            if place is None:
-                return
-            template_index, node_index = place
-            template = templates[template_index]
-            unclaimed = [index for index in children_of[template_index][node_index]]
-            for child in engine_children(tag):
-                known = places.get(child)
-                if known is not None:
-                    if known[0] == template_index and known[1] in unclaimed:
-                        unclaimed = unclaimed[unclaimed.index(known[1]) + 1 :]
-                elif unclaimed and template["nodes"][unclaimed[0]]["type"].replace("ER_NODE_", "").lower() == type_name(nodes[child]):
-                    places[child] = (template_index, unclaimed.pop(0))
-                match(child)
-
-        # Before the app's first commit the engine has no root yet, so each node without a parent is shown.
-        root = read_value("H", engine.root_tag_address)
-        tops = [root] if root in nodes else [tag for tag, record in nodes.items() if u16(record, "parent_at") not in nodes]
+        tops = node_tree(App())
         if not tops:
             print("No nodes: the app has built nothing.")
             return
-        if tops[0] not in places and templates and templates[0]["nodes"]:
-            places[tops[0]] = (0, 0)
-        for top in tops:
-            match(top)
 
-        # Layout places a node on the screen; a ScrollView above it moves it by its offset.
-        def show(tag, depth, scrolled_x, scrolled_y):
-            record = nodes[tag]
-            x, y, width, height = struct.unpack_from(endian() + "hhhh", record, fields["rect_at"])
-            left, top = x - scrolled_x, y - scrolled_y
-            place = places.get(tag)
-            source = ""
-            if place:
-                node = templates[place[0]]["nodes"][place[1]]
-                if node["line"] is not None:
-                    source = "  %s" % shown(place_of(node))
-            print("%s%s #%d  %d,%d %dx%d%s" % ("  " * depth, type_name(record), tag, left, top, width, height, source))
-            scroll_x = unpack("f", record, fields["scroll_x_at"])
-            scroll_y = unpack("f", record, fields["scroll_y_at"])
-            for child in engine_children(tag):
-                show(child, depth + 1, scrolled_x + int(scroll_x), scrolled_y + int(scroll_y))
+        def show(node, depth):
+            source = "  %s" % shown(node["place"]) if node["place"] else ""
+            print("%s%s #%d  %d,%d %dx%d%s" % (("  " * depth, node["type"], node["tag"]) + tuple(node["rect"]) + (source,)))
+            for child in node["children"]:
+                show(child, depth + 1)
 
         for top in tops:
-            show(top, 0, 0, 0)
+            show(top, 0)
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -2820,6 +3146,8 @@ def on_stop(event):
 
 
 def on_resume(event):
+    # The app paints over the outline as it runs.
+    del outline_saved[:]
     watch_stop[0] = None
     hook_state["stopped"] = False
     hook_state["hit"] = []
@@ -3133,6 +3461,28 @@ def dap_sync(request):
     return {}
 
 
+def dap_nodes(request):
+    """The node tree, for the editor's view of it. A node's `file` is its index in the debug file's files, and each
+    of its `uses` is a file, a line and a column."""
+
+    def sent(node):
+        place = node.pop("place")
+        node["file"], node["line"] = place if place else (None, None)
+        for child in node["children"]:
+            sent(child)
+        return node
+
+    return {"nodes": [sent(top) for top in node_tree(App())]}
+
+
+def dap_outline(request):
+    """Outlines a rect of the tree's on the panel, or with none removes the outline. Says whether one is there."""
+    if request.get("rect"):
+        return {"shown": draw_outline(request["rect"])}
+    erase_outline()
+    return {"shown": False}
+
+
 DAP_REQUESTS = {
     "info": dap_info,
     "status": dap_status,
@@ -3144,6 +3494,8 @@ DAP_REQUESTS = {
     "watch": dap_watch,
     "evaluate": dap_evaluate,
     "sync": dap_sync,
+    "nodes": dap_nodes,
+    "outline": dap_outline,
 }
 
 
@@ -3237,3 +3589,4 @@ ErbPools()
 ErbDap()
 ErCommand()
 ErNodes()
+ErOutline()

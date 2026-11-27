@@ -16,6 +16,7 @@
 
 #include "dma2d_backend.h"
 
+#include "er_debug.h"
 #include "er_scene.h"
 #include "native_renderer.h"
 
@@ -747,6 +748,19 @@ static void buffer_sync_cb(const ERRect* rects, int count, void* ctx)
     }
 }
 
+/**
+ * @brief Tells a debugger which framebuffer the LTDC scans: the one drawn before the last flip, or the only one.
+ */
+static void show_debug_screen(void)
+{
+    const ERDebugPixelFormat format = (s_ctx.config.format == ER_DMA2D_FRAMEBUFFER_RGB565)   ? ER_DEBUG_PIXELS_RGB565
+                                      : (s_ctx.config.format == ER_DMA2D_FRAMEBUFFER_RGB888) ? ER_DEBUG_PIXELS_RGB888
+                                                                                             : ER_DEBUG_PIXELS_ARGB8888;
+    er_debug_set_screen(s_ctx.previous_framebuffer ? s_ctx.previous_framebuffer : s_ctx.framebuffer,
+                        s_ctx.panel_stride_pixels * s_ctx.bytes_per_pixel,
+                        format);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -817,6 +831,7 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     }
 
     embedded_renderer_set_backend(&s_backend);
+    show_debug_screen();
     return true;
 }
 
@@ -830,6 +845,7 @@ void er_dma2d_backend_set_framebuffer(void* framebuffer)
     s_ctx.framebuffer = (uint8_t*)framebuffer;
     if (!s_ctx.config.render_buffer && !s_ctx.banded)
         s_ctx.target = s_ctx.framebuffer;
+    show_debug_screen();
 }
 
 void* er_dma2d_backend_framebuffer(void)
@@ -884,4 +900,5 @@ void er_dma2d_backend_destroy(void)
 {
     wait_pending();
     memset(&s_ctx, 0, sizeof(s_ctx));
+    er_debug_set_screen(NULL, 0, ER_DEBUG_PIXELS_RGB565);
 }

@@ -1452,6 +1452,7 @@ function templateNodes(
       debug: node.location && {
         line: node.location.line,
         column: node.location.column + 1,
+        uses: node.uses.map(use => ({line: use.line, column: use.column + 1})),
       },
     });
     lowering.bindings.push(...bindings);

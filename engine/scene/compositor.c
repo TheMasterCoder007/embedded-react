@@ -88,8 +88,127 @@ extern const ERDebugPool er_debug_image_pool;
 extern const ERDebugPool er_debug_font_pool;
 /* Beside embedded_renderer_tick(), which reads it. */
 extern volatile bool er_debug_halted;
+/* Beside the display's rotation. */
+extern ERDebugScreen er_debug_screen;
 
 static const ERDebugPool s_debug_node_pool = {s_nodes, ERUI_MAX_NODES, sizeof(ERNode), offsetof(ERNode, in_use), 0u};
+
+/* clang-format off */
+/** @brief Each ERDebugProp's offset in a node, for er_debug. */
+#define DEBUG_PROP_OFFSETS \
+    [ER_DEBUG_PROP_LAYOUT_LEFT] = offsetof(ERNode, layout.left), \
+    [ER_DEBUG_PROP_LAYOUT_TOP] = offsetof(ERNode, layout.top), \
+    [ER_DEBUG_PROP_LAYOUT_RIGHT] = offsetof(ERNode, layout.right), \
+    [ER_DEBUG_PROP_LAYOUT_BOTTOM] = offsetof(ERNode, layout.bottom), \
+    [ER_DEBUG_PROP_LAYOUT_WIDTH] = offsetof(ERNode, layout.width), \
+    [ER_DEBUG_PROP_LAYOUT_HEIGHT] = offsetof(ERNode, layout.height), \
+    [ER_DEBUG_PROP_LAYOUT_MIN_WIDTH] = offsetof(ERNode, layout.min_width), \
+    [ER_DEBUG_PROP_LAYOUT_MAX_WIDTH] = offsetof(ERNode, layout.max_width), \
+    [ER_DEBUG_PROP_LAYOUT_MIN_HEIGHT] = offsetof(ERNode, layout.min_height), \
+    [ER_DEBUG_PROP_LAYOUT_MAX_HEIGHT] = offsetof(ERNode, layout.max_height), \
+    [ER_DEBUG_PROP_LAYOUT_PADDING] = offsetof(ERNode, layout.padding), \
+    [ER_DEBUG_PROP_LAYOUT_PADDING_LEFT] = offsetof(ERNode, layout.padding_left), \
+    [ER_DEBUG_PROP_LAYOUT_PADDING_TOP] = offsetof(ERNode, layout.padding_top), \
+    [ER_DEBUG_PROP_LAYOUT_PADDING_RIGHT] = offsetof(ERNode, layout.padding_right), \
+    [ER_DEBUG_PROP_LAYOUT_PADDING_BOTTOM] = offsetof(ERNode, layout.padding_bottom), \
+    [ER_DEBUG_PROP_LAYOUT_MARGIN] = offsetof(ERNode, layout.margin), \
+    [ER_DEBUG_PROP_LAYOUT_MARGIN_LEFT] = offsetof(ERNode, layout.margin_left), \
+    [ER_DEBUG_PROP_LAYOUT_MARGIN_TOP] = offsetof(ERNode, layout.margin_top), \
+    [ER_DEBUG_PROP_LAYOUT_MARGIN_RIGHT] = offsetof(ERNode, layout.margin_right), \
+    [ER_DEBUG_PROP_LAYOUT_MARGIN_BOTTOM] = offsetof(ERNode, layout.margin_bottom), \
+    [ER_DEBUG_PROP_LAYOUT_GAP] = offsetof(ERNode, layout.gap), \
+    [ER_DEBUG_PROP_LAYOUT_ROW_GAP] = offsetof(ERNode, layout.row_gap), \
+    [ER_DEBUG_PROP_LAYOUT_COLUMN_GAP] = offsetof(ERNode, layout.column_gap), \
+    [ER_DEBUG_PROP_LAYOUT_FLEX_GROW] = offsetof(ERNode, layout.flex_grow), \
+    [ER_DEBUG_PROP_LAYOUT_FLEX_SHRINK] = offsetof(ERNode, layout.flex_shrink), \
+    [ER_DEBUG_PROP_LAYOUT_FLEX_BASIS] = offsetof(ERNode, layout.flex_basis), \
+    [ER_DEBUG_PROP_LAYOUT_FLEX_DIRECTION] = offsetof(ERNode, layout.flex_direction), \
+    [ER_DEBUG_PROP_LAYOUT_FLEX_WRAP] = offsetof(ERNode, layout.flex_wrap), \
+    [ER_DEBUG_PROP_LAYOUT_ALIGN_ITEMS] = offsetof(ERNode, layout.align_items), \
+    [ER_DEBUG_PROP_LAYOUT_ALIGN_SELF] = offsetof(ERNode, layout.align_self), \
+    [ER_DEBUG_PROP_LAYOUT_ALIGN_CONTENT] = offsetof(ERNode, layout.align_content), \
+    [ER_DEBUG_PROP_LAYOUT_JUSTIFY_CONTENT] = offsetof(ERNode, layout.justify_content), \
+    [ER_DEBUG_PROP_LAYOUT_POSITION] = offsetof(ERNode, layout.position), \
+    [ER_DEBUG_PROP_LAYOUT_DISPLAY] = offsetof(ERNode, layout.display), \
+    [ER_DEBUG_PROP_LAYOUT_OVERFLOW] = offsetof(ERNode, layout.overflow), \
+    [ER_DEBUG_PROP_LAYOUT_ASPECT_RATIO] = offsetof(ERNode, layout.aspect_ratio), \
+    [ER_DEBUG_PROP_LAYOUT_FLEX_BASIS_PERCENT] = offsetof(ERNode, layout.flex_basis_percent), \
+    [ER_DEBUG_PROP_LAYOUT_WIDTH_PERCENT] = offsetof(ERNode, layout.width_percent), \
+    [ER_DEBUG_PROP_LAYOUT_HEIGHT_PERCENT] = offsetof(ERNode, layout.height_percent), \
+    [ER_DEBUG_PROP_LAYOUT_LEFT_PERCENT] = offsetof(ERNode, layout.left_percent), \
+    [ER_DEBUG_PROP_LAYOUT_TOP_PERCENT] = offsetof(ERNode, layout.top_percent), \
+    [ER_DEBUG_PROP_LAYOUT_RIGHT_PERCENT] = offsetof(ERNode, layout.right_percent), \
+    [ER_DEBUG_PROP_LAYOUT_BOTTOM_PERCENT] = offsetof(ERNode, layout.bottom_percent), \
+    [ER_DEBUG_PROP_Z_INDEX] = offsetof(ERNode, z_index), \
+    [ER_DEBUG_PROP_TRANSLATE_X] = offsetof(ERNode, transform_translate_x), \
+    [ER_DEBUG_PROP_TRANSLATE_Y] = offsetof(ERNode, transform_translate_y), \
+    [ER_DEBUG_PROP_SCALE_X] = offsetof(ERNode, transform_scale_x), \
+    [ER_DEBUG_PROP_SCALE_Y] = offsetof(ERNode, transform_scale_y), \
+    [ER_DEBUG_PROP_ROTATE] = offsetof(ERNode, transform_rotate_z), \
+    [ER_DEBUG_PROP_ROTATE_X] = offsetof(ERNode, transform_rotate_x), \
+    [ER_DEBUG_PROP_ROTATE_Y] = offsetof(ERNode, transform_rotate_y), \
+    [ER_DEBUG_PROP_PERSPECTIVE] = offsetof(ERNode, transform_perspective), \
+    [ER_DEBUG_PROP_VIEW_BACKGROUND_COLOR] = offsetof(ERNode, props.view.background_color), \
+    [ER_DEBUG_PROP_VIEW_BACKGROUND_IMAGE] = offsetof(ERNode, props.view.gradient_type), \
+    [ER_DEBUG_PROP_VIEW_BORDER_COLOR] = offsetof(ERNode, props.view.border_color), \
+    [ER_DEBUG_PROP_VIEW_BORDER_WIDTH] = offsetof(ERNode, props.view.border_width), \
+    [ER_DEBUG_PROP_VIEW_BORDER_LEFT_WIDTH] = offsetof(ERNode, props.view.border_left_width), \
+    [ER_DEBUG_PROP_VIEW_BORDER_TOP_WIDTH] = offsetof(ERNode, props.view.border_top_width), \
+    [ER_DEBUG_PROP_VIEW_BORDER_RIGHT_WIDTH] = offsetof(ERNode, props.view.border_right_width), \
+    [ER_DEBUG_PROP_VIEW_BORDER_BOTTOM_WIDTH] = offsetof(ERNode, props.view.border_bottom_width), \
+    [ER_DEBUG_PROP_VIEW_BORDER_STYLE] = offsetof(ERNode, props.view.border_style), \
+    [ER_DEBUG_PROP_VIEW_BORDER_RADIUS] = offsetof(ERNode, props.view.border_radius), \
+    [ER_DEBUG_PROP_VIEW_BORDER_TOP_LEFT_RADIUS] = offsetof(ERNode, props.view.border_top_left_radius), \
+    [ER_DEBUG_PROP_VIEW_BORDER_TOP_RIGHT_RADIUS] = offsetof(ERNode, props.view.border_top_right_radius), \
+    [ER_DEBUG_PROP_VIEW_BORDER_BOTTOM_RIGHT_RADIUS] = offsetof(ERNode, props.view.border_bottom_right_radius), \
+    [ER_DEBUG_PROP_VIEW_BORDER_BOTTOM_LEFT_RADIUS] = offsetof(ERNode, props.view.border_bottom_left_radius), \
+    [ER_DEBUG_PROP_VIEW_OPACITY] = offsetof(ERNode, props.view.opacity), \
+    [ER_DEBUG_PROP_VIEW_SHADOW_OPACITY] = offsetof(ERNode, props.view.shadow_opacity), \
+    [ER_DEBUG_PROP_VIEW_SHADOW_RADIUS] = offsetof(ERNode, props.view.shadow_radius), \
+    [ER_DEBUG_PROP_VIEW_ELEVATION] = offsetof(ERNode, props.view.elevation), \
+    [ER_DEBUG_PROP_MODAL_VISIBLE] = offsetof(ERNode, modal_visible), \
+    [ER_DEBUG_PROP_MODAL_BACKDROP_COLOR] = offsetof(ERNode, modal_backdrop_color), \
+    [ER_DEBUG_PROP_TEXT_TEXT] = offsetof(ERNode, props.text.text), \
+    [ER_DEBUG_PROP_TEXT_COLOR] = offsetof(ERNode, props.text.color), \
+    [ER_DEBUG_PROP_TEXT_FONT_FAMILY] = offsetof(ERNode, props.text.font_family), \
+    [ER_DEBUG_PROP_TEXT_FONT_SIZE] = offsetof(ERNode, props.text.font_size), \
+    [ER_DEBUG_PROP_TEXT_FONT_WEIGHT] = offsetof(ERNode, props.text.font_weight), \
+    [ER_DEBUG_PROP_TEXT_FONT_STYLE] = offsetof(ERNode, props.text.font_style), \
+    [ER_DEBUG_PROP_TEXT_TEXT_ALIGN] = offsetof(ERNode, props.text.text_align), \
+    [ER_DEBUG_PROP_TEXT_NUMBER_OF_LINES] = offsetof(ERNode, props.text.number_of_lines), \
+    [ER_DEBUG_PROP_TEXT_LINE_HEIGHT] = offsetof(ERNode, props.text.line_height), \
+    [ER_DEBUG_PROP_TEXT_LETTER_SPACING] = offsetof(ERNode, props.text.letter_spacing), \
+    [ER_DEBUG_PROP_TEXT_TEXT_DECORATION] = offsetof(ERNode, props.text.text_decoration), \
+    [ER_DEBUG_PROP_TEXT_OPACITY] = offsetof(ERNode, props.text.opacity), \
+    [ER_DEBUG_PROP_IMAGE_SOURCE] = offsetof(ERNode, props.image.image_name), \
+    [ER_DEBUG_PROP_IMAGE_RESIZE_MODE] = offsetof(ERNode, props.image.resize_mode), \
+    [ER_DEBUG_PROP_IMAGE_TINT_COLOR] = offsetof(ERNode, props.image.tint_color), \
+    [ER_DEBUG_PROP_IMAGE_OPACITY] = offsetof(ERNode, props.image.opacity), \
+    [ER_DEBUG_PROP_INPUT_VALUE] = offsetof(ERNode, input_text), \
+    [ER_DEBUG_PROP_INPUT_PLACEHOLDER] = offsetof(ERNode, props.text_input.placeholder), \
+    [ER_DEBUG_PROP_INPUT_COLOR] = offsetof(ERNode, props.text_input.color), \
+    [ER_DEBUG_PROP_INPUT_FONT_FAMILY] = offsetof(ERNode, props.text_input.font_family), \
+    [ER_DEBUG_PROP_INPUT_FONT_SIZE] = offsetof(ERNode, props.text_input.font_size), \
+    [ER_DEBUG_PROP_INPUT_BACKGROUND_COLOR] = offsetof(ERNode, props.text_input.background_color), \
+    [ER_DEBUG_PROP_INPUT_BORDER_COLOR] = offsetof(ERNode, props.text_input.border_color), \
+    [ER_DEBUG_PROP_INPUT_BORDER_WIDTH] = offsetof(ERNode, props.text_input.border_width), \
+    [ER_DEBUG_PROP_INPUT_BORDER_RADIUS] = offsetof(ERNode, props.text_input.border_radius), \
+    [ER_DEBUG_PROP_INPUT_OPACITY] = offsetof(ERNode, props.text_input.opacity), \
+    [ER_DEBUG_PROP_SWITCH_VALUE] = offsetof(ERNode, props.switch_props.value), \
+    [ER_DEBUG_PROP_SWITCH_TRACK_COLOR_FALSE] = offsetof(ERNode, props.switch_props.track_color_false), \
+    [ER_DEBUG_PROP_SWITCH_TRACK_COLOR_TRUE] = offsetof(ERNode, props.switch_props.track_color_true), \
+    [ER_DEBUG_PROP_SWITCH_THUMB_COLOR] = offsetof(ERNode, props.switch_props.thumb_color), \
+    [ER_DEBUG_PROP_INDICATOR_COLOR] = offsetof(ERNode, props.activity_indicator.color), \
+    [ER_DEBUG_PROP_INDICATOR_ANIMATING] = offsetof(ERNode, props.activity_indicator.animating), \
+    [ER_DEBUG_PROP_ARC_VALUE] = offsetof(ERNode, arc_value), \
+    [ER_DEBUG_PROP_ARC_MIN] = offsetof(ERNode, props.arc.min), \
+    [ER_DEBUG_PROP_ARC_MAX] = offsetof(ERNode, props.arc.max), \
+    [ER_DEBUG_PROP_ARC_START_ANGLE] = offsetof(ERNode, props.arc.start_angle), \
+    [ER_DEBUG_PROP_ARC_SWEEP_ANGLE] = offsetof(ERNode, props.arc.sweep_angle), \
+    [ER_DEBUG_PROP_ARC_WIDTH] = offsetof(ERNode, props.arc.width), \
+    [ER_DEBUG_PROP_ARC_TRACK_COLOR] = offsetof(ERNode, props.arc.track_color), \
+    [ER_DEBUG_PROP_ARC_INDICATOR_COLOR] = offsetof(ERNode, props.arc.indicator_color),
+/* clang-format on */
 
 const ERDebug er_debug = {
     .magic = ER_DEBUG_MAGIC,
@@ -117,9 +236,11 @@ const ERDebug er_debug = {
             .rect_at = offsetof(ERNode, computed),
             .scroll_x_at = offsetof(ERNode, scroll_offset_x),
             .scroll_y_at = offsetof(ERNode, scroll_offset_y),
+            .props = {DEBUG_PROP_OFFSETS},
         },
     .root_tag = &s_root_tag,
     .halted = &er_debug_halted,
+    .screen = &er_debug_screen,
 };
 static int16_t s_bounds_width = 0; /**< er_set_screen_bounds(): the largest the root may be; 0 = no limit. */
 static int16_t s_bounds_height = 0;

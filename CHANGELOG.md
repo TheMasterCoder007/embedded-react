@@ -13,6 +13,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Added
 
+- Flow B: the VS Code extension shows the app's node tree at a stop, with each node's rect and props. A click on a
+  node opens its element's line and outlines it on the panel, on an STM32 with an LTDC panel and in the simulator.
 - Flow B: an app debugs from an Eclipse-based IDE through LSP4E and from CLion through LSP4IJ, with a guide section
   for each.
 - The VS Code extension is on the Visual Studio Marketplace and Open VSX, published with each release, with a

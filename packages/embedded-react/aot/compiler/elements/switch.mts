@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {parseColorValue} from '../../style-map.mts';
-import {aotError, currentLoc} from '../diagnostics.mts';
+import {aotError, currentLoc, currentUses} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
 import {BOOL} from '../ir/types.mts';
@@ -192,6 +192,7 @@ export function emitSwitch(
   const node: IrNode = {
     id: nodeId,
     location: currentLoc(),
+    uses: currentUses(),
     type: 'ER_NODE_SWITCH',
     constantProps: staticAssigns,
     stateProps: dynamicAssigns,

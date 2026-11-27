@@ -202,6 +202,42 @@ class FakeGdb {
           default:
             return {error: `nothing here is named ${request.expression}`};
         }
+      case 'nodes':
+        return {
+          nodes: [
+            {
+              tag: 0,
+              type: 'view',
+              rect: [0, 0, 240, 320],
+              file: null,
+              line: null,
+              column: null,
+              uses: [],
+              props: [['width', '240']],
+              children: [
+                {
+                  tag: 3,
+                  type: 'text',
+                  rect: [10, 12, 220, 20],
+                  file: 1,
+                  line: 18,
+                  column: 6,
+                  uses: [[0, 41, 9]],
+                  props: [
+                    ['text', '"Count: 0"'],
+                    ['color', '#f0f0f0'],
+                  ],
+                  children: [],
+                },
+              ],
+            },
+          ],
+        };
+      case 'outline':
+        // A rect with no size has none, as the script answers.
+        return {
+          shown: Boolean(request.rect && request.rect[2] && request.rect[3]),
+        };
       default:
         return {};
     }
@@ -549,6 +585,97 @@ describe('debug adapter', () => {
     });
     expect(editor.gdb.asked).toEqual(['pause', 'erb breakpoints', 'continue']);
     expect(editor.events.some(event => event.event === 'stopped')).toBe(false);
+  });
+
+  it("answers the node tree, each node with its element's place in the editor's terms", async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    editor.gdb.asked.length = 0;
+    const tree = await editor.request('embedded-react.nodes');
+    expect(editor.gdb.asked).toEqual(['erb nodes']);
+    expect(tree.body.nodes).toEqual([
+      {
+        id: 0,
+        type: 'view',
+        rect: {x: 0, y: 0, width: 240, height: 320},
+        props: [{name: 'width', value: '240'}],
+        children: [
+          {
+            id: 3,
+            type: 'text',
+            rect: {x: 10, y: 12, width: 220, height: 20},
+            source: {
+              name: 'Card.tsx',
+              path: '/work/app/parts/Card.tsx',
+              line: 18,
+              column: 6,
+            },
+            uses: [{name: 'App.tsx', path: APP_PATH, line: 41, column: 9}],
+            props: [
+              {name: 'text', value: '"Count: 0"'},
+              {name: 'color', value: '#f0f0f0'},
+            ],
+            children: [],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('halts a running board to read the node tree, and counts lines and columns as the editor does', async () => {
+    const editor = new Editor();
+    await editor.start(
+      'launch',
+      {},
+      {linesStartAt1: false, columnsStartAt1: false},
+    );
+    const tree = await editor.request('embedded-react.nodes');
+    expect(editor.gdb.asked).toEqual(['pause', 'erb nodes', 'continue']);
+    expect(editor.events.some(event => event.event === 'stopped')).toBe(false);
+    expect(tree.body.nodes[0].children[0].source).toMatchObject({
+      line: 17,
+      column: 5,
+    });
+  });
+
+  it('outlines a node on the stopped panel, and takes the outline off before the app runs on', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    const rect = {x: 10, y: 12, width: 220, height: 20};
+    // A running board is left alone.
+    const running = await editor.request('embedded-react.outline', {rect});
+    expect(running.body).toEqual({shown: false});
+    expect(editor.gdb.asked).toEqual([]);
+    await editor.stopInApp();
+    editor.gdb.asked.length = 0;
+    const shown = await editor.request('embedded-react.outline', {rect});
+    expect(shown.body).toEqual({shown: true});
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({
+      do: 'outline',
+      rect: [10, 12, 220, 20],
+    });
+    await editor.request('continue', {threadId: 1});
+    expect(editor.gdb.asked).toEqual([
+      'erb outline',
+      'erb outline',
+      'continue',
+    ]);
+    expect(editor.gdb.erbRequests.at(-1)).toEqual({do: 'outline', rect: null});
+  });
+
+  it('says a node with no size is not outlined', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    const hidden = await editor.request('embedded-react.outline', {
+      rect: {x: 10, y: 12, width: 0, height: 0},
+    });
+    expect(hidden.body).toEqual({shown: false});
+    editor.gdb.asked.length = 0;
+    // Nothing to take off before the app runs on.
+    await editor.request('continue', {threadId: 1});
+    expect(editor.gdb.asked).toEqual(['continue']);
   });
 
   it("shows a stop of the hook's as a stop in the app", async () => {

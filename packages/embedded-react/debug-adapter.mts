@@ -28,6 +28,9 @@
 //     hold, and a state, a row's field and a local can be set
 //   - hover and Watch evaluate an expression over them, as `erb print` does
 //   - a data breakpoint on a state stops where the app changes it, as `erb watch` does
+//   - the `embedded-react.nodes` request, which is the adapter's own, answers the node tree as `er nodes` prints it,
+//     with each node's props, for an editor to show, and `embedded-react.outline` outlines a node on the halted
+//     board's panel
 //
 // The app's commands only work on a halted board, so one that arrives while it runs halts it and resumes it.
 //
@@ -137,6 +140,36 @@ interface Opened {
   states: Map<string, {storage: string; list: boolean}>;
 }
 
+/** A node of the tree, as the script answers it. */
+interface ScriptNode {
+  tag: number;
+  type: string;
+  rect: [number, number, number, number];
+  file: number | null;
+  line: number | null;
+  column: number | null;
+  uses: [number, number, number][];
+  props: [string, string][];
+  children: ScriptNode[];
+}
+
+/** A node of the tree, as an editor gets it. */
+export interface TreeNode {
+  /** The engine's tag for the node, which a later stop may give to another. */
+  id: number;
+  /** The node's type: view, text, pressable and so on. */
+  type: string;
+  /** Where layout put it on the screen. */
+  rect: {x: number; y: number; width: number; height: number};
+  /** Its element in the app's source, for a node an element made. */
+  source?: {name: string; path?: string; line: number; column?: number};
+  /** Where the components it is made inside are used, outermost first: `<Card />`'s place for a node of Card's. */
+  uses?: {name: string; path?: string; line: number; column: number}[];
+  /** The props it has set, by the names the app gives them. */
+  props: {name: string; value: string}[];
+  children: TreeNode[];
+}
+
 interface Waiter {
   resolve(response: Message): void;
   reject(error: Error): void;
@@ -162,6 +195,13 @@ const SIMULATOR_START_MS = 30000;
 const SIMULATOR_ATTACH_MS = 2000;
 /** Tells the editor where the simulator's page is, for it to show beside the code. */
 const SIMULATOR_EVENT = 'embedded-react.simulator';
+/** The editor's request for the node tree. Its response's `nodes` are the tops, each a TreeNode. */
+export const NODES_REQUEST = 'embedded-react.nodes';
+/**
+ * The editor's request to outline a node on the panel while the app is stopped: its `rect` is a node's, and with
+ * none the outline goes. Its response's `shown` is false when the app runs or the panel can't be drawn on.
+ */
+export const OUTLINE_REQUEST = 'embedded-react.outline';
 const GDB_EXIT_MS = 1000;
 const ERRORS_KEPT = 2000;
 const ANSWER_MARK = '@erb ';
@@ -427,6 +467,10 @@ export class DebugAdapter {
   private hook = false;
   /** How many data breakpoints the editor last set. */
   private dataBreakpoints = 0;
+  /** Whether a node is outlined on the panel. */
+  private outlined = false;
+  /** Said once: why the panel has no outline. */
+  private outlineNote = '';
 
   /** Requests that must not overlap: the app's breakpoints, and the start of the run. */
   private lane: Promise<void> = Promise.resolve();
@@ -529,6 +573,11 @@ export class DebugAdapter {
         return this.setDataBreakpoints(request, args);
       case 'exceptionInfo':
         return this.exceptionInfo(request);
+      case NODES_REQUEST:
+        await this.started;
+        return this.nodes(request);
+      case OUTLINE_REQUEST:
+        return this.outline(request, args);
       case 'configurationDone':
         return this.inLane(() => {
           this.running = this.session === 'launch' || this.simulator !== null;
@@ -763,6 +812,7 @@ export class DebugAdapter {
 
   private resumed(): void {
     this.running = true;
+    this.outlined = false;
     this.status = null;
     this.fault = null;
     this.stacks.clear();
@@ -1009,6 +1059,7 @@ export class DebugAdapter {
       if (this.running) {
         await this.pauseQuietly();
       }
+      await this.eraseOutline();
       await this.erb({do: 'breakpoints', breakpoints: []}).catch(() => {});
       for (const command of this.config.disconnectCommands ?? []) {
         await this.console(command);
@@ -1641,6 +1692,7 @@ export class DebugAdapter {
     request: Message,
     args: Record<string, any>,
   ): Promise<void> {
+    await this.eraseOutline();
     this.resumed();
     const response = await this.relay(request, args);
     if (!response.success) {
@@ -1660,6 +1712,7 @@ export class DebugAdapter {
       return this.resume(request, args);
     }
     // The hook ends the step where the app's next statement starts, so the board just runs on.
+    await this.eraseOutline();
     await this.erb({do: 'step', kind});
     this.resumed();
     this.appStep = true;
@@ -1972,6 +2025,91 @@ export class DebugAdapter {
       message: response.message,
       body: response.body,
     });
+  }
+
+  /**
+   * Answers the node tree. A running board is halted for the read and resumed.
+   *
+   * @param request  The request.
+   */
+  private nodes(request: Message): Promise<void> {
+    // The debug file counts columns from 1.
+    const columnShift =
+      this.initializeArguments.columnsStartAt1 === false ? 1 : 0;
+    const shown = (node: ScriptNode): TreeNode => ({
+      id: node.tag,
+      type: node.type,
+      rect: {
+        x: node.rect[0],
+        y: node.rect[1],
+        width: node.rect[2],
+        height: node.rect[3],
+      },
+      source:
+        node.line === null
+          ? undefined
+          : {
+              ...this.appSourceOf(node.file ?? 0),
+              line: node.line - this.lineShift,
+              column:
+                node.column === null ? undefined : node.column - columnShift,
+            },
+      uses: node.uses?.length
+        ? node.uses.map(([file, line, column]) => ({
+            ...this.appSourceOf(file),
+            line: line - this.lineShift,
+            column: column - columnShift,
+          }))
+        : undefined,
+      props: node.props.map(([name, value]) => ({name, value})),
+      children: node.children.map(shown),
+    });
+    return this.inLane(async () => {
+      const answer = await this.whileHalted(() => this.erb({do: 'nodes'}));
+      this.respond(request, {
+        nodes: (answer.nodes as ScriptNode[]).map(shown),
+      });
+    });
+  }
+
+  /**
+   * Outlines a node on the stopped app's panel, or removes the outline.
+   *
+   * @param request  The request.
+   * @param args  Its arguments: `rect`, a node's, or none.
+   */
+  private outline(request: Message, args: Record<string, any>): Promise<void> {
+    const rect: Record<string, any> | undefined = args.rect;
+    return this.inLane(async () => {
+      // A running app paints over it, and a running board can't be drawn on.
+      if (this.running || (!rect && !this.outlined)) {
+        return this.respond(request, {shown: false});
+      }
+      try {
+        const answer = await this.erb({
+          do: 'outline',
+          rect: rect ? [rect.x, rect.y, rect.width, rect.height] : null,
+        });
+        // A node with no size on the panel has none.
+        this.outlined = answer.shown === true;
+      } catch (error: any) {
+        // A panel that isn't scanned from memory has none: said once, not at every node.
+        if (error.message !== this.outlineNote) {
+          this.outlineNote = error.message;
+          this.say(`embedded-react: no outline on the panel: ${error.message}`);
+        }
+        this.outlined = false;
+      }
+      this.respond(request, {shown: this.outlined});
+    });
+  }
+
+  /** Before the app runs on: what the outline covers on the panel goes back. */
+  private async eraseOutline(): Promise<void> {
+    if (this.outlined) {
+      this.outlined = false;
+      await this.erb({do: 'outline', rect: null}).catch(() => {});
+    }
   }
 
   /**

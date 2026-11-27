@@ -114,6 +114,8 @@ export interface IrNode {
   id: string;
   /** Where its element is in the source, for errors raised after lowering. */
   location: SourcePosition | undefined;
+  /** Where the function components it is made inside are used, outermost first. */
+  uses: SourcePosition[];
   /** The engine node type, an ER_NODE_* name. */
   type: string;
   /** Props folded at build time. */

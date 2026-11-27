@@ -34,6 +34,11 @@
         background: #d9a13a; color: #17120a; font-weight: 600; white-space: nowrap;
       }
       #panel.stopped #stopped { display: block; }
+      #outline {
+        display: none;
+        position: absolute; box-sizing: border-box; pointer-events: none;
+        border: 2px solid #ff00ff;
+      }
       #bar {
         position: fixed; left: 10px; bottom: 10px;
         display: flex; gap: 8px; align-items: center;
@@ -59,6 +64,7 @@
       <div id="panel">
         <canvas id="canvas" width="1" height="1"></canvas>
         <div id="stopped">Stopped in the debugger</div>
+        <div id="outline"></div>
       </div>
     </div>
     <pre id="error"></pre>
@@ -112,6 +118,18 @@
         sizeSelect.value = value;
       }
 
+      /** Outlines a rect of the panel's, in its pixels, or nothing. */
+      function showOutline(rect) {
+        const outline = document.getElementById('outline');
+        outline.style.display = rect ? 'block' : 'none';
+        if (!rect) return;
+        const [x, y, width, height] = rect;
+        outline.style.left = `${(x * 100) / canvas.width}%`;
+        outline.style.top = `${(y * 100) / canvas.height}%`;
+        outline.style.width = `${(width * 100) / canvas.width}%`;
+        outline.style.height = `${(height * 100) / canvas.height}%`;
+      }
+
       function showStatus(status) {
         const sizes = [...new Set([...status.sizes.map(size => `${size.width}x${size.height}`), ...COMMON_SIZES])];
         const current = sizeSelect.value;
@@ -122,6 +140,7 @@
         dot.className = status.debugging ? 'debugging' : 'live';
         dot.title = status.debugging ? 'A debugger is attached' : 'Running';
         panel.classList.toggle('stopped', status.stopped);
+        showOutline(status.outline);
         errorBox.textContent = status.error || '';
         errorBox.style.display = status.error ? 'block' : 'none';
       }

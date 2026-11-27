@@ -22,6 +22,7 @@ import {parseColorValue} from '../../style-map.mts';
 import {
   aotError,
   currentLoc,
+  currentUses,
   checkEngineString,
   constantText,
 } from '../diagnostics.mts';
@@ -168,6 +169,7 @@ export function emitTextInput(
   const node: IrNode = {
     id: nodeId,
     location: currentLoc(),
+    uses: currentUses(),
     type: 'ER_NODE_TEXT_INPUT',
     constantProps: staticAssigns,
     stateProps: dynamicAssigns,

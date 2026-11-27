@@ -35,6 +35,7 @@ import {
   truthy,
 } from './expressions.mts';
 import type {Node} from './expressions.mts';
+import {nodeTree} from './nodes.mts';
 import {
   App,
   DebugError,
@@ -791,6 +792,10 @@ export class AppDebugger {
           return this.watch(request);
         case 'evaluate':
           return this.evaluateRequest(request);
+        case 'nodes': {
+          const app = this.app();
+          return {nodes: nodeTree(app, app.runtime.engineAddress)};
+        }
         default:
           return {
             error: `the simulator doesn't know the request ${request.do}`,

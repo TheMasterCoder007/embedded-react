@@ -80,6 +80,8 @@ interface Status {
   /** Why the last build or load failed, or null. */
   error: string | null;
   stopped: boolean;
+  /** A node the debugger outlines on the stopped panel: its left, top, width and height. */
+  outline: [number, number, number, number] | null;
   debugging: boolean;
   /** The sizes the app's layouts were built at. */
   sizes: {width: number; height: number}[];
@@ -122,6 +124,7 @@ export async function runAotDevServer(
     build: null,
     error: null,
     stopped: false,
+    outline: null,
     debugging: false,
     sizes: [],
   };
@@ -222,6 +225,12 @@ export async function runAotDevServer(
         break;
       case 'state':
         status.stopped = message.stopped;
+        // The app paints on once it runs.
+        if (!message.stopped) status.outline = null;
+        sendStatus();
+        break;
+      case 'outline':
+        status.outline = status.stopped ? message.rect : null;
         sendStatus();
         break;
       case 'answer':

@@ -209,6 +209,50 @@ export function App() {
     expect(row.nodes.map(({line}) => line)).toEqual([26]);
   });
 
+  it("gives a component's nodes the line its element is used on", () => {
+    const nodes = debugFileOf(APP).panels[0].templates.flatMap(
+      template => template.nodes,
+    );
+    // Counter's Pressable and Text are made on lines 6 and 7, inside the <Counter /> of line 17.
+    const pressable = nodes.find(node => node.line === 6);
+    expect(pressable?.uses).toEqual([{line: 17, column: 7}]);
+    expect(nodes.find(node => node.line === 7)?.uses).toEqual([
+      {line: 17, column: 7},
+    ]);
+    // The app's own elements are used nowhere.
+    expect(nodes.find(node => node.line === 18)?.uses).toBeUndefined();
+  });
+
+  it("leaves the children a component is given as the caller's nodes", () => {
+    const source = `import {View, Text} from 'embedded-react';
+function Card({children}) {
+  return <View>{children}</View>;
+}
+function Panel() {
+  return (
+    <Card>
+      <Text>inside</Text>
+    </Card>
+  );
+}
+export function App() {
+  return (
+    <View>
+      <Panel />
+    </View>
+  );
+}`;
+    const uses = Object.fromEntries(
+      debugFileOf(source)
+        .panels[0].templates.flatMap(template => template.nodes)
+        .map(node => [node.line, node.uses?.map(use => use.line)]),
+    );
+    // Card's View is Card's, used in Panel, which App uses.
+    expect(uses[3]).toEqual([15, 7]);
+    // The Text is written in Panel, so it is Panel's and not Card's.
+    expect(uses[8]).toEqual([15]);
+  });
+
   it("has every panel's states and nodes", () => {
     const debugFile = debugFileOf(APP, {
       filename: OPTIONS.filename,

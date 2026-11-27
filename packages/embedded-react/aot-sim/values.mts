@@ -343,6 +343,11 @@ export class Runtime {
     return this.target.u32(this.pointer('arena'));
   }
 
+  /** Where the engine's descriptor (ERDebug) is. */
+  get engineAddress(): number {
+    return this.target.u32(this.address + RUNTIME_LAYOUT.offsets.engine);
+  }
+
   private reason(status: number): string {
     if (status >= 0 && status < this.reasonCount) {
       return (

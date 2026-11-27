@@ -59,7 +59,7 @@ import type {
   PaintSource,
 } from '../../src/embedded-react/svg-ops.mts';
 import type {SvgNumber} from '../../src/embedded-react/index.d.ts';
-import {aotError, currentLoc} from './diagnostics.mts';
+import {aotError, currentLoc, currentUses} from './diagnostics.mts';
 import {
   bootSlotOf,
   bootSourceText,
@@ -1933,6 +1933,7 @@ function lowerSvgBox(
   const node: IrNode = {
     id: nodeId,
     location: currentLoc(),
+    uses: currentUses(),
     type,
     constantProps: [...size, ...staticAssigns],
     stateProps: [
