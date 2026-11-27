@@ -187,6 +187,7 @@ A halted core runs nothing: no frames, no touch, no timers.
 | `erb error`          | The last fault or refused load: the reason, the amounts, and the source line                |
 | `erb pools`          | What the app and the engine use of their pools                                              |
 | `er nodes`           | The node tree: each node's type, its rect on the screen, and the source line of its element |
+| `er outline TAG`     | Outlines a node on the panel, by its number in `er nodes`. `er outline off` removes it      |
 | `erb break [LINE]`   | Stops at a source line (`Card.tsx:12`, or `41` in `App.tsx`). With no line, lists them      |
 | `erb log LINE TEXT`  | Prints a message each time a source line is reached, without stopping                       |
 | `erb delete [N...]`  | Deletes breakpoints by number, or all of them                                               |
@@ -603,6 +604,37 @@ A breakpoint in a C file works as in any C debug session, and so does **Pause**.
 - **The Variables pane** has the C frame's own variables, and **App state** on every frame.
 - **The step buttons** step C.
 
+### The node tree
+
+The **Node Tree** view of the Run and Debug sidebar shows the app's nodes as the engine holds them at the stop,
+which [`er nodes`](#commands) prints as text.
+
+- **A node** has its type, its rect on the screen as `left,top width×height`, and its element's file and line. A
+  Text shows its text too.
+- **props**, under a node, are the ones that place and paint it, by the names the app gives them: `width`,
+  `flexDirection`, `backgroundColor`. Only those that are set show. A colour is `#rrggbb`, with its alpha after it
+  when it has one.
+- **A click on a node** opens the line of its element. **A click on a line an element starts on** selects its
+  node, when the view shows. The line of a component's element, `<Card />`, selects the top node the component
+  made.
+- **The selected node is outlined on the panel** while the app is stopped, in magenta, and the outline goes when
+  the app runs on. On a board this needs a panel that stays lit while the chip is halted and is scanned from a
+  framebuffer in memory, which the debugger draws on: an STM32's LTDC, with the `dma2d` backend. An ESP32-S3's RGB
+  panel is fed by the chip as it runs, and a panel driven over SPI keeps its picture in its own memory, so they
+  have none, and the Debug Console says so once. A tall node's sides are dotted, to keep the writes few. In the
+  simulator the page draws the outline.
+- **Refresh**, in the view's title, reads the tree again. On a running board it halts the board for the read and
+  resumes it.
+
+The tree is read when the view shows, so a stop costs nothing more while it is closed. After the app runs on, the
+view keeps the last stop's tree and says so.
+
+Another editor's wrapper gets the tree from the adapter with the `embedded-react.nodes` request, which takes no
+arguments. Its response has `nodes`, the top of the tree, each with `id`, `type`, `rect` (`x`, `y`, `width`,
+`height`), `source` (`path`, `line`, `column`) for a node an element made, `props` (each a `name` and a `value`),
+and `children`. The `embedded-react.outline` request outlines a node on the panel: its `rect` is a node's, and
+with none the outline goes. Its response's `shown` says whether it is there.
+
 ## In an Eclipse-based IDE
 
 An Eclipse-based IDE, such as STM32CubeIDE, runs the debug adapter through LSP4E, Eclipse's own client for debug
@@ -666,6 +698,7 @@ What a session has, beside VS Code's:
 | Hover and Watch                          | Hover, and the Expressions view                                                                               |
 | The Debug Console                        | The session's console: GDB's commands, and the script's                                                       |
 | Break on Value Change                    | Not there. [`erb watch`](#commands) in the console is                                                         |
+| The Node Tree view                       | Not there. [`er nodes` and `er outline`](#commands) in the console are                                        |
 | The stop at a fault, with its reason     | It stops on the line, and the reason is in the console. `erb faults off` ends it                              |
 | Disconnect leaves the board running      | The same, for **Terminate** too                                                                               |
 | The simulator in a split                 | The console has the page's address, to open in a browser                                                      |
@@ -781,7 +814,7 @@ To debug a simulator you started yourself, attach to it:
 
 The editor's side is what it is on a board: breakpoints with conditions, hit counts and log messages, the step
 buttons, the app's frames, its locals and state in the Variables pane, hover and Watch, Break on Value Change on a
-state, and the stop at a fault. What differs:
+state, the node tree, and the stop at a fault. What differs:
 
 - **A stop freezes the panel.** The page dims it and says so. The app counts no time while it is stopped, so
   timers and animations carry on from where they were.

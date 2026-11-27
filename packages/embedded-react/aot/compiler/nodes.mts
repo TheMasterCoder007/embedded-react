@@ -25,6 +25,7 @@ import {
   checkEngineString,
   constantText,
   currentLoc,
+  currentUses,
   withLoc,
 } from './diagnostics.mts';
 import {buildValueOf, foldBoot} from './boot.mts';
@@ -850,6 +851,7 @@ function emitNodeImpl(
   const node: IrNode = {
     id: nodeId,
     location: currentLoc(),
+    uses: currentUses(),
     type: nodeType,
     constantProps: staticAssigns,
     stateProps: dynamicAssigns,

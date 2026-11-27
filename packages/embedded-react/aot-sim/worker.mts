@@ -81,6 +81,7 @@ export type FromWorker =
     }
   | {kind: 'log'; line: string}
   | {kind: 'state'; stopped: boolean}
+  | {kind: 'outline'; rect: [number, number, number, number] | null}
   | {kind: 'answer'; id: number; answer: Record<string, any>}
   | {kind: 'event'; event: string; body: Record<string, any>};
 
@@ -321,6 +322,17 @@ function request(message: Extract<ToWorker, {kind: 'request'}>): void {
       post({kind: 'state', stopped: true});
       post({kind: 'event', event: 'stopped', body: {reason: 'pause'}});
     }
+    answer = {};
+  } else if (asked.do === 'outline') {
+    // The page draws it over the panel.
+    const rect: unknown = asked.rect;
+    post({
+      kind: 'outline',
+      rect:
+        Array.isArray(rect) && rect.length === 4
+          ? (rect.map(Number) as [number, number, number, number])
+          : null,
+    });
     answer = {};
   } else {
     answer = appDebugger.request(asked);

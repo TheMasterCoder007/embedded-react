@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {parseColorValue} from '../../style-map.mts';
-import {aotError, currentLoc} from '../diagnostics.mts';
+import {aotError, currentLoc, currentUses} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
 import {
@@ -177,6 +177,7 @@ export function emitActivityIndicator(
   const node: IrNode = {
     id: nodeId,
     location: currentLoc(),
+    uses: currentUses(),
     type: 'ER_NODE_ACTIVITY_INDICATOR',
     constantProps: staticAssigns,
     stateProps: dynamicAssigns,

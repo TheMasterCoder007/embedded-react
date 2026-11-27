@@ -23,6 +23,7 @@
  * Touch points go the other way; dirty rects and er_rotate_copy() go this way.
  */
 
+#include "er_debug.h"
 #include "er_scene.h"
 #include "renderer_internal.h"
 
@@ -46,6 +47,9 @@
 static ERDisplayRotation s_rotation = ER_ROTATION_0; /**< Set by er_set_display_rotation(). */
 static int s_panel_width = 0;                        /**< Panel width as it scans; 0 = not set. */
 static int s_panel_height = 0;                       /**< Panel height as it scans; 0 = not set. */
+
+/** @brief The framebuffer the panel shows, for er_debug. */
+ERDebugScreen er_debug_screen;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -138,8 +142,18 @@ bool er_set_display_rotation(ERDisplayRotation rotation, int panel_width, int pa
     s_rotation = rotation;
     s_panel_width = panel_width;
     s_panel_height = panel_height;
+    er_debug_screen.width = (uint16_t)panel_width;
+    er_debug_screen.height = (uint16_t)panel_height;
+    er_debug_screen.rotation = (uint16_t)rotation;
     er_force_full_repaint();
     return true;
+}
+
+void er_debug_set_screen(void* pixels, int stride_bytes, ERDebugPixelFormat format)
+{
+    er_debug_screen.pixels = pixels;
+    er_debug_screen.stride = (uint16_t)stride_bytes;
+    er_debug_screen.format = (uint8_t)format;
 }
 
 ERDisplayRotation er_get_display_rotation(void)

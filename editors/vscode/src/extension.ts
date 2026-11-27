@@ -16,11 +16,13 @@
 
 // The VS Code side of `embedded-react debug-adapter`: it registers the `embedded-react` debug type and runs the
 // adapter from the project's own embedded-react package, so the adapter, the GDB script and the compiler that wrote
-// the debug file are one version. When a session debugs the app in the simulator, it shows the simulator's page.
+// the debug file are one version. When a session debugs the app in the simulator, it shows the simulator's page. The
+// Node Tree view is in nodes.ts.
 
 import {existsSync, readFileSync} from 'node:fs';
 import {delimiter, dirname, join, resolve} from 'node:path';
 import * as vscode from 'vscode';
+import {registerNodeTree} from './nodes';
 
 const DEBUG_TYPE = 'embedded-react';
 const PACKAGE_NAME = 'embedded-react';
@@ -100,6 +102,7 @@ function findOnPath(program: string): string {
  * @param context  The extension's context.
  */
 export function activate(context: vscode.ExtensionContext): void {
+  registerNodeTree(context);
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory(DEBUG_TYPE, {
       createDebugAdapterDescriptor(session) {

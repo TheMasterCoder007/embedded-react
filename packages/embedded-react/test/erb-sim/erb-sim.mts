@@ -196,6 +196,8 @@ class Editor {
 /** The simulator's page, as a browser connects. */
 class Page {
   frames = 0;
+  /** What the server last said the page shows beside the panel. */
+  status: Body = {};
   private readonly socket: WebSocket;
 
   constructor(port: number) {
@@ -204,8 +206,21 @@ class Page {
     this.socket.onmessage = event => {
       if (typeof event.data !== 'string') {
         this.frames++;
+      } else {
+        const message: Body = JSON.parse(event.data);
+        if (message.type === 'status') {
+          this.status = message;
+        }
       }
     };
+  }
+
+  /** Waits until the page's status holds what a test says, or a second has passed. */
+  async shows(holds: (status: Body) => boolean): Promise<boolean> {
+    for (let waited = 0; waited < 1000 && !holds(this.status); waited += 20) {
+      await new Promise(resolveWait => setTimeout(resolveWait, 20));
+    }
+    return holds(this.status);
   }
 
   opened(): Promise<void> {
@@ -316,6 +331,50 @@ async function session(project: string, port: number): Promise<void> {
     });
     check('an expression works out', hover.body?.result === '8', hover);
 
+    const tree = await editor.request('embedded-react.nodes');
+    // The engine's root holds the app's own.
+    const root: Body | undefined = tree.body?.nodes?.[0];
+    const appRoot: Body | undefined = root?.children[0];
+    const plusLine =
+      lines.findIndex(text => text.includes('onPress={() => bump(1)}')) - 1;
+    const plus: Body | undefined = appRoot?.children
+      .find((node: Body) =>
+        node.props.some((prop: Body) => prop.value === 'row'),
+      )
+      ?.children.find((node: Body) => node.source?.line === plusLine);
+    check(
+      'the node tree has each node with its rect, its element and its props',
+      tree.body?.nodes?.length === 1 &&
+        root?.type === 'view' &&
+        root.source === undefined &&
+        appRoot?.props.some(
+          (prop: Body) =>
+            prop.name === 'backgroundColor' && prop.value === '#182030',
+        ) &&
+        plus?.type === 'pressable' &&
+        plus.source?.path === source &&
+        plus.rect.x <= PLUS.x &&
+        PLUS.x < plus.rect.x + plus.rect.width &&
+        plus.children[0]?.props.some(
+          (prop: Body) => prop.name === 'text' && prop.value === '"+"',
+        ),
+      tree.body ?? tree,
+    );
+
+    const outlined = await editor.request('embedded-react.outline', {
+      rect: plus?.rect,
+    });
+    check(
+      'a node is outlined on the stopped panel',
+      outlined.body?.shown === true &&
+        (await page.shows(
+          status =>
+            JSON.stringify(status.outline) ===
+            JSON.stringify(plus && Object.values(plus.rect)),
+        )),
+      [outlined.body, page.status],
+    );
+
     const framesBefore = page.frames;
     await new Promise(resolveWait => setTimeout(resolveWait, FROZEN_MS));
     check(
@@ -325,6 +384,11 @@ async function session(project: string, port: number): Promise<void> {
     );
 
     await editor.request('next', {threadId: 1});
+    check(
+      'the outline goes when the app runs on',
+      await page.shows(status => status.outline === null),
+      page.status,
+    );
     const stepped = await editor.event('stopped');
     frames = await editor.stack();
     check(

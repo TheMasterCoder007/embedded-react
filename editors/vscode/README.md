@@ -2,8 +2,9 @@
 
 Debugs a Flow B app from the editor, on a board or in the simulator with no board: breakpoints in the gutter of the
 app's source, the step buttons, the app's frames in the call stack, and its state and locals in the Variables pane.
-An app fault stops on the line that faulted, with its reason. On a board, C breakpoints and stepping work in the same
-session.
+An app fault stops on the line that faulted, with its reason. The Node Tree view shows the app's nodes at a stop, each
+with its rect and its props: a click on one opens its element's line and outlines it on the panel. On a board, C
+breakpoints and stepping work in the same session.
 
 ![A Flow B app stopped at a breakpoint, with its state in the Variables pane and the simulator beside the code](images/debugging.png)
 

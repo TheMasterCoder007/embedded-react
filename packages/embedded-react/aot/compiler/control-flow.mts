@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {aotError} from './diagnostics.mts';
+import {aotError, withComponentUse} from './diagnostics.mts';
 import {foldBoot, isBoot} from './boot.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
@@ -424,6 +424,31 @@ function isChildrenRef(expression: t.Node, environment: Env): boolean {
  * @returns The instance, wrapping the element the component's JSX lowered to.
  */
 export function emitComponent(
+  element: t.JSXElement,
+  scope: Scope,
+  output: Out,
+  environment: Env,
+  state: StateTable,
+  options?: EmitOptions,
+): IrElement {
+  return withComponentUse(element.loc?.start, () =>
+    expandComponent(element, scope, output, environment, state, options),
+  );
+}
+
+/**
+ * Expands a function component's element into its body's elements.
+ *
+ * @param element  The component's element.
+ * @param scope  The caller's scope.
+ * @param output  The build's output.
+ * @param environment  The caller's environment.
+ * @param state  The state table.
+ * @param options  The emit options.
+ *
+ * @returns The body, lowered.
+ */
+function expandComponent(
   element: t.JSXElement,
   scope: Scope,
   output: Out,

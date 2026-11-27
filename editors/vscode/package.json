@@ -80,6 +80,53 @@
         }
       }
     },
+    "views": {
+      "debug": [
+        {
+          "id": "embedded-react.nodes",
+          "name": "Node Tree",
+          "when": "debugType == 'embedded-react'"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "embedded-react.nodes",
+        "contents": "The app's nodes show here when it stops: each one's rect, its element's line and its props."
+      }
+    ],
+    "commands": [
+      {
+        "command": "embedded-react.refreshNodes",
+        "title": "Refresh the Node Tree",
+        "category": "Embedded React",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "embedded-react.openNode",
+        "title": "Open the Element",
+        "category": "Embedded React"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "embedded-react.refreshNodes",
+          "when": "view == embedded-react.nodes",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "embedded-react.refreshNodes",
+          "when": "debugType == 'embedded-react'"
+        },
+        {
+          "command": "embedded-react.openNode",
+          "when": "false"
+        }
+      ]
+    },
     "breakpoints": [
       {
         "language": "javascript"

@@ -112,7 +112,12 @@ export interface ProgramTemplateNode {
   bindings: number;
   bindingCount: number;
   /** Where its element is in the source, for the debug file. */
-  debug?: {line: number; column: number};
+  debug?: {
+    line: number;
+    column: number;
+    /** Where the function components the node is made inside are used, outermost first. */
+    uses?: {line: number; column: number}[];
+  };
 }
 
 export interface ProgramTemplate {

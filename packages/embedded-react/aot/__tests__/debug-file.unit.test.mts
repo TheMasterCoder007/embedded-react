@@ -209,6 +209,20 @@ export function App() {
     expect(row.nodes.map(({line}) => line)).toEqual([26]);
   });
 
+  it("gives a component's nodes the line its element is used on", () => {
+    const nodes = debugFileOf(APP).panels[0].templates.flatMap(
+      template => template.nodes,
+    );
+    // Counter's Pressable and Text are made on lines 6 and 7, inside the <Counter /> of line 17.
+    const pressable = nodes.find(node => node.line === 6);
+    expect(pressable?.uses).toEqual([{line: 17, column: 7}]);
+    expect(nodes.find(node => node.line === 7)?.uses).toEqual([
+      {line: 17, column: 7},
+    ]);
+    // The app's own elements are used nowhere.
+    expect(nodes.find(node => node.line === 18)?.uses).toBeUndefined();
+  });
+
   it("has every panel's states and nodes", () => {
     const debugFile = debugFileOf(APP, {
       filename: OPTIONS.filename,

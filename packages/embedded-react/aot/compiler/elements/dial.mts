@@ -20,7 +20,7 @@
 
 import {check, checkNumber, DIAL_MAX_GRADIENT_STOPS} from '../check.mts';
 import {floatConstant, parseColorValue} from '../../style-map.mts';
-import {aotError, currentLoc} from '../diagnostics.mts';
+import {aotError, currentLoc, currentUses} from '../diagnostics.mts';
 import {evalStaticOrThrow, evalStatic} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
 import {isFn} from '../collect.mts';
@@ -386,6 +386,7 @@ export function emitDial(
   const node: IrNode = {
     id: nodeID,
     location: currentLoc(),
+    uses: currentUses(),
     type: 'ER_NODE_ARC',
     constantProps: staticAssigns,
     stateProps: dynamicAssigns,

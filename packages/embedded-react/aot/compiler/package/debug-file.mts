@@ -128,6 +128,8 @@ export interface DebugNode {
   file?: number;
   line: number | null;
   column: number | null;
+  /** Where the function components it is made inside are used, outermost first: `<Card />` for a node of Card's. */
+  uses?: {file?: number; line: number; column: number}[];
   /** Where its handle is, for a node code reaches: one handle, or one per row for a row's node. */
   handle?: DebugHandle;
 }
@@ -342,6 +344,12 @@ function debugPanel(program: Program, files: SourceLayout): DebugPanel {
         children: node.children,
         ...(node.debug ? placed(node.debug.line) : {line: null}),
         column: node.debug?.column ?? null,
+        ...(node.debug?.uses?.length && {
+          uses: node.debug.uses.map(use => ({
+            ...placed(use.line),
+            column: use.column,
+          })),
+        }),
         ...(node.handle !== NONE && {
           handle: {
             slot: node.handle,

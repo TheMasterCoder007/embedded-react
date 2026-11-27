@@ -70,6 +70,41 @@ export function currentLoc(): SourcePosition | undefined {
   return undefined;
 }
 
+/** Where each function component being expanded is used, outermost first. */
+const componentUses: SourcePosition[] = [];
+
+/**
+ * Where the function components a node is made inside are used: `<Card />`'s line for a node of Card's body.
+ *
+ * @returns The places, outermost first; empty for a node of the root component's own.
+ */
+export function currentUses(): SourcePosition[] {
+  return [...componentUses];
+}
+
+/**
+ * Runs the expansion of a function component, so the nodes it makes know where it is used.
+ *
+ * @param use  Where the component's element is.
+ * @param expand  The expansion.
+ *
+ * @returns What the expansion returns.
+ */
+export function withComponentUse<Result>(
+  use: SourcePosition | undefined,
+  expand: () => Result,
+): Result {
+  if (!use) {
+    return expand();
+  }
+  componentUses.push(use);
+  try {
+    return expand();
+  } finally {
+    componentUses.pop();
+  }
+}
+
 /** The most bytes each of the engine's fixed string buffers holds, as er_scene.h defines them. */
 export const ENGINE_STRING_MAX = {
   ER_TEXT_MAX: 255,
