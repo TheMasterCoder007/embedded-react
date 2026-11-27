@@ -361,6 +361,15 @@ async function session(project: string, port: number): Promise<void> {
       tree.body ?? tree,
     );
 
+    const sizeless = await editor.request('embedded-react.outline', {
+      rect: {x: 0, y: 0, width: 0, height: 0},
+    });
+    check(
+      'a node with no size is not outlined',
+      sizeless.body?.shown === false && page.status?.outline === null,
+      [sizeless.body, page.status],
+    );
+
     const outlined = await editor.request('embedded-react.outline', {
       rect: plus?.rect,
     });

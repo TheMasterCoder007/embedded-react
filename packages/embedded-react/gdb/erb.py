@@ -2394,14 +2394,15 @@ def panel_rect(screen, rect):
 
 
 def draw_outline(rect):
-    """Outlines a rect of the app's on the panel, in place of the last one. The board must be halted."""
+    """Outlines a rect of the app's on the panel, in place of the last one. The board must be halted.
+    Returns whether it drew one: a rect with no size on the panel has none."""
     erase_outline()
     screen = Engine(Runtime().engine_address).screen()
     if not screen["pixels"] or screen["format"] >= len(OUTLINE_COLORS):
         raise ErbError(NO_SCREEN)
     left, top, width, height = panel_rect(screen, rect)
     if width <= 0 or height <= 0:
-        return
+        return False
     fmt, color = OUTLINE_COLORS[screen["format"]]
     pixel = struct.pack(endian() + fmt, color) if fmt else color
     thick = OUTLINE_PIXELS
@@ -2418,6 +2419,7 @@ def draw_outline(rect):
         address = screen["pixels"] + row * screen["stride"] + x * len(pixel)
         outline_saved.append((address, read(address, count * len(pixel))))
         write(address, pixel * count)
+    return True
 
 
 class ErOutline(gdb.Command):
@@ -2446,7 +2448,8 @@ class ErOutline(gdb.Command):
         node = find(node_tree(App()))
         if node is None:
             raise ErbError("no node #%s: er nodes lists them" % wanted)
-        draw_outline(node["rect"])
+        if not draw_outline(node["rect"]):
+            raise ErbError("%s #%d has no size on the panel" % (node["type"], node["tag"]))
         print("%s #%d outlined at %d,%d %dx%d" % ((node["type"], node["tag"]) + tuple(node["rect"])))
 
 
@@ -3470,12 +3473,11 @@ def dap_nodes(request):
 
 
 def dap_outline(request):
-    """Outlines a rect of the tree's on the panel, or with none removes the outline."""
+    """Outlines a rect of the tree's on the panel, or with none removes the outline. Says whether one is there."""
     if request.get("rect"):
-        draw_outline(request["rect"])
-    else:
-        erase_outline()
-    return {}
+        return {"shown": draw_outline(request["rect"])}
+    erase_outline()
+    return {"shown": False}
 
 
 DAP_REQUESTS = {

@@ -233,6 +233,11 @@ class FakeGdb {
             },
           ],
         };
+      case 'outline':
+        // A rect with no size has none, as the script answers.
+        return {
+          shown: Boolean(request.rect && request.rect[2] && request.rect[3]),
+        };
       default:
         return {};
     }
@@ -657,6 +662,20 @@ describe('debug adapter', () => {
       'continue',
     ]);
     expect(editor.gdb.erbRequests.at(-1)).toEqual({do: 'outline', rect: null});
+  });
+
+  it('says a node with no size is not outlined', async () => {
+    const editor = new Editor();
+    await editor.start('launch');
+    await editor.stopInApp();
+    const hidden = await editor.request('embedded-react.outline', {
+      rect: {x: 10, y: 12, width: 0, height: 0},
+    });
+    expect(hidden.body).toEqual({shown: false});
+    editor.gdb.asked.length = 0;
+    // Nothing to take off before the app runs on.
+    await editor.request('continue', {threadId: 1});
+    expect(editor.gdb.asked).toEqual(['continue']);
   });
 
   it("shows a stop of the hook's as a stop in the app", async () => {

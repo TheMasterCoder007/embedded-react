@@ -2086,11 +2086,12 @@ export class DebugAdapter {
         return this.respond(request, {shown: false});
       }
       try {
-        await this.erb({
+        const answer = await this.erb({
           do: 'outline',
           rect: rect ? [rect.x, rect.y, rect.width, rect.height] : null,
         });
-        this.outlined = Boolean(rect);
+        // A node with no size on the panel has none.
+        this.outlined = answer.shown === true;
       } catch (error: any) {
         // A panel that isn't scanned from memory has none: said once, not at every node.
         if (error.message !== this.outlineNote) {

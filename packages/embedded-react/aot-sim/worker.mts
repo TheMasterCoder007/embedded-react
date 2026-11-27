@@ -325,15 +325,15 @@ function request(message: Extract<ToWorker, {kind: 'request'}>): void {
     answer = {};
   } else if (asked.do === 'outline') {
     // The page draws it over the panel.
-    const rect: unknown = asked.rect;
-    post({
-      kind: 'outline',
-      rect:
-        Array.isArray(rect) && rect.length === 4
-          ? (rect.map(Number) as [number, number, number, number])
-          : null,
-    });
-    answer = {};
+    const askedRect: unknown = asked.rect;
+    const rect =
+      Array.isArray(askedRect) && askedRect.length === 4
+        ? (askedRect.map(Number) as [number, number, number, number])
+        : null;
+    // A node with no size has none.
+    const outline = rect && rect[2] > 0 && rect[3] > 0 ? rect : null;
+    post({kind: 'outline', rect: outline});
+    answer = {shown: outline !== null};
   } else {
     answer = appDebugger.request(asked);
   }
